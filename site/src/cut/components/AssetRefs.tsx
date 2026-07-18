@@ -388,17 +388,37 @@ export function MentionTextarea({
   const backdropRef = useRef<HTMLDivElement>(null);
   const [caret, setCaret] = useState(0);
   const [dismissed, setDismissed] = useState<number | null>(null);
-  const [sel, setSel] = useState(0);
+  // The row highlight, remembered with the query it was chosen for — see
+  // `sel` below.
+  const [selState, setSelState] = useState<{ q?: string; i: number }>({ i: 0 });
 
   const mention = useMemo(() => mentionAtCaret(value, caret), [value, caret]);
   const matches = useMemo(() => {
     if (!mention || dismissed === mention.start) return [];
     const q = mention.query.toLowerCase();
+    // Best match first, not list order: a typed handle prefix ("c" → c1, c2)
+    // beats a name prefix, which beats a substring hit anywhere in the name —
+    // otherwise short queries drown the handles in incidental name matches.
+    // Ranked once per candidate (the list spans the full stock catalogs and
+    // this runs per keystroke), then sorted on the cached rank.
+    const rank = (c: AssetRef) => {
+      if (c.handle?.startsWith(q)) return 0;
+      const name = c.name.toLowerCase();
+      return name.startsWith(q) ? 1 : name.includes(q) ? 2 : 3;
+    };
     return candidates
-      .filter((c) => c.name.toLowerCase().includes(q) || c.handle?.startsWith(q))
-      .slice(0, 8);
+      .map((c) => ({ c, r: rank(c) }))
+      .filter((x) => x.r < 3)
+      .sort((a, b) => a.r - b.r)
+      .slice(0, 8)
+      .map((x) => x.c);
   }, [mention, dismissed, candidates]);
   const open = matches.length > 0;
+  // Each keystroke re-ranks the list, so a highlight chosen under a previous
+  // query derives back to the best (first) match instead of holding a stale
+  // arrow/hover position.
+  const sel = selState.q === mention?.query ? selState.i : 0;
+  const setSel = (i: number) => setSelState({ q: mention?.query, i });
   const selIndex = Math.min(sel, matches.length - 1);
 
   const syncCaret = () => {

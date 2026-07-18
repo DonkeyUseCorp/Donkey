@@ -2,7 +2,7 @@
 
 import type { UIMessage, UIMessageChunk } from "ai";
 import { geminiModelRoles } from "@/lib/inference/gemini-models";
-import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "@/cut/server/ai/catalog";
+import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, attachedAssetsBlock, systemPrompt } from "@/cut/server/ai/catalog";
 import { buildAiContext } from "./aiContext";
 import { runAiTool } from "./aiTools";
 import { normalizeRef } from "./assetRef";
@@ -168,7 +168,7 @@ async function inputFromMessages(messages: UIMessage[]): Promise<Item[]> {
     if (m.role === "user") {
       const meta = (m.metadata as { attachments?: unknown[] } | undefined)?.attachments;
       if (Array.isArray(meta) && meta.length > 0) {
-        text += `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify(meta)}\n</attached_assets>`;
+        text += attachedAssetsBlock(meta);
         if (m === lastUser) {
           // Best-effort: a ref that no longer resolves (deleted asset, stale
           // object URL) degrades this turn to metadata-only instead of failing.

@@ -3,8 +3,9 @@
 import { apiFetch, apiJson } from "./api";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { chatOwner, tagChatAsset } from "./chatAssets";
-import { useGenerate, type VideoGenOptions } from "./generate";
+import { useGenerate, type VideoAttempt, type VideoGenOptions } from "./generate";
 import { useGenScene } from "./genScene";
+import { anchorRefused } from "./genvideo/shotAttempts";
 import {
   addTemplateToProject,
   createLibraryFolder,
@@ -608,34 +609,39 @@ export async function runAiTool(
       const signedIn = gen.signedIn ?? (await gen.probeNow());
       if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
 
-      // Veo renders can outrun the assistant tool bridge's 2-minute cap, so
+      // Video renders can outrun the assistant tool bridge's 2-minute cap, so
       // don't block: start the job and let its completion place the clip.
       const refs =
         input.reference_asset_id === undefined
           ? []
           : resolveRefAssets([input.reference_asset_id]);
-      const veoOpts: Omit<VideoGenOptions, "onDone"> = {
-        tier: input.tier === "high" ? "high" : "fast",
-        durationSeconds: isNum(input.duration_seconds)
-          ? clamp(Math.round(input.duration_seconds), 4, 8)
-          : undefined,
+      // The model renders the whole clip with audio in one pass and picks its
+      // own length (up to ~10s) — aspect is the only knob.
+      const baseOpts: Omit<VideoGenOptions, "onDone"> = {
         ...(input.aspect === "16:9" || input.aspect === "9:16" ? { aspect: input.aspect } : {}),
-        ...(input.resolution === "720p" || input.resolution === "1080p"
-          ? { resolution: input.resolution }
-          : {}),
       };
+      // A one-off render walks the same identity ladder as a scene shot:
+      // seed image first (the strongest anchor), the picture as an identity
+      // reference second, text-only last — so a safety-blocked anchor
+      // degrades the render instead of killing it. The text rung is gated
+      // exactly like a scene shot's: it runs only when the provider refused
+      // the image anchor itself. An ordinary failure (timeout, 5xx) must
+      // fail the job — a render that never saw the user's picture is not a
+      // success to show them.
+      const asReference = (anchor: AssetRef): VideoAttempt => ({
+        prompt,
+        opts: { ...baseOpts, referenceImages: [anchor] },
+      });
+      const textOnly: VideoAttempt = { prompt, opts: { ...baseOpts }, gate: anchorRefused };
       // "Animate this image": the referenced frame is the product, so it seeds
-      // the render untouched — no image-model redesign in between.
+      // the render untouched — no image-model redesign in between, and no
+      // text-only rung (a render without the image isn't what was asked).
       if (refs.length > 0 && input.animate_reference === true) {
         return {
-          ...launchVeoJob(projectId, prompt, input, {
-            ...veoOpts,
-            refs: [refs[0]],
-            composeRefs: false,
-            // The most Veo permits with an image input; the seed carries the
-            // subject, so a person-safety downgrade beats losing it.
-            personGeneration: "ALLOW_ADULT",
-          }),
+          ...launchVideoJob(projectId, input, [
+            { prompt, opts: { ...baseOpts, refs: [refs[0]], composeRefs: false } },
+            asReference(refs[0]),
+          ]),
           note:
             "Animating the referenced image as the literal opening frame — the clip previews in this chat when it lands, in a minute or two.",
         };
@@ -661,24 +667,24 @@ export async function runAiTool(
             : undefined;
         if (stillAsset) {
           return {
-            ...launchVeoJob(projectId, prompt, input, {
-              ...veoOpts,
-              refs: [refFromAsset(stillAsset)],
-              composeRefs: false,
-              // The most Veo permits with an image input; the seed carries
-              // the subject, so a person-safety downgrade beats losing it.
-              personGeneration: "ALLOW_ADULT",
-            }),
+            ...launchVideoJob(projectId, input, [
+              { prompt, opts: { ...baseOpts, refs: [refFromAsset(stillAsset)], composeRefs: false } },
+              asReference(refs[0]),
+              textOnly,
+            ]),
             stillAssetId: stillAsset.id,
             note:
               "Designed the opening frame from the reference first (the image card above the render), then started the video from that exact frame — it previews in this chat when it lands, in a minute or two.",
           };
         }
+        return launchVideoJob(projectId, input, [
+          { prompt, opts: { ...baseOpts, refs } },
+          asReference(refs[0]),
+          textOnly,
+        ]);
       }
-      return launchVeoJob(projectId, prompt, input, {
-        ...veoOpts,
-        ...(refs.length > 0 ? { refs } : {}),
-      });
+      // No reference: text is the whole request, so the single rung runs ungated.
+      return launchVideoJob(projectId, input, [{ prompt, opts: { ...baseOpts } }]);
     }
 
     case "generate_character_video": {
@@ -694,17 +700,19 @@ export async function runAiTool(
       const signedIn = gen.signedIn ?? (await gen.probeNow());
       if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
       return {
-        ...launchVeoJob(projectId, characterPrompt(character.persona!, line), input, {
-          tier: input.tier === "high" ? "high" : "fast",
-          durationSeconds: isNum(input.duration_seconds)
-            ? clamp(Math.round(input.duration_seconds), 4, 8)
-            : undefined,
-          aspect: character.aspect,
-          // The character's own clip seeds the render so the same person
-          // delivers the line — composing would swap the face, so it rides raw.
-          refs: [refFromStockVideo(character)],
-          composeRefs: false,
-        }),
+        ...launchVideoJob(projectId, input, [
+          {
+            prompt: characterPrompt(character.persona!, line),
+            opts: {
+              aspect: character.aspect,
+              // The character's own clip seeds the render so the same person
+              // delivers the line — composing would swap the face, so it rides
+              // raw, and there is no weaker rung: another anchor is another face.
+              refs: [refFromStockVideo(character)],
+              composeRefs: false,
+            },
+          },
+        ]),
         character: character.id,
       };
     }
@@ -729,6 +737,11 @@ export async function runAiTool(
         if (!asset) throw new ToolError(`No project asset with id ${fromAudio}.${hint}`);
         if (asset.type !== "audio")
           throw new ToolError(`"${asset.name}" is ${asset.type}, not audio — from_audio_asset_id must be the audio to animate.${hint}`);
+        // The scene transcriber keys its recognizer off asset.language; a
+        // mismatched recognizer turns foreign speech into garbage the plan
+        // then depicts.
+        const lang = typeof input.audio_language === "string" ? input.audio_language.trim() : "";
+        if (lang) s.updateAsset(fromAudio, { language: lang });
       }
       // Plan up to the shot list and stop; approve_scene starts the paid renders.
       // Tag every asset the run creates to the asking chat, so intermediates and
@@ -758,6 +771,12 @@ export async function runAiTool(
       const res = useGenScene.getState().approve();
       if (!res.ok) throw new ToolError(res.message);
       return { rendering: true, note: res.message };
+    }
+
+    case "cancel_scene": {
+      const res = useGenScene.getState().cancel();
+      if (!res.ok) throw new ToolError(res.message);
+      return { stopped: true, note: res.message };
     }
 
     case "regenerate_shot": {
@@ -1615,15 +1634,14 @@ function addVideoTrackClip(
   return { added: true, clipId, index: at };
 }
 
-/** Start a Veo render — the shared shape of generate_video and
- * generate_character_video: the job previews as a live chat card, the landed
- * asset files under the asking chat, and it goes onto the timeline only when
- * the model asked. Returns the tool output. */
-function launchVeoJob(
+/** Start a video render — the shared shape of generate_video and
+ * generate_character_video: one job (and one chat card) spans the ladder's
+ * fallback rungs, the landed asset files under the asking chat, and it goes
+ * onto the timeline only when the model asked. Returns the tool output. */
+function launchVideoJob(
   projectId: string,
-  prompt: string,
   input: Record<string, unknown>,
-  opts: Omit<VideoGenOptions, "onDone">
+  attempts: VideoAttempt[]
 ) {
   const addToTimeline = wantsTimeline(input, "index");
   const index = promptedIndex(input);
@@ -1632,8 +1650,7 @@ function launchVeoJob(
   // creation, so neither the job row nor the landed asset ever touches the
   // Video panel — including a render that errors and lands no asset.
   const chatId = chatOwner();
-  const { jobId } = useGenerate.getState().generateVideo(projectId, prompt, {
-    ...opts,
+  const { jobId } = useGenerate.getState().generateVideoLadder(projectId, attempts, {
     ...(chatId ? { chatId } : {}),
     onDone: (asset) => {
       if (addToTimeline) addVideoTrackClip(asset.id, index);
@@ -1645,7 +1662,7 @@ function launchVeoJob(
     jobId,
     addToTimeline,
     note:
-      "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
+      "Rendering — it previews in this chat when it lands, in a minute or two" +
       (addToTimeline
         ? ", and goes onto the timeline."
         : ". It stays in the chat until the user places it."),

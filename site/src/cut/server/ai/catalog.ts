@@ -287,13 +287,10 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "generate_video",
     description:
-      "Generate an AI video clip from a text prompt (Donkey's hosted Veo model) — the default for any video ask: \"generate/make a video of/about X\" means ONE clip from this tool, even though it sounds whole. Reach for generate_scene only when they name a narrated multi-shot production (a story, episode, or narrated short). When the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the video. reference_asset_id anchors the render on one project image or video: by default the tool first designs the opening frame from it with the image model (that still previews in this chat), then animates that exact frame — so tell the user it designs the frame, then renders. When the user wants the referenced image itself brought to life (\"animate this image/picture\"), pass animate_reference:true — the image becomes the literal first frame, unchanged, and the prompt describes only the motion. The render takes a minute or two and the tool RETURNS as soon as it's started — the clip previews as a live card in this chat when it finishes. Pass add_to_timeline:true (or an index) only when they asked for it in the cut; otherwise the user drags it in from the card. Needs the user signed in to Donkey (spends their credits).",
+      "Generate an AI video clip from a text prompt (Donkey's hosted video model: one pass, audio included, 720p, up to ~10s — the model picks the length) — the default for any video ask: \"generate/make a video of/about X\" means ONE clip from this tool, even though it sounds whole. Reach for generate_scene only when they name a narrated multi-shot production (a story, episode, or narrated short). When the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the video. reference_asset_id anchors the render on one project image or video: by default the tool first designs the opening frame from it with the image model (that still previews in this chat), then animates that exact frame — so tell the user it designs the frame, then renders. When the user wants the referenced image itself brought to life (\"animate this image/picture\"), pass animate_reference:true — the image becomes the literal first frame, unchanged, and the prompt describes only the motion. A safety-blocked or rejected anchor degrades the render on its own (identity reference, then text-only — the same ladder scene shots walk), so never resubmit a failed render with weaker inputs yourself. The render takes a minute or two and the tool RETURNS as soon as it's started — the clip previews as a live card in this chat when it finishes. Pass add_to_timeline:true (or an index) only when they asked for it in the cut; otherwise the user drags it in from the card. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       prompt: str("The shot to generate — describe motion, subject, and mood"),
-      tier: { type: "string", enum: ["fast", "high"], description: "fast = quicker/cheaper (default), high = best quality" },
-      duration_seconds: num("Clip length 4–8 seconds (default 8)"),
       aspect: { type: "string", enum: ["16:9", "9:16"], description: "Clip shape (default: the project aspect)" },
-      resolution: { type: "string", enum: ["720p", "1080p"], description: "Output detail (default 720p)" },
       reference_asset_id: str("One project asset id (image or video) the clip's opening frame is designed from"),
       animate_reference: bool("The referenced image IS the opening frame: animate it directly, unchanged, skipping the frame-design step (use when the user says to animate that image)"),
       add_to_timeline: bool("Insert the clip on the video track when it lands (default false — it stays on its chat card until the user asks)"),
@@ -303,12 +300,10 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "generate_character_video",
     description:
-      "Generate a UGC-style selfie clip of a stock talking character speaking a line you write (Donkey's hosted Veo model). Pick a character id from stock_search kind:\"character\" — each has a persona and look; the same person then delivers the line to camera. Like generate_video this RETURNS IMMEDIATELY and the clip previews in this chat a minute or two later; add_to_timeline:true places it when it lands. Needs the user signed in to Donkey (spends their credits).",
+      "Generate a UGC-style selfie clip of a stock talking character speaking a line you write (Donkey's hosted video model). Pick a character id from stock_search kind:\"character\" — each has a persona and look; the same person then delivers the line to camera. Like generate_video this RETURNS IMMEDIATELY and the clip previews in this chat a minute or two later; add_to_timeline:true places it when it lands. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       character_id: str("Talking-character id from stock_search"),
       line: str("What the character says, spoken to camera"),
-      tier: { type: "string", enum: ["fast", "high"], description: "fast = quicker/cheaper (default), high = best quality" },
-      duration_seconds: num("Clip length 4–8 seconds (default 8)"),
       add_to_timeline: bool("Insert the clip on the video track when it lands (default false — it stays on its chat card until the user asks)"),
       index: num("Insert position on the video track (passing it implies add_to_timeline)"),
     }, ["character_id", "line"]),
@@ -316,10 +311,11 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "generate_scene",
     description:
-      "Generate a narrated, multi-shot cut assembled on the timeline — script, voiceover, and several shots — from a brief, or animate audio already in the project. Use this only when the user names that kind of production (\"tell a story about…\", \"turn this into a narrated 20-second short\", \"an episode\"); a plain \"generate/make a video of/about X\" is a single clip — generate_video, not this. It writes a script, voices it, breaks it into shots, then RETURNS the shot plan and STOPS: get the user's go-ahead and call approve_scene before the shots render, because each shot spends credits. Pass from_audio_asset_id to animate an audio spine the project already has (a voiceover, recording, or song → shots tiled over it) instead of writing a new script. The look is derived from the brief and any references and can be anything — cinematic live-action, anime, documentary, product ad, cartoon; never assume a genre, let the brief decide, and describe the look by its visual traits rather than naming a real franchise, show, or artist (even one a reference resembles) — the user may not want it and the generator rejects trademarked names. Needs the user signed in to Donkey (spends credits).",
+      "Generate a narrated, multi-shot cut assembled on the timeline — script, voiceover, and several shots — from a brief, or animate audio already in the project. Use this only when the user names that kind of production (\"tell a story about…\", \"turn this into a narrated 20-second short\", \"an episode\"); a plain \"generate/make a video of/about X\" is a single clip — generate_video, not this. It writes a script, voices it, breaks it into shots, then RETURNS the shot plan and STOPS: get the user's go-ahead and call approve_scene before the shots render, because each shot spends credits. Pass from_audio_asset_id to animate an audio spine the project already has (a voiceover, recording, or song → shots tiled over it) instead of writing a new script. Read the scene-productions skill before your first call — it covers the brief and look, references, aspect, and the from-audio flow. Needs the user signed in to Donkey (spends credits).",
     inputSchema: obj({
       brief: str("What the video is about — the story or subject. Omit only when animating existing audio."),
       from_audio_asset_id: str("Animate this project audio asset (id from media) — shots tile over it instead of a new script"),
+      audio_language: str("BCP-47 language of the from_audio asset's speech (e.g. ko-KR). REQUIRED with from_audio_asset_id whenever the speech is not English — the on-device transcriber picks its recognizer from it, and the wrong recognizer garbles every shot planned over the audio"),
       target_seconds: num("Rough total length in seconds, 6–90 (default ~24)"),
       aspect: { type: "string", enum: ["9:16", "16:9"], description: "Output shape (default: the project aspect)" },
       style: str("Optional look to steer the whole video (e.g. 'moody neon, handheld'); usually left to the brief"),
@@ -337,9 +333,15 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({}),
   },
   {
+    name: "cancel_scene",
+    description:
+      "Stop the scene generation running in this project — planning or rendering halts immediately and the plan is discarded. Clips already placed stay on the timeline; credits already spent are not refunded. Call it when the user wants the run stopped, or to clear the way for a new generate_scene.",
+    inputSchema: obj({}),
+  },
+  {
     name: "regenerate_shot",
     description:
-      "Redo one shot of the generated scene by its number (1-based), optionally nudging it (\"wider\", \"at night\", \"more energetic\"). Only valid after a scene has been generated.",
+      "Redo one shot of the generated scene by its number (1-based), optionally nudging it (\"wider\", \"at night\", \"more energetic\"). It swaps the shot's clip on the timeline by itself — never delete the clip first. Only valid after a scene has been generated.",
     inputSchema: obj({ n: num("Shot number, 1-based"), note: str("Optional change to apply to that shot") }, ["n"]),
   },
   {
@@ -437,7 +439,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "subtitles_generate",
     description:
-      "Transcribe the cut on-device (Apple speech) and create subtitle captions on a subtitle track (the active one unless `track` says otherwise; other tracks keep their captions). Runs in the background; returns when finished. If no speech is found, no subtitles are added.",
+      "Transcribe the cut on-device (Apple speech) and create subtitle captions on a subtitle track (the active one unless `track` says otherwise; other tracks keep their captions) — it WRITES captions the user sees, so call it only when they asked for subtitles; to just hear what an audio asset says, listen_audio. Runs in the background; returns when finished. If no speech is found, no subtitles are added.",
     inputSchema: obj({
       locale: str("Speech language as BCP-47 like en-US (default: the track's language)"),
       track: num("Subtitle track to write, 0-based (default: the active track)"),
@@ -446,7 +448,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "captions_generate",
     description:
-      "Transcribe (if needed) then rewrite one subtitle track's captions into punchy social-video captions — short lines that fit inside the video frame (they may wrap onto two lines but never overflow), a few emoji, a curiosity-hook opener. style: clean | hook | punchy (default hook). Cue timings are preserved.",
+      "Transcribe (if needed) then REWRITE one subtitle track's captions into punchy social-video captions — short lines that fit inside the video frame (they may wrap onto two lines but never overflow), a few emoji, a curiosity-hook opener. style: clean | hook | punchy (default hook). Cue timings are preserved. It replaces the track's existing text wholesale — for a targeted edit (removing filler words, fixing one line), edit the cues with update_cue instead.",
     inputSchema: obj({
       style: str("Caption style: clean, hook, or punchy"),
       track: num("Subtitle track to rewrite, 0-based (default: the active track)"),
@@ -713,10 +715,18 @@ Two ways to get footage the user doesn't have: bundled stock (local, free) and h
 Stock: stock_search browses the bundled catalogs — footage clips and images in 8 categories plus ~20 UGC talking characters — matching prompts, categories, and tags. stock_add imports an item into the project as a chat card; add_to_timeline:true (or a start) also drops it on the timeline when the user asked. In the UI these live in the Video and Image tabs beside the generators; clicking a stock tile seeds the generate panel with its prompt.
 Generation:
 - generate_image(prompt, aspect?, resolution?, reference_asset_ids?, add_to_timeline?, index?): the hosted image model renders the prompt at 16:9, 9:16, or 1:1 (default: project aspect) and 1K/2K/4K. The still previews in the chat; placed (add_to_timeline:true or an index) it rides video track 0 as a still clip (8s default, stretchable). Great for a cover/hook frame (index 0), a background, or a b-roll still.
-- generate_video(prompt, tier?, duration_seconds?, aspect?, resolution?, reference_asset_id?, add_to_timeline?, index?): a hosted Veo model renders a 4–8s clip with audio. tier "fast" (default) is quicker/cheaper, "high" is best quality. With reference_asset_id it stages: the image model designs the opening frame from the reference first (that still previews in the chat), then Veo animates that exact frame. The render takes a minute or two, so the tool returns once it's started and the clip previews in the chat when it finishes (on the timeline only when asked) — tell the user it's rendering. Don't call it again for the same shot while one is in flight.
+- generate_video(prompt, aspect?, reference_asset_id?, add_to_timeline?, index?): the hosted video model renders a short clip with audio in one pass — 720p, up to ~10s, the model picks the length (no duration knob; the user trims the clip on the timeline). With reference_asset_id it stages: the image model designs the opening frame from the reference first (that still previews in the chat), then the video model animates that exact frame. The render takes a minute or two, so the tool returns once it's started and the clip previews in the chat when it finishes (on the timeline only when asked) — tell the user it's rendering. Don't call it again for the same shot while one is in flight.
 - generate_character_video(character_id, line, …): a stock talking character delivers a line to camera, same async render as generate_video. Characters come from stock_search kind:"character" — each has a persona; you write the line (chat deliverable rules apply: asked for "a script", write it in chat first).
 References: users attach images/clips to their message or the generate panels; project asset ids (see \`media\` in editor_state, including attachments — OS drops become project assets) pass through reference_asset_ids / reference_asset_id. Images draw from any number of references; video stages one reference into a designed opening frame and animates it. When the user says "use this clip/image", pass the reference — don't just describe it in the prompt.
-If generation fails with a sign-in or credits message, relay that plainly — it needs the user signed in to Donkey with credits; it is not a local fallback. Write vivid, specific prompts (subject, style, lighting, motion); the user's request is usually shorthand, so flesh it out.`,
+If generation fails with a sign-in or credits message, relay that plainly — generation needs a Donkey sign-in with credits. Write vivid, specific prompts (subject, style, lighting, motion); the user's request is usually shorthand, so flesh it out. A narrated multi-shot production is generate_scene — read the scene-productions skill before planning one, especially from an audio file or in a named style.`,
+
+  "scene-productions": `# Scene productions (generate_scene)
+generate_scene plans a narrated multi-shot cut; approve_scene renders it. Planning is free; every shot render spends credits, so present the plan card and wait for the user's go-ahead — never approve on your own. Per shot, the pipeline already guarantees: smooth continuous motion (no stop-motion or held poses), zero on-screen text, character consistency via a style bible plus reference sheets, gapless non-overlapping placement of shots/voice/music, shot audio muted under the audio spine, and a reviewer that retakes failed renders.
+Aspect: every shot renders at the plan's aspect, frozen from the project when approved. Check project.aspect first; when the user wants a specific format, set_aspect BEFORE approve_scene. A 9:16 project takes 9:16 shots — pass aspect to a generation tool only to match the project. Changing aspect after approval re-renders nothing.
+Look: the user's style reference is the strongest anchor — pass attached images/clips as reference_asset_ids; they anchor the style bible and every shot. A reference contributes the LOOK; when the user wants its pictured character or place in the video itself, say that in the brief — otherwise the pipeline designs a fresh cast in the reference's technique. The brief describes the same look in plain visual traits so words and image agree; with no reference, build the trait wording from the ask (a simple children's cartoon → "flat hand-drawn 2D animation, clean thick outlines, simple rounded characters, soft colors, gentle fluid motion"). Describe any show, franchise, or artist by traits — the generator rejects trademarked names. Name recurring wardrobe and props in the brief so independently rendered shots match.
+From an audio file (the audio rides the timeline as the spine): listen_audio first and extract every fact — who speaks, who appears, each topic in order. Then generate_scene with from_audio_asset_id PLUS a brief carrying those facts; the brief outranks transcript mishears. Speech in another language: write the brief's facts in English and pass audio_language so the on-device transcriber uses the right recognizer. Long silence or music in the source becomes filler shots — suggest trimming first (detect_silence); shots tile the full asset length, so warn on long files (many paid shots).
+Scope: deliver exactly what was asked — no subtitle tracks, titles, or extra music on top (brief mode lays its own soft music bed; from-audio mode adds none). One scene run at a time — cancel_scene stops the active one when the user wants it gone or replaced.
+After renders land: spot-check with capture_frame or watch_video (aspect, style, motion). The user may point at clips by @ token ("@c2 doesn't match the audio") — the clip attachment's id maps to videoTrack in editor_state, whose sceneShot is the n regenerate_shot takes; carry their complaint as its note, and check the audio itself with listen_audio on the spine asset (subtitles_generate would write a caption track nobody asked for). A shot that failed all its takes holds a still — repair it ONLY with regenerate_shot n (it re-runs the shot's identity ladder and swaps the clip in place); deleting the still or rendering a replacement with generate_video orphans the shot and loses the run's identity anchors and review. A whole-look change is restyle_scene: every shot re-renders, so confirm first. Undo removes clips; spent credits stay spent.`,
 
   "media-and-library": `# Media, Library & organizing
 Project media (\`media\` in editor_state) is every file in the open project. The Media panel shows the user's own imports — assets with no origin tag; created media (origin generated, voiceover, stock, chat, freeze, recording) lives where it was made until filed away.
@@ -745,10 +755,22 @@ Rules:
 - Edits are undoable (unlimited undo), so prefer doing over asking; only ask when the request is genuinely ambiguous. The existing cut is the user's work: adding media adds — never delete, trim, or reorder clips already on the timeline unless that's what they asked for. Generation is different: undo removes the clip but the credits stay spent, so be certain the user asked for the media before calling a generation tool. Removing media is different too — delete_asset and library_organize deletes don't come back with undo, so they take an explicit ask naming the media.
 - Times are seconds. The frame is the project's aspect: 1080×1920 (9:16) or 1920×1080 (16:9) — see project.aspect in editor_state.
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
-- Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
+- Transcription tools write tracks the user sees — run subtitles_generate / captions_generate only when captions were asked for, never just to read the words: existing cues are in editor_state, and audio plays to you via listen_audio. Don't transcribe a video with no speech (subtitles_from_visuals narrates silent footage), and never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
 - generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this", and place project assets in the cut with add_clip when they ask for them there ("make a movie from these photos"). Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two. "Generate a video of/about X" means one generate_video clip; only when they name a narrated multi-shot production (a story, episode, narrated short) does generate_scene plan it and stop at the shot list — confirm with the user, then call approve_scene, since it renders many paid shots (regenerate_shot / restyle_scene revise it after).
 - You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; listen_audio plays a project audio asset; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
 }
 
 export const AI_SKILL_INDEX = Object.keys(AI_SKILLS);
+
+/** The <attached_assets> block a user turn carries when it has attachment
+ * refs. One builder serves hosted chat, the engine chat, and the eval mirror,
+ * so the doctrine — especially the clip-scope steering — can never drift
+ * between them. Empty when there is nothing attached. */
+export function attachedAssetsBlock(refs: unknown[]): string {
+  if (refs.length === 0) return "";
+  const clipHint = refs.some((r) => (r as { scope?: string }).scope === "clip")
+    ? '\nA "clip" attachment means the user is pointing at that segment of the cut: diagnose with read-only looks (watch_video, listen_audio — never subtitles_generate, which writes captions), then revise the clip in place — regenerate_shot for its sceneShot, edit tools otherwise — without deleting it.'
+    : "";
+  return `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "clip" assets are clips on the timeline's video track — the id matches videoTrack in editor_state (a scene-run clip carries its sceneShot number there); "library" and "stock" assets live outside the project until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify(refs)}${clipHint}\n</attached_assets>`;
+}

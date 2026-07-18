@@ -6,7 +6,7 @@ import { fetchLibrary, libraryMediaUrl, type LibraryAsset } from "./library";
 import type { StockImage, StockVideo } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
-import { useEditor } from "./store";
+import { getClipSpans, useEditor } from "./store";
 import type { MediaAsset } from "./types";
 
 // One reference model for every piece of media in the app. A ref names an
@@ -26,8 +26,11 @@ import type { MediaAsset } from "./types";
 // resolves tokens back to refs on send.
 
 /** "file" marks a transient ref made from a desktop drop (a text file riding a
- * composer) — it lives only in the composer's state, never in a catalog. */
-export type AssetRefScope = "project" | "library" | "stock" | "file";
+ * composer) — it lives only in the composer's state, never in a catalog.
+ * "clip" names a clip on the timeline's video track (id = the clip id, url =
+ * its source media), so chat can talk about segments of the cut, not just
+ * assets. */
+export type AssetRefScope = "project" | "library" | "stock" | "file" | "clip";
 export type AssetRefKind = "video" | "audio" | "image" | "text";
 
 export interface AssetRef {
@@ -313,22 +316,49 @@ let libraryLoad: Promise<LibraryAsset[]> | null = null;
 /** The open project's media as refs with their session handles, assigned in
  * media order — `v1` videos, `i1` generated stills, `a1` audio — so a prompt
  * can say `@v2` instead of the full name. Handles are derived, never stored:
- * anything that shows one resolves it from the current asset list. */
+ * anything that shows one resolves it from the current asset list.
+ * Chat-owned assets (origin "chat") are a run's internals — character sheets,
+ * keyframes, takes — visible nowhere the user works, so they don't become
+ * candidates; a take placed on the timeline is reachable as its clip (@c2). */
 export function projectRefs(assets: MediaAsset[]): AssetRef[] {
   const counters = { v: 0, i: 0, a: 0 };
-  return assets.map((a) => {
-    const prefix = a.type === "image" ? "i" : a.type === "video" ? "v" : "a";
-    counters[prefix] += 1;
-    return { ...refFromAsset(a), handle: `${prefix}${counters[prefix]}` };
-  });
+  return assets
+    .filter((a) => a.origin !== "chat")
+    .map((a) => {
+      const prefix = a.type === "image" ? "i" : a.type === "video" ? "v" : "a";
+      counters[prefix] += 1;
+      return { ...refFromAsset(a), handle: `${prefix}${counters[prefix]}` };
+    });
 }
 
-/** Everything referenceable right now, in resolution order: the open project's
- * media, then the shared library, then the stock catalog. Names are unique
- * within the list (first scope wins) so a mention resolves to one asset.
- * Library items mention by name; stock ids are already short (`@nature-dunes`). */
+/** The timeline's video-track clips as refs — `c1`, `c2`… in timeline order —
+ * so a prompt can point at a segment of the cut ("@c2 doesn't match the
+ * audio"). Handles are derived from the current order, never stored; the
+ * timeline shows each clip's token on hover. */
+export function clipRefs(
+  clips: Parameters<typeof getClipSpans>[0],
+  assets: MediaAsset[]
+): AssetRef[] {
+  return getClipSpans(clips, assets).map((sp, i) => ({
+    scope: "clip",
+    id: sp.clip.id,
+    name: `clip ${i + 1}`,
+    kind: sp.asset.type === "image" ? "image" : "video",
+    url: sp.asset.url,
+    duration: sp.len,
+    handle: `c${i + 1}`,
+  }));
+}
+
+/** Everything referenceable right now, in resolution order: the timeline's
+ * clips first (what's in front of the user — a bare `@` leads with the cut),
+ * then the open project's media, the shared library, and the stock catalog.
+ * Names are unique within the list (first scope wins) so a mention resolves
+ * to one asset. Library items mention by name; stock ids are already short
+ * (`@nature-dunes`). */
 export function useRefCandidates(): AssetRef[] {
   const assets = useEditor((s) => s.assets);
+  const clips = useEditor((s) => s.clips);
   const [lib, setLib] = useState<LibraryAsset[]>(libraryCache ?? []);
 
   useEffect(() => {
@@ -347,6 +377,7 @@ export function useRefCandidates(): AssetRef[] {
     const seen = new Set<string>();
     const out: AssetRef[] = [];
     for (const ref of [
+      ...clipRefs(clips, assets),
       ...project,
       ...lib.map(refFromLibrary),
       ...STOCK_IMAGES.map(refFromStock),
@@ -358,7 +389,7 @@ export function useRefCandidates(): AssetRef[] {
       out.push(ref);
     }
     return out;
-  }, [assets, lib]);
+  }, [assets, clips, lib]);
 }
 
 /** The prompt token for an asset name: `@name`, quoted when it has spaces. */

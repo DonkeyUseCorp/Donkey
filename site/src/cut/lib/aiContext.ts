@@ -39,6 +39,13 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
   const duration = totalDuration(s.clips);
   const assetById = new Map(s.assets.map((a) => [a.id, a]));
   const subtitleTracks = subtitleLaneCount(s.subtitles);
+  // Scene-run lineage: which plan shot (1-based, what regenerate_shot takes)
+  // placed each clip, so "fix this clip" maps straight to a shot revision.
+  const shotByClip = new Map(
+    (s.genvideo?.shots ?? []).flatMap((sh, i) =>
+      sh.timelineClipId ? [[sh.timelineClipId, { n: i + 1, still: sh.status === "failed" }] as const] : []
+    )
+  );
 
   const selection = (() => {
     if (!s.selection) return null;
@@ -113,6 +120,13 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       muted: sp.clip.muted,
       framing: sp.clip.fit ?? "fit",
       speed: r(sp.clip.speed ?? 1),
+      // The generated scene shot this clip came from — sceneShot is the
+      // 1-based number regenerate_shot takes; heldStill marks a render that
+      // fell back to its keyframe.
+      ...(() => {
+        const sh = shotByClip.get(sp.clip.id);
+        return sh ? { sceneShot: sh.n, ...(sh.still ? { sceneShotHeldStill: true } : {}) } : {};
+      })(),
       // Track 0 is free-positioned: empty stretches play black.
       ...(() => {
         const prevEnd = index === 0 ? 0 : spans[index - 1].start + spans[index - 1].len;

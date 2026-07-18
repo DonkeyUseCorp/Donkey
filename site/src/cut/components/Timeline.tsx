@@ -871,6 +871,7 @@ export function Timeline() {
                 key={span.clip.id}
                 span={span}
                 prevOverlap={spans[i - 1]?.transitionOut ?? 0}
+                mention={`@c${i + 1}`}
                 pps={pps}
                 selected={selKeys.has(`clip:${span.clip.id}`)}
                 drag={laneDrag?.kind === "clip" && laneDrag.id === span.clip.id ? laneDrag : null}
@@ -1391,6 +1392,7 @@ function Playhead({
 function ClipView({
   span,
   prevOverlap,
+  mention,
   pps,
   selected,
   drag,
@@ -1407,6 +1409,9 @@ function ClipView({
    * seconds — the room the incoming transition block claims on this clip's
    * left. This clip's own `span.transitionOut` claims the right. */
   prevOverlap: number;
+  /** The clip's chat mention token ("@c2"), shown on hover so the user can
+   * point the assistant at this exact segment. */
+  mention: string;
   pps: number;
   selected: boolean;
   /** This clip's live drag when it is the one being carried (ghost mode). */
@@ -1515,9 +1520,13 @@ function ClipView({
         // glance, not just from the thin border.
         <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
       )}
-      {drag && (
+      {drag ? (
         <span className="tl-dur-chip pointer-events-none absolute top-1 left-1 z-2 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] tabular-nums text-white">
           {(Math.round(span.len * 10) / 10).toFixed(1)}s
+        </span>
+      ) : (
+        <span className="tl-mention-chip pointer-events-none absolute top-1 left-1 z-2 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+          {mention}
         </span>
       )}
       {asset.type === "video" && (

@@ -21,7 +21,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { geminiModelRoles } from "../src/lib/inference/gemini-models";
-import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../src/cut/server/ai/catalog";
+import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, attachedAssetsBlock, systemPrompt } from "../src/cut/server/ai/catalog";
 import {
   parseTurnIntent,
   TURN_INTENT_PROMPT,
@@ -168,6 +168,9 @@ const EDITOR_STATE = {
   view: { pxPerSec: 60, timelineH: 260, exportDialogOpen: false },
 };
 
+/** A user-imported narration file for the scene-production cases. */
+const NARRATION_ASSET = { id: "a-au1", name: "narration.mp3", type: "audio", duration: 24 };
+
 const VOICE_REF = {
   scope: "project",
   id: VOICE_ASSET.id,
@@ -198,6 +201,67 @@ const FILLER_STATE = {
   },
 };
 
+/** The base snapshot plus the narration import — the scene cases' spine. */
+const AUDIO_STATE = {
+  ...EDITOR_STATE,
+  media: [...EDITOR_STATE.media, NARRATION_ASSET],
+};
+
+/** A finished scene run's timeline: three generated takes, each clip carrying
+ * its plan shot number (sceneShot), the narration as the spine. */
+const sceneClip = (n: number, start: number, len: number) => ({
+  index: n - 1,
+  id: `sc-${n}`,
+  asset: `shot ${n} take.mp4`,
+  start,
+  len,
+  in: 0,
+  out: len,
+  sourceDuration: 10,
+  muted: true,
+  framing: "fit",
+  speed: 1,
+  sceneShot: n,
+});
+const SCENE_DONE_STATE = {
+  ...EDITOR_STATE,
+  media: [
+    ...EDITOR_STATE.media,
+    NARRATION_ASSET,
+    { id: "t-1", name: "shot 1 take.mp4", type: "video", duration: 10, origin: "generated" },
+    { id: "t-2", name: "shot 2 take.mp4", type: "video", duration: 10, origin: "generated" },
+    { id: "t-3", name: "shot 3 take.mp4", type: "video", duration: 10, origin: "generated" },
+  ],
+  videoTrack: [sceneClip(1, 0, 3), sceneClip(2, 3, 3), sceneClip(3, 6, 3)],
+  soundtrack: [{ id: "au-n", asset: NARRATION_ASSET.name, start: 0, len: 9, in: 0, out: 9, volume: 1 }],
+};
+
+/** The clip mention refs the composer attaches for "@c1"/"@c2". */
+const CLIP_REFS = [
+  { scope: "clip", id: "sc-1", name: "clip 1", kind: "video", url: "file:sc-1", duration: 3, handle: "c1" },
+  { scope: "clip", id: "sc-2", name: "clip 2", kind: "video", url: "file:sc-2", duration: 3, handle: "c2" },
+];
+
+/** What generate_scene returns after planning (mirrors aiTools' note). */
+const SCENE_PLANNED = {
+  planned: true,
+  shots: 5,
+  note: "Planned 5 shots over the audio. A plan card below lists the shots for the user, so keep your reply to one short line — don't re-describe the shots or the timing. Just ask them to confirm; when they do, call approve_scene (each shot spends credits, so don't approve on your own).",
+};
+
+/** Scene-case interceptor: asserts on generate_scene's arguments and fails
+ * the case if the model self-approves the plan. */
+function makeSceneSim(check: (args: Record<string, unknown>) => void) {
+  return () => (name: string, args: Record<string, unknown>): unknown => {
+    if (name === "generate_scene") {
+      check(args);
+      return SCENE_PLANNED;
+    }
+    if (name === "approve_scene") throw new Error("approve_scene before the user confirmed");
+    return undefined;
+  };
+}
+
 /** A composer turn as geminiChat's inputFromMessages builds it (keep the
  * envelope text in sync with geminiChat.ts). */
 function userTurn(
@@ -211,9 +275,7 @@ function userTurn(
   let full = text;
   const extra: Item[] = [];
   const refs = [...(opts?.attachAudio ? [VOICE_REF] : []), ...(opts?.attachRefs ?? [])];
-  if (refs.length > 0) {
-    full += `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify(refs)}\n</attached_assets>`;
-  }
+  full += attachedAssetsBlock(refs);
   if (opts?.attachAudio) {
     extra.push({ text: `Attached audio "${VOICE_REF.name}":` });
     extra.push({ type: "input_audio", ...opts.attachAudio });
@@ -525,7 +587,7 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
           jobId: "job-dogs",
           addToTimeline: false,
           note:
-            "Rendering with Veo — it previews in this chat when it lands, in a minute or two. It stays in the chat until the user places it.",
+            "Rendering — it previews in this chat when it lands, in a minute or two. It stays in the chat until the user places it.",
         },
       },
     },
@@ -583,6 +645,115 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
           cues: 12,
           note: "Transcribed the cut onto subtitle track 0.",
         },
+      },
+    },
+    {
+      // A cartoon ask over project audio is one generate_scene plan: the
+      // audio rides as the spine, the plan waits for the user's go-ahead,
+      // and a 9:16 project takes 9:16 shots.
+      name: "cartoon-from-audio-plans-scene",
+      input: () => [
+        userTurn("turn my narration audio into a smooth 2D cartoon", { state: AUDIO_STATE }),
+      ],
+      reply: /shot|plan|confirm|approv|cartoon|scene/i,
+      requiredTools: ["generate_scene"],
+      state: AUDIO_STATE,
+      simulate: makeSceneSim((args) => {
+        if (String(args.from_audio_asset_id ?? "") !== NARRATION_ASSET.id)
+          throw new Error(
+            `generate_scene must animate ${NARRATION_ASSET.id}, got ${JSON.stringify(args.from_audio_asset_id)}`
+          );
+        if (args.aspect !== undefined && args.aspect !== "9:16")
+          throw new Error(
+            `generate_scene aspect must match the 9:16 project, got ${JSON.stringify(args.aspect)}`
+          );
+      }),
+    },
+    {
+      // Foreign source audio: the speech language rides audio_language so the
+      // on-device recognizer matches, and the audio still spines the cut.
+      name: "cartoon-korean-audio-passes-language",
+      input: () => [
+        userTurn("my narration audio is in Korean — turn it into a smooth 2D cartoon", {
+          state: AUDIO_STATE,
+        }),
+      ],
+      reply: /shot|plan|confirm|approv|cartoon|scene|korean/i,
+      requiredTools: ["generate_scene"],
+      state: AUDIO_STATE,
+      simulate: makeSceneSim((args) => {
+        if (String(args.from_audio_asset_id ?? "") !== NARRATION_ASSET.id)
+          throw new Error("generate_scene must animate the narration audio");
+        if (!/^ko(-|$)/i.test(String(args.audio_language ?? "")))
+          throw new Error(
+            `audio_language must name Korean, got ${JSON.stringify(args.audio_language)}`
+          );
+      }),
+    },
+    {
+      // A style image attached to the ask anchors the scene's look: its asset
+      // id must ride reference_asset_ids into the plan.
+      name: "cartoon-style-reference-anchors-look",
+      input: () => [
+        userTurn("make a cartoon episode from my narration audio in the style of this picture", {
+          state: AUDIO_STATE,
+          attachRefs: [PHOTO_REFS[0]],
+        }),
+      ],
+      reply: /shot|plan|confirm|approv|cartoon|scene|style/i,
+      requiredTools: ["generate_scene"],
+      state: AUDIO_STATE,
+      simulate: makeSceneSim((args) => {
+        const refs = Array.isArray(args.reference_asset_ids)
+          ? args.reference_asset_ids.map(String)
+          : [];
+        if (!refs.includes(PHOTO_ASSETS[0].id))
+          throw new Error(
+            `reference_asset_ids must carry ${PHOTO_ASSETS[0].id}, got ${JSON.stringify(args.reference_asset_ids)}`
+          );
+      }),
+    },
+    {
+      // A "how would you" cartoon question is a chat deliverable: approach in
+      // words, the scene pipeline untouched (generate_scene would violate).
+      name: "cartoon-question-stays-in-chat",
+      input: () => [
+        userTurn("how would you turn my narration audio into a 2D cartoon?", {
+          state: AUDIO_STATE,
+        }),
+      ],
+      reply: /cartoon|scene|shot|animate|style|narration/i,
+      state: AUDIO_STATE,
+    },
+    {
+      // Timeline mentions: "@c1 and @c2 are too similar" must map through the
+      // clip attachments to videoTrack's sceneShot numbers and revise those
+      // exact shots — regenerate_shot with the complaint riding as the note,
+      // never a fresh generate_video/generate_scene.
+      name: "clip-mentions-redo-their-shots",
+      input: () => [
+        userTurn(
+          "clip 1 and clip 2 are too similar and they don't match the audio. fix them",
+          { attachRefs: CLIP_REFS, state: SCENE_DONE_STATE }
+        ),
+      ],
+      reply: /shot|redo|regenerat/i,
+      requiredTools: ["regenerate_shot"],
+      state: SCENE_DONE_STATE,
+      simulate: () => {
+        const redone = new Set<number>();
+        return (name, args) => {
+          if (name === "regenerate_shot") {
+            const n = Number(args.n);
+            if (n !== 1 && n !== 2) throw new Error(`regenerate_shot ${n} — the mentions were shots 1 and 2`);
+            if (!String(args.note ?? "").trim()) throw new Error("regenerate_shot without the user's note");
+            redone.add(n);
+            return { ok: true, message: `Redoing shot ${n}…` };
+          }
+          if (name === "generate_video" || name === "generate_scene" || name === "restyle_scene")
+            throw new Error(`${name} called — a clip complaint revises its shot, not a new render`);
+          return undefined;
+        };
       },
     },
   ];

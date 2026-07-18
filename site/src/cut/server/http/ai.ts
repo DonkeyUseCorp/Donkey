@@ -13,7 +13,7 @@ import {
 } from "../ai/bridge";
 import { rewriteCaptions, translateCaptions } from "../ai/captions";
 import { writeVisualCues, type VisualFrame } from "../ai/visualSubtitles";
-import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../ai/catalog";
+import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, attachedAssetsBlock, systemPrompt } from "../ai/catalog";
 
 interface ChatBody {
   messages: UIMessage[];
@@ -339,10 +339,7 @@ export const aiApi = {
     const sessionKey = crypto.randomUUID();
     const userText = lastUserText(body.messages);
     const attachments = lastUserAttachments(body.messages);
-    const attachBlock = attachments.length
-      ? `\n\n<attached_assets>\nThe user attached these media assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported:\n${JSON.stringify(attachments)}\n</attached_assets>`
-      : "";
-    const prompt = `${userText}${attachBlock}\n\n<editor_state>\n${JSON.stringify(body.context ?? {})}\n</editor_state>`;
+    const prompt = `${userText}${attachedAssetsBlock(attachments)}\n\n<editor_state>\n${JSON.stringify(body.context ?? {})}\n</editor_state>`;
 
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
