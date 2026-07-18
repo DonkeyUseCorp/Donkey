@@ -12,6 +12,7 @@ import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 // Side-effect import: registers the brief-to-video resume subscription, so a
 // persisted run resumes on project load even when the AI panel never mounts.
 import "@/cut/lib/genScene";
+import { installDevHooks } from "@/cut/lib/devHooks";
 import { backTarget, useCutBase } from "@/cut/lib/nav";
 import { projectDuration, serializeDoc, storedAssets, useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
@@ -34,6 +35,7 @@ export function Editor({
   from?: string | null;
   folder?: string | null;
 }) {
+  useEffect(() => installDevHooks(), []);
   const back = backTarget(useCutBase(), from, folder);
   const loaded = useEditor((s) => s.loaded);
   const loadError = useEditor((s) => s.loadError);

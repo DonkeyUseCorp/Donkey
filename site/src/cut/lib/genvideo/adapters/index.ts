@@ -33,7 +33,7 @@ export function realSuite(projectId: string, chatId?: string): ModelSuite {
     label: "donkey-hosted",
     script: makeScriptRole(),
     breakdown: makeBreakdownRole(),
-    style: makeStyleRole(),
+    style: makeStyleRole(projectId),
     image: makeImageRole(projectId, chatId),
     video: makeVideoRole(projectId, chatId),
     voice: makeVoiceRole(projectId, chatId),

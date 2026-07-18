@@ -6,13 +6,16 @@
  *   node_modules/.bin/bun run scripts/genvideo-selftest.ts
  */
 
+import type { AssetRef } from "../src/cut/lib/assetRef";
 import { assertCoverage, MAX_SHOT_SEC, MIN_SHOT_SEC, repairCoverage } from "../src/cut/lib/genvideo/coverage";
 import { FakeEditor, type PlacedClip } from "../src/cut/lib/genvideo/editor";
 import { fillSlot } from "../src/cut/lib/genvideo/fillSlot";
 import { fakeSuite, type FakeStudioOptions } from "../src/cut/lib/genvideo/fakes";
 import { fakeRegistry } from "../src/cut/lib/genvideo/registry";
-import { VideoOrchestrator, type OrchestratorDeps } from "../src/cut/lib/genvideo/orchestrator";
-import type { VideoEvent, VideoProject } from "../src/cut/lib/genvideo/types";
+import { VIDEO_ATTEMPTS, VideoOrchestrator, type OrchestratorDeps } from "../src/cut/lib/genvideo/orchestrator";
+import { anchorRefused, buildShotAttempts } from "../src/cut/lib/genvideo/shotAttempts";
+import type { RefAsset, VideoEvent, VideoProject } from "../src/cut/lib/genvideo/types";
+import { walkLadder } from "../src/cut/lib/videoLadder";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = ""): void {
@@ -189,6 +192,206 @@ async function run(): Promise<void> {
     check("all shots placed clean", project.shots.every((s) => s.status === "placed"));
   }
 
+  // ── identity policy: a moving stranger never places ──────────────────────
+  // One 6s shot so verdict order is deterministic (fanOut runs shots
+  // concurrently; a multi-shot project interleaves who consumes which verdict).
+  const singleShot = () =>
+    baseProject({ audioMode: "provided", audioClipId: "audio-clip", audioAssetId: "audio-asset", durationFrames: 6 * FPS });
+  section("identity gate — a moving stranger never places");
+  {
+    // An identity break keeps the seed: the keyframe was gated on-model, so
+    // re-animating it is the fix — the retake must ride the SAME keyframe.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      reviewVerdicts: [
+        { ok: false, offModel: true, note: "a different design than the sheet" },
+        { ok: true },
+      ],
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    const takes = studio.calls.filter((c) => c.role === "video");
+    check("one shot, two takes", project.shots.length === 1 && takes.length === 2, `${project.shots.length} shots, ${takes.length} takes`);
+    check("the identity retake rides the same on-model seed", !!takes[0]?.keyframe && takes[0].keyframe === takes[1]?.keyframe);
+    check("the passing retake placed as video", project.shots[0].status === "placed" && (project.shots[0].clip ?? "").startsWith("fake:video"));
+  }
+  {
+    // Identity break on every attempt → the on-model keyframe still places;
+    // the off-model video never does.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      reviewVerdicts: Array.from({ length: VIDEO_ATTEMPTS }, () => ({ ok: false, offModel: true, note: "a different design" })),
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    const shot = project.shots[0];
+    const takes = studio.calls.filter((c) => c.role === "video");
+    check("all attempts spent, all from the kept seed", takes.length === VIDEO_ATTEMPTS && takes.every((t) => !!t.keyframe && t.keyframe === takes[0].keyframe), `${takes.length} takes`);
+    check("no off-model take placed", shot.status === "failed");
+    check("the shot holds its on-model keyframe still", !!shot.startKeyframe && shot.clip === shot.startKeyframe && !!shot.timelineClipId);
+    assertTiling("the still fills the slot", editor.placed, project.durationFrames);
+  }
+  {
+    // Contrast: a non-identity flaw on the final take still places — motion
+    // beats a frozen still when the character is right.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      reviewVerdicts: Array.from({ length: VIDEO_ATTEMPTS }, () => ({ ok: false, note: "the action is weak" })),
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    check("a weak-but-on-model final take places", project.shots[0].status === "placed" && (project.shots[0].clip ?? "").startsWith("fake:video"));
+    check("all attempts were spent first", studio.calls.filter((c) => c.role === "video").length === VIDEO_ATTEMPTS);
+  }
+
+  // ── seed policy: re-mint on seed flaws, never render anchor-less ─────────
+  section("seed policy — re-mint on seed flaws, restore when the mint fails");
+  {
+    // A seed-flaw decline mints a FRESH seed for the retake.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      reviewVerdicts: [{ ok: false, note: "compose the scene upright" }, { ok: true }],
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    const takes = studio.calls.filter((c) => c.role === "video");
+    check("a seed-flaw retake rides a fresh seed", takes.length === 2 && !!takes[0].keyframe && !!takes[1].keyframe && takes[0].keyframe !== takes[1].keyframe);
+    check("the retake placed", project.shots[0].status === "placed");
+  }
+  {
+    // The prior seed is released only once its replacement exists: when the
+    // re-mint fails (its prompt carries the critique, which is the failing
+    // marker here), the retake rides the ORIGINAL keyframe — never anchor-less.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      failImageMarker: "compose the scene upright",
+      reviewVerdicts: [{ ok: false, note: "compose the scene upright" }, { ok: true }],
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    const takes = studio.calls.filter((c) => c.role === "video");
+    check("a failed re-mint restores the prior seed", takes.length === 2 && !!takes[0].keyframe && takes[0].keyframe === takes[1].keyframe);
+    check("the retake placed from the restored seed", project.shots[0].status === "placed");
+  }
+  {
+    // A refused anchor changes the identity-break policy: the stranger came
+    // from WORDS (the provider blocked the seed), so re-submitting the same
+    // seed re-blocks forever — the retake must mint a FRESH seed to re-roll
+    // the refusal.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      anchorsRefused: true,
+      reviewVerdicts: [{ ok: false, offModel: true, note: "a stranger drawn from words" }, { ok: true }],
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    const takes = studio.calls.filter((c) => c.role === "video");
+    check("an unanchored identity break re-rolls with a fresh seed", takes.length === 2 && !!takes[0].keyframe && !!takes[1].keyframe && takes[0].keyframe !== takes[1].keyframe);
+    check("the re-rolled retake placed", project.shots[0].status === "placed");
+  }
+  {
+    // Two unanchored off-model misses mean the provider is refusing this
+    // shot's seeds outright — the third re-mint must RESTAGE the seed (face
+    // away from camera) instead of rolling the same composition again.
+    const editor = editorWithAudio(6 * FPS);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      anchorsRefused: true,
+      reviewVerdicts: [
+        { ok: false, offModel: true, note: "a stranger" },
+        { ok: false, offModel: true, note: "a stranger again" },
+        { ok: true },
+      ],
+    });
+    const project = singleShot();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    const mints = studio.calls.filter((c) => c.role === "image" && c.prompt);
+    check(
+      "repeated refused anchors restage the seed",
+      mints.some((c) => (c.prompt ?? "").includes("Restage the composition")),
+      `${mints.length} mints`
+    );
+    check("the restaged retake placed", project.shots[0].status === "placed");
+  }
+
+  // ── the shot ladder: rung policy is data, the text rung is policy-gated ──
+  section("shot ladder — the text rung opens only when the provider refuses the anchor");
+  {
+    const kf: AssetRef = { scope: "project", id: "kf1", name: "keyframe", kind: "image", url: "file:kf1" };
+    const sheet: AssetRef = { scope: "project", id: "sheet1", name: "Mason sheet", kind: "image", url: "file:sheet1" };
+    const castRefs: RefAsset[] = [
+      { mediaId: "sheet1", kind: "image", purpose: "character", name: "Mason", description: "an 8-year-old boy" },
+    ];
+    const base = { aspect: "9:16" as const };
+    const full = buildShotAttempts({
+      prompt: "Mason waves.", refs: castRefs, base,
+      keyframe: kf, anchors: [sheet], ridingIds: new Set(["sheet1"]),
+    });
+    check("three rungs, strongest first", full.length === 3 && !!full[0].opts?.refs && !!full[1].opts?.referenceImages && !full[2].opts?.refs && !full[2].opts?.referenceImages);
+    check("the seed rides raw (no compose rewrite)", full[0].opts?.composeRefs === false);
+    check("every rung keeps the shared base", full.every((r) => r.opts?.aspect === "9:16"));
+    const gate = full[2].gate;
+    check("cast text rung is gated", typeof gate === "function");
+    check("the gate stays closed with no failure and on ordinary failures",
+      gate?.(null) === false && gate?.("The video render is taking too long — try again.") === false && gate?.("fake video failed") === false);
+    check("a person-policy refusal opens the gate",
+      gate?.("The input image contains content that has been blocked by your current safety settings for person/face generation. Support codes: 17301594") === true);
+    check("a format refusal opens the gate", gate?.("Unsupported image format. Expected JPEG or PNG.") === true);
+    check("a filtered (empty) render opens the gate", gate?.("Omni returned no video for this request.") === true);
+    const castless = buildShotAttempts({
+      prompt: "an aquarium bubbles.", refs: [{ mediaId: "loc1", kind: "image", purpose: "location", name: "living room" }],
+      base, keyframe: kf, anchors: [], ridingIds: new Set(),
+    });
+    check("a castless shot keeps an ungated text rung", castless[castless.length - 1].gate === undefined);
+    const anchorless = buildShotAttempts({
+      prompt: "Mason waves.", refs: castRefs, base, anchors: [], ridingIds: new Set(),
+    });
+    check("a cast shot with no image anchor keeps the text floor", anchorless.length === 1 && anchorless[0].gate === undefined);
+  }
+
+  // ── the ladder walk: gates and fatal stops ────────────────────────────────
+  section("ladder walk — gated rungs run only on the failures they're for");
+  {
+    const runRungs = async (throwWith: string, gated = true) => {
+      const ran: number[] = [];
+      const out = await walkLadder(
+        [{ prompt: "seed" }, { prompt: "text", ...(gated ? { gate: anchorRefused } : {}) }],
+        async (_a, rung) => {
+          ran.push(rung);
+          if (rung === 0) throw new Error(throwWith);
+        },
+        { fatal: (e) => e === "No credits left" }
+      );
+      return { ran, out };
+    };
+    const refused = await runRungs("The input image contains content that has been blocked for person/face generation. 17301594");
+    check("an anchor refusal unlocks the gated rung", refused.out.ok && refused.ran.join(",") === "0,1");
+    const ordinary = await runRungs("a transient render error");
+    check("an ordinary failure keeps the gated rung closed (error surfaces)", !ordinary.out.ok && ordinary.ran.join(",") === "0" && ordinary.out.error === "a transient render error");
+    const broke = await runRungs("No credits left", false);
+    check("a fatal failure stops the walk before ungated rungs", !broke.out.ok && broke.ran.join(",") === "0" && broke.out.error === "No credits left");
+  }
+
   // ── Entry 2: brief only → script, voice, music, video ────────────────────
   section('brief only → "a video of me and my son", audio-native video');
   {
@@ -229,19 +432,24 @@ async function run(): Promise<void> {
     assertTiling("split-beat shots still tile", editor.placed, project.durationFrames);
   }
 
-  // ── findings 8, 9: style failures degrade instead of dropping anchors ────
-  section("style-bible failure degrades gracefully (findings 8, 9)");
+  // ── the bible is the run's spine: a failed design fails the run loudly ───
+  // (a stand-in look would silently corrupt every render downstream)
+  section("style-bible failure fails the run loudly (finding 8, revised)");
   {
     const editor = emptyEditor();
     const { d } = deps(editor, { audioNative: true, failStyle: true });
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
-    await orch.approveBreakdown();
-    check("style failure still yields a character bible", project.characters.length > 0);
-    check("reference image minted from the default bible", project.characters.every((c) => !!c.mediaId));
-    check("run still completes and tiles", project.phase === "done" && tiles(editor, project.durationFrames));
+    let error = "";
+    await orch.approveBreakdown().catch((e: unknown) => {
+      error = String(e);
+    });
+    check("a failed style design rejects the run", error.includes("fake style design failed"));
+    check("no stand-in bible is installed", project.characters.length === 0);
+    check("nothing rendered under a missing bible", project.shots.every((s) => s.status !== "placed"));
   }
+  section("reference-sheet failure degrades gracefully (finding 9)");
   {
     const editor = emptyEditor();
     // Fail only the character reference sheet (its prompt carries the description).

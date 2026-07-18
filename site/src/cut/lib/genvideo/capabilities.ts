@@ -34,6 +34,8 @@ export interface BreakdownInput {
 
 export interface StyleInput {
   brief?: string;
+  /** A look the user pinned up front — the bible's style must realize it. */
+  style?: string;
   refs: RefAsset[];
   /** The story to design for. `characters`/`location` carry the stable ids the
    * script/breakdown assigned (char:1, loc:1, …); the style role returns one
@@ -44,6 +46,9 @@ export interface StyleInput {
 export interface StyleBible {
   /** The reusable style string every downstream prompt carries. */
   style: string;
+  /** What must never appear in a render of this look — the wrong medium's
+   * tells (e.g. photorealistic footage in a hand-drawn cut). */
+  negative?: string;
   characters: VideoAsset[];
   locations: VideoAsset[];
 }
@@ -56,12 +61,14 @@ export interface ImageInput {
 
 export interface VideoInput {
   prompt: string;
+  /** The model's negative prompt — the look's banned tells plus the base
+   * bans every render shares. */
+  negativePrompt?: string;
   refs: RefAsset[];
   /** The shot this render is for — its stable identity across reloads, so a
    * resumed run re-adopts its own in-flight job instead of billing a retake. */
   shotId?: string;
   startKeyframe?: string;
-  endKeyframe?: string;
   /** The audio slice this shot should be spoken over — for audio-native video. */
   audioMediaId?: string;
   audioFromSec?: number;
@@ -106,9 +113,18 @@ export interface ImageRole {
   /** Returns the generated project media id. */
   generate(input: ImageInput): Promise<string>;
 }
+export interface VideoTake {
+  /** The generated project media id. */
+  mediaId: string;
+  /** Whether the take rode an image anchor (seed keyframe or reference
+   * sheets). An unanchored take came from the text rung — identity held only
+   * by words — which changes the retake policy: its identity break means the
+   * provider refused the seed, so a FRESH seed re-rolls that refusal, whereas
+   * an anchored stranger keeps the seed it drifted from. */
+  anchored: boolean;
+}
 export interface VideoRole {
-  /** Returns the generated project media id. */
-  generate(input: VideoInput): Promise<string>;
+  generate(input: VideoInput): Promise<VideoTake>;
   /** True when this model lip-syncs to provided audio itself (no post-pass). */
   readonly audioNative: boolean;
 }
@@ -132,6 +148,15 @@ export interface ReviewInput {
   videoMediaId: string;
   /** What the plan wanted on screen. */
   action: string;
+  /** The plan's look — the reviewer judges the medium against it strictly. */
+  style?: string;
+  /** The shot's approved opening frame — the take must match its rendering
+   * technique, so a weaker-rung render can't land in a different look. */
+  keyframeMediaId?: string;
+  /** The canonical design sheet of each cast member in the shot, by name — the
+   * take's characters must read as the SAME designs, so a weaker-rung render
+   * can't land a reinvented character. */
+  castSheets?: { name: string; mediaId: string }[];
   /** The words heard over the shot. */
   narration: string;
   /** Seconds of the take the timeline slot needs. */
@@ -143,13 +168,35 @@ export interface ReviewVerdict {
   ok: boolean;
   /** Why a declined take failed — carried into the retake prompt. */
   note?: string;
+  /** A declined take that doesn't belong to this production — a character off
+   * its design sheet, or the wrong medium/technique (3D or live-action in a
+   * 2D production). Not a weak performance: an off-model take NEVER places,
+   * even on the last attempt — the on-model keyframe still holds the slot
+   * instead. The retake's seed follows the take's anchor: an anchored
+   * stranger keeps the gated-on-model seed it drifted from; an unanchored one
+   * means the provider refused the seed, so a fresh mint re-rolls it. */
+  offModel?: boolean;
   /** Where the slot's window starts inside the take (seconds; default 0). */
   fromSec?: number;
+}
+
+export interface FrameCheckInput {
+  /** Project media id of the minted frame. */
+  imageMediaId: string;
+  /** The production's technique benchmark (the anchor sheet). */
+  benchmarkMediaId: string;
+  /** The plan's look. */
+  style?: string;
+  /** What the frame should show. */
+  subject: string;
 }
 
 export interface ReviewRole {
   /** Watch a rendered take against its plan — the dailies check. */
   watch(input: ReviewInput): Promise<ReviewVerdict>;
+  /** Judge one minted frame against the production's benchmark BEFORE it seeds
+   * a paid render — the same-artist gate. Optional; absent means no gate. */
+  frame?(input: FrameCheckInput): Promise<ReviewVerdict>;
 }
 
 /** One model choice per role — what the orchestrator runs against. */

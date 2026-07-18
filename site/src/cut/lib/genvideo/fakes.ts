@@ -21,6 +21,7 @@ import {
   type ScriptInput,
   type StyleBible,
   type VideoInput,
+  type VideoTake,
   type VoiceInput,
   type VoiceResult,
 } from "./capabilities";
@@ -31,6 +32,12 @@ export interface FakeCall {
   role: string;
   detail: string;
   mediaId?: string;
+  /** Video calls: which shot rendered, and from which seed keyframe — so a
+   * test can prove seed-retention policies across retakes. */
+  shotId?: string;
+  keyframe?: string;
+  /** Image/video calls: the full prompt, for asserting retake direction. */
+  prompt?: string;
 }
 
 export interface FakeStudioOptions {
@@ -48,12 +55,16 @@ export interface FakeStudioOptions {
   voiceSeconds?: number;
   /** Fail every image generation whose prompt contains this marker. */
   failImageMarker?: string;
-  /** Make the style/character-design call throw (exercises the default bible). */
+  /** Make the style/character-design call throw (the run must fail loudly). */
   failStyle?: boolean;
   style?: string;
   /** Scripted dailies verdicts, consumed in order (absent = no review role).
    * Once the list runs dry every later take passes clean. */
   reviewVerdicts?: ReviewVerdict[];
+  /** Simulate the provider refusing every image anchor: takes still render,
+   * but unanchored (the real ladder's text rung) — how a person-policy block
+   * on the seed looks to the orchestrator. */
+  anchorsRefused?: boolean;
 }
 
 /** An in-memory studio; `.suite()` binds it to the orchestrator's roles. */
@@ -130,14 +141,23 @@ export class FakeStudio {
     const marker = this.opts.failImageMarker;
     if (marker && input.prompt.includes(marker))
       throw new Error(`fake image failed (marker "${marker}")`);
-    return this.mint("image", input.prompt.slice(0, 40));
+    const id = this.mint("image", input.prompt.slice(0, 40));
+    this.calls[this.calls.length - 1].prompt = input.prompt;
+    return id;
   }
 
-  private async video(input: VideoInput): Promise<string> {
+  private async video(input: VideoInput): Promise<VideoTake> {
     const marker = this.opts.failVideoMarker;
     if (marker && input.prompt.includes(marker))
       throw new Error(`fake video failed (marker "${marker}")`);
-    return this.mint("video", `${input.durationSec}s${input.audioMediaId ? " +audio" : ""} ${input.prompt}`);
+    const id = this.mint("video", `${input.durationSec}s${input.audioMediaId ? " +audio" : ""} ${input.prompt}`);
+    const call = this.calls[this.calls.length - 1];
+    call.shotId = input.shotId;
+    call.keyframe = input.startKeyframe;
+    // Anchored when an anchor exists and the provider took it; refused
+    // anchors fall to the words-only render, exactly like the real ladder.
+    const anchored = !this.opts.anchorsRefused && (!!input.startKeyframe || input.refs.length > 0);
+    return { mediaId: id, anchored };
   }
 
   private async speak(input: VoiceInput): Promise<VoiceResult> {

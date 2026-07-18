@@ -15,6 +15,13 @@ const TYPES: Record<string, string> = {
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",
   ".flac": "audio/flac",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
 };
 
 export function contentTypeFor(p: string) {

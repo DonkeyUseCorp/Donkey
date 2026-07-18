@@ -25,6 +25,9 @@ export interface RefAsset {
   /** What this reference anchors — identity, place, look, or motion. */
   purpose?: "character" | "location" | "style" | "motion";
   name?: string;
+  /** The bible's written identity, carried so a render this image can't ride
+   * on (a ladder rung without it) can fold the same words into its prompt. */
+  description?: string;
 }
 
 /** One beat of a generated script — a shot's worth of screen time. */
@@ -79,7 +82,6 @@ export interface Shot {
   location: string; // location asset id ("" = unspecified)
   framing: string;
   startKeyframe?: string; // media asset id
-  endKeyframe?: string; // media asset id
   /** The beat voiceover this shot lip-syncs to (generated mode). The voice is
    * placed once per beat; a shot spans a slice of it (voiceFromSec..voiceToSec,
    * relative to the beat start), so a line longer than one clip is never cut. */
@@ -139,6 +141,10 @@ export interface VideoProject {
   aspect?: "9:16" | "16:9";
   /** Reusable style string every downstream prompt carries. */
   style: string;
+  /** The look's negative — what must never appear in a render (the wrong
+   * medium's tells), minted with the style bible and sent as the video
+   * model's negative prompt. */
+  negative?: string;
   /** The suite label the run was produced with (for provenance and evals). */
   suiteLabel: string;
   /** The chat thread that owns this run's media, so every asset it creates is
@@ -184,6 +190,9 @@ export type VideoEvent =
   | { type: "breakdown"; shots: Shot[] }
   | { type: "progress"; placed: number; total: number }
   | { type: "log"; message: string }
+  /** A media asset the run just made (a sheet, a frame, a take) — the chat
+   * card lists these chronologically with a thumbnail. */
+  | { type: "asset"; label: string; mediaId: string }
   /** The live ticker: one line on what the run is doing right now. */
   | { type: "activity"; message: string }
   | { type: "error"; message: string };

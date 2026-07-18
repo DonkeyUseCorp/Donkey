@@ -14,28 +14,34 @@
  *   clip is muted, so its audio never competes — rather than asking the model to
  *   suppress audio (a knob many models reject, which just fails the render).
  * - Cast identity is anchored per shot, strongest signal first (see the ladder
- *   in makeVideoRole): the shot's keyframe — already rendered with the cast's
- *   reference images, so it IS the cast — seeds an image-to-video render; if
- *   that's blocked, the character/location reference images condition a
- *   reference-to-video render; only as a last resort does a shot fall back to
- *   text-only, where the cast rides the prompt alone and drifts. The seeded
- *   and referenced modes run at personGeneration ALLOW_ADULT (the most Veo
- *   permits with image inputs); text-only runs ALLOW_ALL.
- * - Durations come from the video-model registry (videoGen.ts), never a literal
- *   here — models render only fixed clip lengths, so we ask for a supported one
- *   and let the editor trim it to the exact shot.
+ *   in shotAttempts.ts): the shot's keyframe — already rendered with the cast's
+ *   reference images, so it IS the cast — seeds the render as its literal
+ *   opening frame; if the anchor is blocked, the character/location reference
+ *   images condition a reference-to-video render; text-only is the last
+ *   resort — for a cast shot it runs only when the provider refused the image
+ *   anchor itself, and its take still faces the reviewer's identity gate
+ *   before placing. Each rung's prompt folds in the bible descriptions of
+ *   exactly the cast that doesn't ride that call as an image
+ *   (describeUnanchored), so the text-only rung renders against the full
+ *   written identity — the same fixed words every shot — instead of a bare
+ *   action line.
+ * - The model picks each clip's length (up to ~10s) — there is no duration
+ *   knob — and always covers the shot's slot, so the editor trims the take to
+ *   the exact shot.
  */
 
 import { refFromAsset, type AssetRef } from "../../assetRef";
 import { tagChatAsset } from "../../chatAssets";
-import { NO_CREDITS_MESSAGE, useGenerate, videoJobSettlement, type VideoGenOptions } from "../../generate";
+import { useGenerate, videoJobSettlement } from "../../generate";
 import { enrichAsset } from "../../media";
 import { useEditor } from "../../store";
 import { DEFAULT_VOICE, synthesizeSpeech } from "../../tts";
-import { supportedVideoDuration, videoModel } from "../../videoGen";
+import { videoModel } from "../../videoModels";
 import { reportActivity } from "../activity";
 import { findRunAsset, stockAssetInDoc } from "../docWriter";
+import { buildShotAttempts } from "../shotAttempts";
 import type { ImageRole, VideoRole, VoiceRole } from "../capabilities";
+import { refRoleNote } from "../prompt";
 import type { RefAsset } from "../types";
 
 /** Resolve the pipeline's media-id references to the project assets the
@@ -55,7 +61,10 @@ async function refsToAssetRefs(projectId: string, refs: RefAsset[]): Promise<Ass
 export function makeImageRole(projectId: string, chatId?: string): ImageRole {
   return {
     async generate(input) {
-      const job = await useGenerate.getState().generateImage(projectId, input.prompt, {
+      // The refs ride as bare pixels, so the prompt states each one's role —
+      // sheets fix the cast, style references contribute technique only.
+      const roles = refRoleNote(input.refs);
+      const job = await useGenerate.getState().generateImage(projectId, roles ? `${input.prompt} ${roles}` : input.prompt, {
         refs: await refsToAssetRefs(projectId, input.refs),
         aspect: input.aspect,
         // The prompt is already complete (buildPrompt folds in style + setting);
@@ -74,30 +83,22 @@ export function makeImageRole(projectId: string, chatId?: string): ImageRole {
   };
 }
 
-const VIDEO_TIER = "fast" as const;
-
 export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
   return {
     // The model isn't given our narration track, so it never lip-syncs to it.
     audioNative: false,
     async generate(input) {
-      // The identity ladder: every rung renders the same prompt, each with a
-      // weaker identity anchor, and a shot takes the first rung that lands.
-      // Veo allows one anchor kind per render (seed OR references), caps both
-      // at ALLOW_ADULT, and renders reference-conditioned clips at 8s only —
-      // so the rungs are distinct requests, not one combined one.
+      // The identity ladder: each rung renders from a weaker identity anchor,
+      // its prompt growing the written identity of whatever no longer rides as
+      // an image, and a shot takes the first rung that lands. A render takes
+      // one anchor kind per call (seed OR references), so the rungs are
+      // distinct requests, not one combined one.
       // The shot's stable identity, stamped on every job this render starts so
       // a resumed run re-adopts exactly its own in-flight take.
       const genKey = input.shotId ? `${projectId}:${input.shotId}` : undefined;
       const base = {
-        tier: VIDEO_TIER,
         aspect: input.aspect,
-        ...(genKey ? { genKey } : {}),
-        // Chat ownership rides the job from creation, so a shot never touches
-        // the Video panel — job row, tile, or badge — even when the render
-        // errors or lands after the user moved on. Once placed on the timeline
-        // it's protected from thread-deletion by the clip.
-        ...(chatId ? { chatId } : {}),
+        ...(input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
       };
       // The seed keyframe resolves wherever the run's project lives — the
       // store when open, the persisted doc when the user switched away.
@@ -106,48 +107,37 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
         : undefined;
       // Identity and place anchors only — a user style reference is a look,
       // not a cast member, and must never ride as an asset to keep consistent.
-      const anchors = (
-        await refsToAssetRefs(
-          projectId,
-          input.refs.filter((r) => r.purpose === "character" || r.purpose === "location")
-        )
-      ).slice(0, videoModel(VIDEO_TIER).maxReferenceImages);
-      const attempts: VideoGenOptions[] = [
-        // 1. The keyframe as the literal first frame. It was rendered from the
-        //    cast's reference images, so it carries identity, wardrobe, setting,
-        //    and framing in one anchor — the strongest continuity Veo offers.
-        ...(keyframe
-          ? [{
-              ...base,
-              refs: [refFromAsset(keyframe)],
-              composeRefs: false,
-              personGeneration: "ALLOW_ADULT" as const,
-              durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec),
-            }]
-          : []),
-        // 2. Reference-to-video on the cast sheets themselves — identity holds,
-        //    composition is the model's again.
-        ...(anchors.length > 0
-          ? [{
-              ...base,
-              referenceImages: anchors,
-              personGeneration: "ALLOW_ADULT" as const,
-              durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec, {
-                withReferences: true,
-              }),
-            }]
-          : []),
-        // 3. Text-only, ALLOW_ALL — always renders, identity rides the prompt.
-        {
-          ...base,
-          personGeneration: "ALLOW_ALL" as const,
-          durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec),
-        },
-      ];
+      // The ref↔anchor pairing survives so each rung's prompt can name exactly
+      // the cast that does NOT ride that call as an image.
+      const identityRefs = input.refs.filter(
+        (r) => r.purpose === "character" || r.purpose === "location"
+      );
+      const resolved: { ref: RefAsset; anchor: AssetRef }[] = [];
+      for (const r of identityRefs) {
+        const a = await findRunAsset(projectId, r.mediaId);
+        if (a) resolved.push({ ref: r, anchor: refFromAsset(a) });
+      }
+      const riding = resolved.slice(0, videoModel("omni").maxReferenceImages);
+      // The rung policy — order, anchor strength, the policy-gated text rung —
+      // is pure data built in shotAttempts.ts (locked by the self-test); this
+      // role only resolves the assets it rides on.
+      const attempts = buildShotAttempts({
+        prompt: input.prompt,
+        refs: input.refs,
+        base,
+        keyframe: keyframe ? refFromAsset(keyframe) : undefined,
+        anchors: riding.map((p) => p.anchor),
+        ridingIds: new Set(riding.map((p) => p.ref.mediaId)),
+      });
       // A reload may have left this exact shot's render in flight — adopt the
       // resumed job's result instead of billing a second take. The match is
       // the shot's own identity, never the prompt text: two shots can share a
       // prompt and each still owns its own take.
+      // Whether a landed rung rode pixels — the retake policy needs to know a
+      // take held its identity by anchor or by words alone.
+      const anchoredRung = (rung?: number) =>
+        rung !== undefined &&
+        Boolean(attempts[rung]?.opts?.refs || attempts[rung]?.opts?.referenceImages);
       const inFlight = genKey
         ? useGenerate
             .getState()
@@ -155,25 +145,30 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
         : undefined;
       if (inFlight) {
         const settledJob = await videoJobSettlement(inFlight.id);
-        if (settledJob?.status === "done" && settledJob.assetId) return settledJob.assetId;
+        if (settledJob?.status === "done" && settledJob.assetId)
+          return { mediaId: settledJob.assetId, anchored: anchoredRung(settledJob.rung) };
       }
-      let lastError = "Video generation failed.";
-      for (const [rung, opts] of attempts.entries()) {
-        reportActivity(
-          rung === 0
-            ? "Animating the frame with Veo — a minute or two…"
-            : "That anchor failed — retrying the render with a weaker identity anchor…",
-          projectId
-        );
-        const job = await useGenerate.getState().generateVideo(projectId, input.prompt, opts)
-          .settled;
-        if (job.status === "done" && job.assetId) return job.assetId;
-        lastError = job.error || lastError;
-        // An empty balance fails every rung (and every orchestrator retry)
-        // identically — stop here so a broke run fails fast, not 9 times.
-        if (lastError === NO_CREDITS_MESSAGE) break;
-      }
-      throw new Error(lastError);
+      // The ladder walk itself — one job spanning the rungs, next rung on any
+      // failure, fail-fast on an empty balance — lives in generateVideoLadder,
+      // shared with chat's one-off renders.
+      const job = await useGenerate.getState().generateVideoLadder(projectId, attempts, {
+        ...(genKey ? { genKey } : {}),
+        // Chat ownership rides the job from creation, so a shot never touches
+        // the Video panel — job row, tile, or badge — even when the render
+        // errors or lands after the user moved on. Once placed on the timeline
+        // it's protected from thread-deletion by the clip.
+        ...(chatId ? { chatId } : {}),
+        onAttempt: (rung) =>
+          reportActivity(
+            rung === 0
+              ? "Animating the frame — a minute or two…"
+              : "That take failed — retrying on a fallback renderer…",
+            projectId
+          ),
+      }).settled;
+      if (job.status === "done" && job.assetId)
+        return { mediaId: job.assetId, anchored: anchoredRung(job.rung) };
+      throw new Error(job.error || "Video generation failed.");
     },
   };
 }

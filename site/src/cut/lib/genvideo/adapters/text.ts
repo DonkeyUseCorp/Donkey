@@ -19,39 +19,86 @@ import { hostedPost } from "../../hosted";
 import { NO_CREDITS_MESSAGE } from "../../generate";
 import { secToFrame, type RawShot } from "../coverage";
 import { wordsInRange, type BreakdownRole, type ScriptRole, type StyleRole } from "../capabilities";
+import { refImageParts, type InlineImagePart } from "./refImages";
 import type { ScriptBeat, ScriptPlan, TranscriptWord, VideoAsset } from "../types";
 
 // ── the shared call ─────────────────────────────────────────────────────────
 
-/** One structured JSON completion. `parse` returns null for unusable output,
- * which surfaces as a throw the caller (or the orchestrator) recovers from. */
+/** One structured JSON completion. `parse` returns null for unusable output.
+ * Transient failures — rate limits, upstream 5xx, network blips, an
+ * unparseable sample — retry before the error escapes: a plan step failing on
+ * one blip poisons everything downstream of it. These are background steps,
+ * so the envelope is wide enough (~30s) to ride out a real overload burst,
+ * which a couple of sub-second retries cannot. Sign-in and credit errors
+ * throw immediately; retrying can't fix them. */
+const LLM_RETRY_DELAYS_MS = [0, 2_000, 8_000, 20_000];
+
 async function llmJson<T>(
   instructions: string,
   userText: string,
-  parse: (o: Record<string, unknown>) => T | null
+  parse: (o: Record<string, unknown>) => T | null,
+  images: InlineImagePart[] = []
 ): Promise<T> {
-  const res = await hostedPost("/api/inference/responses", {
-    donkeyProvider: "gemini",
-    model: geminiModelRoles.chat,
-    instructions,
-    response_format: { type: "json_object" },
-    input: [{ role: "user", content: [{ text: userText }] }],
-  });
-  if (!res.ok) {
-    if (res.status === 402) throw new Error(NO_CREDITS_MESSAGE);
-    if (res.status === 401) throw new Error("Sign in to Donkey to generate a video.");
-    throw new Error("The planning model is unavailable — try again.");
+  let lastError = new Error("The planning model is unavailable — try again.");
+  for (const delay of LLM_RETRY_DELAYS_MS) {
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+    let res: Response;
+    try {
+      res = await hostedPost("/api/inference/responses", {
+        donkeyProvider: "gemini",
+        model: geminiModelRoles.chat,
+        instructions,
+        response_format: { type: "json_object" },
+        input: [
+          {
+            role: "user",
+            content: [
+              { text: userText },
+              ...images.map((i) => ({ type: "input_image", dataBase64: i.data, mimeType: i.mimeType })),
+            ],
+          },
+        ],
+      });
+    } catch {
+      continue; // network blip — retry
+    }
+    if (!res.ok) {
+      if (res.status === 402) throw new Error(NO_CREDITS_MESSAGE);
+      if (res.status === 401) throw new Error("Sign in to Donkey to generate a video.");
+      const reason = await providerReason(res);
+      lastError = new Error(reason ?? "The planning model is unavailable — try again.");
+      // Any other 4xx is deterministic — the same request fails the same way —
+      // so surface the reason now instead of burning the retry envelope on it.
+      if (res.status < 500 && res.status !== 408 && res.status !== 429) throw lastError;
+      continue;
+    }
+    const body = (await res.json()) as { output_text?: string };
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(body.output_text ?? "") as Record<string, unknown>;
+    } catch {
+      lastError = new Error("The planning model returned unreadable output.");
+      continue;
+    }
+    const out = parse(parsed);
+    if (out === null) {
+      lastError = new Error("The planning model returned an unusable plan.");
+      continue;
+    }
+    return out;
   }
-  const body = (await res.json()) as { output_text?: string };
-  let parsed: Record<string, unknown>;
+  throw lastError;
+}
+
+/** The provider's human reason from an error body, when one rode along. */
+async function providerReason(res: Response): Promise<string | null> {
   try {
-    parsed = JSON.parse(body.output_text ?? "") as Record<string, unknown>;
+    const body = (await res.json()) as { message?: string; details?: { message?: string } };
+    const msg = body.details?.message || body.message;
+    return typeof msg === "string" && msg.trim() ? msg.trim() : null;
   } catch {
-    throw new Error("The planning model returned unreadable output.");
+    return null;
   }
-  const out = parse(parsed);
-  if (out === null) throw new Error("The planning model returned an unusable plan.");
-  return out;
 }
 
 // ── coercion helpers ────────────────────────────────────────────────────────
@@ -207,13 +254,13 @@ ${timedTranscript(input.transcript)}`;
 
 const STYLE_INSTRUCTIONS = `You are an art director. Design the visual world for a short video.
 Reply with JSON only:
-{"style": string, "characters": [{"id": "char:1", "name": string, "description": string}], "locations": [{"id": "loc:1", "name": string, "description": string}]}
+{"style": string, "negative": string, "characters": [{"id": "char:1", "name": string, "description": string}], "locations": [{"id": "loc:1", "name": string, "description": string}]}
 Rules:
-- style is one reusable paragraph every shot carries: medium, lighting, palette, camera, mood.
-- Return one entry per id you are asked to define, using those exact ids. description is a concrete visual of that subject/place — appearance, one fixed wardrobe, and the props the story repeats (a bag, a book, earphones) — so every shot renders the same person carrying the same things.
+- style is one reusable paragraph every shot carries: medium, lighting, palette, camera, mood. Name the medium first and unambiguously — it is the instruction renders most often break. When reference images are attached, derive this wording from what they actually show: name their exact technique (linework, shading, color finish) so words and pixels agree. Pin the palette with precise color words ("flat marigold yellow", "warm cream skin, no gradient") — every shot is drawn independently, and only an exact name keeps a color the same across them.
+- Reference images set the LOOK. A reference that is itself a character design — a turnaround sheet, or a single full-body character on a plain background — also sets a cast member's DESIGN: when the brief gives that character no appearance of its own, describe the cast member as exactly the pictured character (hair, face, eyewear, outfit, precise colors). Any other reference's people, characters, and creatures join the cast only when the brief asks for them; otherwise design the cast from the brief and describe them in the reference's technique, never as the pictured characters.
+- negative is a short comma-separated list of what must never appear in this look: the wrong medium's tells. For a hand-drawn 2D look: "photorealistic rendering, live-action footage, 3D CGI, realistic skin texture, photographic lighting". For live-action: "cartoon rendering, cel shading, illustration". Tells only — subjects and story stay out.
+- Return one entry per id you are asked to define, using those exact ids. description is a concrete visual of that subject/place — appearance, one fixed wardrobe, and the props the story repeats (a bag, a book, earphones) — so every shot renders the same person carrying the same things. Name each garment's and prop's color with the same precise words the style paragraph uses, and repeat those words verbatim wherever the item appears.
 - Never name a real brand, franchise, show, studio, or artist — not even one the brief names. A generator rejects a trademarked name, so translate any such reference into its concrete visual traits: linework, proportions, palette, shading, era. (e.g. a named 1990s TV cartoon → "hand-drawn 2D animation, thick black outlines, flat bright colors, exaggerated rounded features, yellow-toned skin, simple suburban backdrops".)`;
-
-const DEFAULT_STYLE = "Cinematic, natural light, shallow depth of field.";
 
 function toAssets(
   raw: unknown,
@@ -233,7 +280,7 @@ function toAssets(
   });
 }
 
-export function makeStyleRole(): StyleRole {
+export function makeStyleRole(projectId: string): StyleRole {
   return {
     async design(input) {
       const charIds = distinct(input.beats.flatMap((b) => b.characters ?? []));
@@ -242,21 +289,40 @@ export function makeStyleRole(): StyleRole {
       const story = input.beats
         .map((b, i) => `${i + 1}. ${b.action}${b.dialogue ? ` — "${b.dialogue}"` : ""}`)
         .join("\n");
-      const refNote = input.refs.length
-        ? `The user attached ${input.refs.length} reference image(s) that fix how key subjects look; keep descriptions compatible with them.`
+      // The art director sees the actual reference pixels, so the style
+      // wording names the real technique instead of guessing from the brief.
+      const refParts = await refImageParts(projectId, input.refs);
+      const refNote = refParts.length
+        ? `The user's reference image(s) are attached — they define the look.`
+        : "";
+      const lookNote = input.style
+        ? `The user pinned this look — style must realize it (translated per the rules): ${input.style}`
         : "";
       const user = `Design the look for this video.
 Brief: ${input.brief || "(none)"}
 ${refNote}
+${lookNote}
 Story:
 ${story}
 Define these characters (use these exact ids): ${charIds.join(", ") || "(none)"}
 Define these locations (use these exact ids): ${wantLocs.join(", ")}`;
-      return llmJson(STYLE_INSTRUCTIONS, user, (o) => ({
-        style: str(o.style) || DEFAULT_STYLE,
-        characters: toAssets(o.characters, charIds, "character"),
-        locations: toAssets(o.locations, wantLocs, "location"),
-      }));
+      return llmJson(
+        STYLE_INSTRUCTIONS,
+        user,
+        (o) => {
+          // A bible without a style paragraph is unusable — retried, never
+          // silently replaced with a stand-in look.
+          const style = str(o.style);
+          if (!style) return null;
+          return {
+            style,
+            ...(str(o.negative) ? { negative: str(o.negative) } : {}),
+            characters: toAssets(o.characters, charIds, "character"),
+            locations: toAssets(o.locations, wantLocs, "location"),
+          };
+        },
+        refParts
+      );
     },
   };
 }

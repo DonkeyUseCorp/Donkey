@@ -21,7 +21,7 @@
 
 import { assertCoverage, frameToSec, MAX_SHOT_SEC, MIN_SHOT_SEC, repairCoverage, secToFrame, shotDurationFrames } from "./coverage";
 import { fanOut } from "./pool";
-import { buildPrompt, buildRefPrompt, refsForAsset, shotRefs } from "./prompt";
+import { buildNegative, buildPrompt, buildRefPrompt, refsForAsset, shotRefs, styleAnchor } from "./prompt";
 import { segmentByDuration, type ModelSuite, type ReviewVerdict } from "./capabilities";
 import type { EditorBridge } from "./editor";
 import type { BeatVoice, RefAsset, Shot, VideoAsset, VideoEmit, VideoPhase, VideoProject } from "./types";
@@ -38,7 +38,11 @@ export interface OrchestratorDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const VIDEO_ATTEMPTS = 3; // the first try plus two retries
+// Takes per shot before the on-model still holds the slot. Generous on
+// purpose: a person-policy block on the seed is per-image luck, so every
+// retake re-rolls it with a fresh keyframe, and the director throws away
+// off-model takes — attempts are the shot's supply of dice.
+export const VIDEO_ATTEMPTS = 5;
 const REF_ATTEMPTS = 2; // extra retries for continuity anchors
 const BACKOFF_MS = 500;
 const VOICE_DUCK = 0.35;
@@ -86,20 +90,49 @@ export class VideoOrchestrator {
    * spend once the run is superseded or paused. */
   async run(): Promise<VideoProject> {
     if (this.project.phase === "failed" || this.project.phase === "done") return this.project;
-    const phases = [this.brief, this.ingest, this.breakdown];
-    for (const phase of phases) {
-      if (this.aborted) return this.project;
-      await phase.call(this);
+    return this.failLoudly(async () => {
+      const phases = [this.brief, this.ingest, this.breakdown];
+      for (const phase of phases) {
+        if (this.aborted) return this.project;
+        await phase.call(this);
+      }
+      if (!this.project.breakdownApproved) return this.project; // wait for confirmation
+      // The spine is voiced only now, past the gate, so an unapproved plan spends
+      // nothing on TTS (the plan up to here runs on estimated beat lengths).
+      const paid = [this.voice, this.style, this.keyframes, this.generateAndPlaceAll, this.polish];
+      for (const phase of paid) {
+        if (this.aborted) return this.project;
+        await phase.call(this);
+      }
+      return this.project;
+    });
+  }
+
+  /** Run a lifecycle step; a throw becomes the run's persisted terminal
+   * outcome. Without this the plan keeps its mid-render phase on disk, and the
+   * next load silently resumes (and re-bills) a run the user watched die. An
+   * aborted run is an interruption, not an outcome — it persists nothing. */
+  private async failLoudly<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (e) {
+      if (!this.aborted) {
+        this.setPhase("failed");
+        await this.save().catch(() => {});
+      }
+      throw e;
     }
-    if (!this.project.breakdownApproved) return this.project; // wait for confirmation
-    // The spine is voiced only now, past the gate, so an unapproved plan spends
-    // nothing on TTS (the plan up to here runs on estimated beat lengths).
-    const paid = [this.voice, this.style, this.keyframes, this.generateAndPlaceAll, this.polish];
-    for (const phase of paid) {
-      if (this.aborted) return this.project;
-      await phase.call(this);
-    }
-    return this.project;
+  }
+
+  /** An explicit user retry of a failed run. Auto-resume paths skip a failed
+   * plan (that stop is what failLoudly buys); the click re-arms it, and every
+   * phase then skips whatever already landed — voiced beats, minted sheets,
+   * placed shots — so only the missing work re-bills. */
+  async retryFailed(): Promise<VideoProject> {
+    if (this.project.phase !== "failed") return this.project;
+    this.setPhase(this.project.breakdownApproved ? "voicing" : "brief");
+    await this.save();
+    return this.run();
   }
 
   /** The user confirmed the shot list — continue the run. */
@@ -357,53 +390,59 @@ export class VideoOrchestrator {
   private async style(): Promise<void> {
     this.setPhase("style");
     if (!this.project.style || this.project.characters.length === 0) {
-      try {
-        const bible = await this.deps.suite.style.design({
-          brief: this.project.brief,
-          refs: this.project.references,
-          beats: this.project.shots.map((s) => ({
-            dialogue: s.dialogue ?? s.audioText,
-            action: s.action,
-            characters: s.characters,
-            location: s.location,
-          })),
-        });
-        this.project.style = bible.style;
-        this.project.characters = bible.characters;
-        this.project.locations = bible.locations;
-      } catch {
-        // Degrade to a default bible so identity anchors still exist — an empty
-        // characters list would silently drop every reference image.
-        if (!this.project.style) this.project.style = "Cinematic, natural light.";
-        if (this.project.characters.length === 0)
-          this.project.characters = [{ id: "char:1", kind: "character", name: "the subject", description: "the main subject, from the references" }];
-        if (this.project.locations.length === 0)
-          this.project.locations = [{ id: "loc:1", kind: "location", name: "the setting", description: "the scene" }];
-      }
+      // The bible is the run's spine: the look every shot leads with, the
+      // negative, and the cast the sheets are minted from. A failed design
+      // fails the run loudly here — before any shot spends — and a resume
+      // re-runs it. A stand-in bible would silently corrupt every render.
+      const bible = await this.deps.suite.style.design({
+        brief: this.project.brief,
+        style: this.project.style || undefined,
+        refs: this.project.references,
+        beats: this.project.shots.map((s) => ({
+          dialogue: s.dialogue ?? s.audioText,
+          action: s.action,
+          characters: s.characters,
+          location: s.location,
+        })),
+      });
+      this.project.style = bible.style;
+      this.project.negative = bible.negative;
+      this.project.characters = bible.characters;
+      this.project.locations = bible.locations;
       await this.save();
     }
     const needed = this.referencedAssets().filter((a) => !a.mediaId);
     if (needed.length > 0) {
-      await fanOut(
-        needed,
-        async (asset) => {
-          if (this.aborted) return; // a paused run spends nothing more
-          this.deps.emit({ type: "activity", message: `Designing ${asset.name}…` });
-          const raw = await this.deps.suite.image.generate({
-            prompt: buildRefPrompt(asset, this.project.style),
-            refs: refsForAsset(asset, this.project),
-            aspect: this.aspect,
-          });
-          asset.mediaId = await this.deps.editor.importMedia(raw);
-          this.deps.emit({ type: "log", message: `Designed ${asset.name}.` });
-        },
-        this.poolOpts(REF_ATTEMPTS)
-      );
+      // The anchor sheet mints alone; the rest fan out with it riding as a
+      // style reference (mintSheet), so one drawing technique propagates
+      // through the whole bible instead of each sheet converging on its own.
+      const queue = [...needed];
+      if (!styleAnchor(this.project)) {
+        await fanOut([queue.shift()!], (asset) => this.mintSheet(asset), this.poolOpts(REF_ATTEMPTS));
+        await this.save();
+      }
+      await fanOut(queue, (asset) => this.mintSheet(asset), this.poolOpts(REF_ATTEMPTS));
       const missing = needed.filter((a) => !a.mediaId);
       if (missing.length)
         this.deps.emit({ type: "log", message: `Couldn't design ${missing.map((a) => a.name).join(", ")} — those shots may drift.` });
       await this.save();
     }
+  }
+
+  /** Render one character/location reference sheet, the run's technique
+   * anchor riding along when one exists. */
+  private async mintSheet(asset: VideoAsset): Promise<void> {
+    if (this.aborted) return; // a paused run spends nothing more
+    this.deps.emit({ type: "activity", message: `Designing ${asset.name}…` });
+    const anchor = styleAnchor(this.project);
+    // screenedImage holds every later sheet to the anchor (the first sheet IS
+    // the anchor — with none minted yet the gate skips itself).
+    asset.mediaId = await this.screenedImage(
+      `${buildRefPrompt(asset, this.project.style)} Avoid: ${buildNegative(this.project)}.`,
+      [...refsForAsset(asset, this.project), ...(anchor ? [anchor] : [])],
+      `a reference sheet of ${asset.name} — ${asset.description}`
+    );
+    this.deps.emit({ type: "asset", label: `Designed ${asset.name}`, mediaId: asset.mediaId });
   }
 
   // ── Phase D: keyframes (cheap, run in parallel) ──────────────────────────
@@ -417,13 +456,16 @@ export class VideoOrchestrator {
     await this.save();
   }
 
-  private async makeKeyframes(shot: Shot): Promise<void> {
+  private async makeKeyframes(shot: Shot, note?: string): Promise<void> {
     if (this.aborted) return; // a paused run spends nothing more
     this.updateShot(shot, { status: "keyframing" });
     const refs = shotRefs(shot, this.project);
-    const prompt = buildPrompt(shot, this.project);
-    shot.startKeyframe = await this.importedImage(`${prompt} Opening frame.`, refs);
-    if (hasMotion(shot)) shot.endKeyframe = await this.importedImage(`${prompt} Closing frame.`, refs);
+    // The image model has no negative-prompt parameter, so the bans ride as
+    // avoid-text — a letterboxed or off-medium keyframe seeds a bad video.
+    const prompt = `${buildPrompt(shot, this.project)} Avoid: ${buildNegative(this.project)}.${
+      note ? ` Note from the last take's review: ${note}` : ""
+    }`;
+    shot.startKeyframe = await this.screenedImage(`${prompt} Opening frame.`, refs, shot.action);
     this.updateShot(shot, { status: "pending" });
   }
 
@@ -459,6 +501,14 @@ export class VideoOrchestrator {
     const refs = shotRefs(shot, this.project);
     // The reviewer's note from a declined take — the retake prompt carries it.
     let critique: string | undefined;
+    // Whether the next attempt should replace the seed keyframe (set by a
+    // decline whose flaw traces to the seed; identity breaks keep it).
+    let remintSeed = false;
+    // Off-model takes that never rode an anchor: the provider is refusing
+    // this shot's seed frames outright, take after take. Past two of those,
+    // fresh dice aren't enough — the seed itself needs restaging (subject at
+    // a distance, face away from camera) so the anchor stops being refused.
+    let unanchoredMisses = 0;
     for (let attempt = 1; attempt <= VIDEO_ATTEMPTS; attempt++) {
       if (this.aborted) return; // a paused run spends nothing more
       shot.attempts = attempt;
@@ -469,19 +519,41 @@ export class VideoOrchestrator {
       const prompt = critique ? `${basePrompt} Note from the last take's review: ${critique}` : basePrompt;
       const video = this.deps.suite.video;
       try {
-        let clip = await video.generate({
+        // A seed-flaw decline re-mints the keyframes with the critique so the
+        // retake animates a fresh frame instead of the flawed one — but the
+        // prior seed is released only once its replacement exists: a failed
+        // mint restores it rather than rendering anchor-less, which is how a
+        // cast shot loses its character to a weaker rung.
+        if (remintSeed || !shot.startKeyframe) {
+          const prior = { start: shot.startKeyframe };
+          shot.startKeyframe = undefined;
+          remintSeed = false;
+          const seedNote =
+            unanchoredMisses >= 2
+              ? `${critique ? `${critique} ` : ""}Restage the composition: the subject at mid-distance or seen from a three-quarter or back angle, no face near the camera, with the action still fully readable.`
+              : critique;
+          try {
+            await this.makeKeyframes(shot, seedNote);
+          } catch {
+            // Restored below — a prior on-model seed beats no seed at all.
+          }
+          shot.startKeyframe = shot.startKeyframe ?? prior.start;
+          await this.save();
+          this.updateShot(shot, { status: "generating", error: undefined });
+        }
+        const take = await video.generate({
           prompt,
+          negativePrompt: buildNegative(this.project),
           refs,
           shotId: shot.id,
           startKeyframe: shot.startKeyframe,
-          endKeyframe: shot.endKeyframe,
           durationSec: frameToSec(shotDurationFrames(shot), this.fps),
           aspect: this.aspect,
           ...(audio && video.audioNative
             ? { audioMediaId: audio.mediaId, audioFromSec: audio.fromSec, audioToSec: audio.toSec }
             : {}),
         });
-        clip = await this.deps.editor.importMedia(clip);
+        let clip = await this.deps.editor.importMedia(take.mediaId);
         // Lip-sync post-pass when the video model can't do it inline.
         if (audio && !video.audioNative && this.deps.suite.lipSync) {
           this.updateShot(shot, { status: "lipsync" });
@@ -496,15 +568,28 @@ export class VideoOrchestrator {
         }
         // The dailies check: a reviewer watches the take against the plan.
         // A declined take retries (the throw lands in the catch below, and the
-        // retake prompt carries the note); the last attempt places regardless —
-        // a weak take beats a frozen still. The chosen window trims the
-        // placement to the take's best moment.
+        // retake prompt carries the note). On the last attempt a weak take
+        // still places — motion beats a frozen still — EXCEPT an identity
+        // break: a moving stranger never lands, the shot falls out of the
+        // loop and holds its on-model keyframe still instead. The chosen
+        // window trims the placement to the take's best moment.
         let srcInSec: number | undefined;
         if (this.deps.suite.review) {
           this.updateShot(shot, { status: "reviewing" });
           const verdict = await this.reviewTake(clip, shot);
-          if (!verdict.ok && attempt < VIDEO_ATTEMPTS) {
+          if (!verdict.ok && (attempt < VIDEO_ATTEMPTS || verdict.offModel)) {
             critique = verdict.note?.trim() || "the take did not show the planned action";
+            // Where the retake's seed comes from depends on where the flaw
+            // came from. An identity break on an ANCHORED take keeps the
+            // seed: the on-model keyframe rode the render and the model still
+            // drifted — re-animating it is the fix. An identity break on an
+            // UNANCHORED take means the provider refused the seed and words
+            // alone drew a stranger — the seed is what's blocked, so a fresh
+            // one re-rolls that refusal. Every other flaw usually traces to
+            // the seed (sideways composition, wrong technique, baked text),
+            // so those re-mint too, with the critique.
+            remintSeed = !verdict.offModel || !take.anchored;
+            if (verdict.offModel && !take.anchored) unanchoredMisses++;
             throw new Error(`Retake: ${critique}`);
           }
           srcInSec = verdict.fromSec;
@@ -539,6 +624,14 @@ export class VideoOrchestrator {
       return await this.deps.suite.review!.watch({
         videoMediaId: clip,
         action: shot.action,
+        style: this.project.style,
+        keyframeMediaId: shot.startKeyframe,
+        // Identity is judged against the canonical sheets, not the keyframe —
+        // a take rendered from a weaker rung (no keyframe riding) is still
+        // held to the same character designs.
+        castSheets: shotRefs(shot, this.project)
+          .filter((r) => r.purpose === "character")
+          .map((r) => ({ name: r.name || "the character", mediaId: r.mediaId })),
         narration: (shot.dialogue ?? shot.audioText).trim(),
         slotSec: frameToSec(shotDurationFrames(shot), this.fps),
       });
@@ -586,9 +679,12 @@ export class VideoOrchestrator {
    * or a neighbor's frame — so a keyframe-gen failure never leaves a hole. */
   private async fallbackStill(shot: Shot): Promise<string | undefined> {
     if (shot.startKeyframe) return shot.startKeyframe;
-    if (shot.endKeyframe) return shot.endKeyframe;
     try {
-      shot.startKeyframe = await this.importedImage(`${buildPrompt(shot, this.project)} Still frame.`, shotRefs(shot, this.project));
+      shot.startKeyframe = await this.screenedImage(
+        `${buildPrompt(shot, this.project)} Still frame.`,
+        shotRefs(shot, this.project),
+        shot.action
+      );
       return shot.startKeyframe;
     } catch {
       /* fall through to holding a neighbor's frame */
@@ -665,7 +761,6 @@ export class VideoOrchestrator {
       // clip is ready — clearing them up front would open a hole if the redo
       // fails. The beat voice is untouched, so narration never restacks.
       shot.startKeyframe = undefined;
-      shot.endKeyframe = undefined;
       shot.lipSynced = false;
       shot.error = undefined;
       shot.status = "pending";
@@ -698,11 +793,34 @@ export class VideoOrchestrator {
 
   /** A style change dirties everything downstream of the style bible. */
   async changeStyle(style: string): Promise<VideoProject> {
+    // The new look goes back through the art director: it realizes the pinned
+    // style into a fresh bible (banned tells included, trademarks translated
+    // to traits) and re-dresses the cast for it — wardrobe is look. Emptying
+    // the cast (in memory only — style() persists the new bible when it lands)
+    // is what re-runs the design; ids re-derive from the shots.
+    const prior = {
+      style: this.project.style,
+      negative: this.project.negative,
+      characters: this.project.characters,
+      locations: this.project.locations,
+    };
     this.project.style = style;
-    for (const a of [...this.project.characters, ...this.project.locations]) a.mediaId = undefined;
-    await this.save();
-    await this.style();
-    await this.regenerateShots(this.project.shots.map((s) => s.id));
+    this.project.negative = undefined;
+    this.project.characters = [];
+    this.project.locations = [];
+    try {
+      await this.style();
+      await this.regenerateShots(this.project.shots.map((s) => s.id));
+    } catch (e) {
+      // A failed redesign must not strand the project bible-less: every later
+      // regenerate_shot would render with no identity anchors. The old cast
+      // (or the new one, if the design landed and only the re-render failed)
+      // stays in place, and the project returns to its terminal phase.
+      if (this.project.characters.length === 0) Object.assign(this.project, prior);
+      this.setPhase("done");
+      await this.save().catch(() => {});
+      throw e;
+    }
     // Restore the terminal phase so a later resume doesn't re-run polish (which
     // would otherwise re-place the music bed).
     this.setPhase("done");
@@ -728,6 +846,33 @@ export class VideoOrchestrator {
   private async importedImage(prompt: string, refs: RefAsset[]): Promise<string> {
     const raw = await this.deps.suite.image.generate({ prompt, refs, aspect: this.aspect });
     return this.deps.editor.importMedia(raw);
+  }
+
+  /** Mint an image and hold it to the production's benchmark: the art-director
+   * gate judges it against the anchor sheet before it seeds anything paid, and
+   * a declined take re-mints once with the critique in the prompt. The second
+   * take lands either way — the gate improves frames, it never blocks the run. */
+  private async screenedImage(prompt: string, refs: RefAsset[], subject: string): Promise<string> {
+    let mediaId = await this.importedImage(prompt, refs);
+    const benchmark = styleAnchor(this.project)?.mediaId;
+    const gate = this.deps.suite.review?.frame;
+    if (!benchmark || !gate) return mediaId;
+    try {
+      const verdict = await gate({
+        imageMediaId: mediaId,
+        benchmarkMediaId: benchmark,
+        style: this.project.style,
+        subject,
+      });
+      if (!verdict.ok) {
+        const note = verdict.note ?? "match the benchmark sheet exactly — same artist, same palette";
+        this.deps.emit({ type: "log", message: `Redrawing an off-style frame — ${note}` });
+        mediaId = await this.importedImage(`${prompt} Note from the art director: ${note}.`, refs);
+      }
+    } catch {
+      // The gate is best-effort; a frame it couldn't judge still serves.
+    }
+    return mediaId;
   }
 
   private emitProgress(): void {
@@ -775,13 +920,6 @@ export class VideoOrchestrator {
 function estimateSpokenSeconds(dialogue: string): number {
   const words = dialogue.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1.2, (words / 165) * 60);
-}
-
-/** Whether a shot has enough motion to warrant a distinct closing keyframe. */
-function hasMotion(shot: Shot): boolean {
-  return /\b(runs?|walks?|jumps?|flies|fly|turns?|moves?|falls?|rises?|spins?|races?|drives?|dances?|zoom)/i.test(
-    shot.action
-  );
 }
 
 /** Split one beat's span into contiguous shots each no longer than `maxFrames`,
