@@ -98,11 +98,43 @@ export const POST = withDonkeyAuth(async (request) => {
       );
     }
 
+    // A provider can settle a generation as failed synchronously (a safety
+    // filter at submit) — that did no billable work, but the failure goes on
+    // the books so a dead render leaves a diagnostic trail.
+    if (result.status === "failed") {
+      await recordFailedInferenceUsage({
+        clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
+        errorCode: "provider_error",
+        metadata: {
+          assetKind: parsed.data.kind,
+          generationId,
+          ...(result.error !== undefined && result.error !== null
+            ? { providerError: result.error }
+            : {}),
+        },
+        model: result.model,
+        provider: result.provider,
+        requestKind: "asset_generation",
+        route: inferenceUsageRoutes.assets,
+        userId: request.donkey.userId,
+      });
+      return NextResponse.json(assetGenerationResponse({ generation, result }), {
+        status: 201,
+      });
+    }
+
+    // The submit is the billable moment, for sync and async results alike: a
+    // sync completion carries its real usage, and an async render bills the
+    // flat clip price (the adapter stamps the generation-count unit) — so one
+    // submission charges exactly once by construction, and the polls that
+    // follow (assets/refresh) are free.
     const recordedUsage = await recordInferenceUsage({
       clientId: client.clientId,
       conversationId: request.donkey.conversationId,
       metadata: {
         assetKind: parsed.data.kind,
+        generationId,
       },
       model: result.model,
       provider: result.provider,

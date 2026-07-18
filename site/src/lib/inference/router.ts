@@ -2,7 +2,7 @@ import { createAudioAssetProvider } from "@/lib/inference/adapters/audio-studio"
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
 import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
 import { createGeminiSpeechAssetProvider } from "@/lib/inference/adapters/gemini-speech";
-import { createGeminiVideoAssetProvider } from "@/lib/inference/adapters/gemini-video";
+import { createGeminiOmniVideoAssetProvider } from "@/lib/inference/adapters/gemini-omni-video";
 import { createHostedResponsesProvider } from "@/lib/inference/adapters/hosted-responses";
 import {
   InferenceProviderError,
@@ -219,9 +219,10 @@ export function createProviderRegistry() {
     // provider serves kind="image" (gemini-computer-use lists "image" as an input modality
     // but has no generateAsset, so it is never chosen for asset generation).
     createGeminiImageAssetProvider(),
-    // Veo serves kind="video"; its distinct provider id keeps async refresh routing from
-    // colliding with the synchronous image adapter.
-    createGeminiVideoAssetProvider(),
+    // Omni (Gemini Omni Flash) serves kind="video"; its distinct provider id
+    // keeps async refresh routing from colliding with the synchronous image
+    // adapter.
+    createGeminiOmniVideoAssetProvider(),
     // Gemini TTS serves kind="speech" (voiceovers, subtitle read-alouds).
     createGeminiSpeechAssetProvider(),
     // ElevenLabs serves kind="music" (the brief-to-video music bed). It gates

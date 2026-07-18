@@ -8,11 +8,11 @@ import {
 } from "@/lib/inference/elevenlabs-models";
 import {
   geminiModels,
+  geminiOmniModels,
   geminiTtsModels,
-  veoModels,
   type GeminiModel,
+  type GeminiOmniModel,
   type GeminiTtsModel,
-  type VeoModel,
 } from "@/lib/inference/gemini-models";
 import { openaiModels, type OpenAIRunModel } from "@/lib/inference/openai-models";
 import { browserUsePerStepUsd } from "@/lib/browser/pricing";
@@ -49,13 +49,13 @@ export function providerCreditPricing(
   if (normalizedProvider === "gemini") {
     return geminiCreditPricing(normalizedModel);
   }
-  // Veo video ids are hardcoded (gemini-models.ts); each is priced per clip below.
-  if (normalizedProvider === "veo") {
-    return veoCreditPricing(normalizedModel);
-  }
   // Gemini TTS ids are hardcoded (gemini-models.ts); speech bills per second of audio.
   if (normalizedProvider === "gemini-tts") {
     return geminiTtsCreditPricing(normalizedModel);
+  }
+  // Omni video ids are hardcoded (gemini-models.ts); a clip bills flat at submit.
+  if (normalizedProvider === "gemini-omni") {
+    return geminiOmniCreditPricing(normalizedModel);
   }
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
@@ -285,22 +285,6 @@ const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
   [geminiModels.proImage]: { generationCostMicros: usdWithMargin("0.134") },
 };
 
-// Generative text/image-to-video (Veo). Model ids are hardcoded (gemini-models.ts), so each is priced
-// per clip. Veo bills per second of output; these reflect a default ~8s clip with audio (quality
-// ~$0.40/s ≈ $3.20, fast ~$0.15/s ≈ $1.20, lite ~$0.05/s ≈ $0.40), charged once at submit
-// (assets/refresh is free). A shorter/longer clip still pays the flat rate; move to
-// durationSecondCostMicros if that drifts too far. The Record is keyed by VeoModel, so adding a Veo id
-// without a price fails the build.
-const veoModelPricing: Record<VeoModel, ProviderCreditPricing> = {
-  [veoModels.quality]: { generationCostMicros: usdWithMargin("3.20") },
-  [veoModels.fast]: { generationCostMicros: usdWithMargin("1.20") },
-  [veoModels.lite]: { generationCostMicros: usdWithMargin("0.40") },
-};
-
-function veoCreditPricing(model: string): ProviderCreditPricing | undefined {
-  return veoModelPricing[model as VeoModel];
-}
-
 // Generative speech (Gemini TTS) bills by seconds of synthesized audio: audio out runs
 // $20/1M tokens at ~25 tokens per second ≈ $0.0005/s; the tiny text input rides along.
 // The Record is keyed by GeminiTtsModel, so adding a TTS id without a price fails the build.
@@ -310,6 +294,30 @@ const geminiTtsModelPricing: Record<GeminiTtsModel, ProviderCreditPricing> = {
 
 function geminiTtsCreditPricing(model: string): ProviderCreditPricing | undefined {
   return geminiTtsModelPricing[model as GeminiTtsModel];
+}
+
+// Unified video generation (Gemini Omni Flash). The provider bills by tokens —
+// $1.50/1M input, $17.50/1M output, and a rendered second of 720p video is
+// 5,792 output tokens — but the render is async: the submit response carries no
+// token counts, and charging on the completing poll instead would let one
+// balance launch unbounded concurrent renders. So a clip charges FLAT at
+// submit (usage {generationCount: 1}): ~10s × 5,792 tokens/s × $17.5/1M ≈
+// $1.02, the model's fixed-length output. The token rates stay for the rare
+// interaction that completes synchronously with real counts. The Record is
+// keyed by GeminiOmniModel, so adding an Omni id without a price fails the build.
+const geminiOmniModelPricing: Record<GeminiOmniModel, ProviderCreditPricing> = {
+  [geminiOmniModels.flashVideo]: {
+    ...textTokenPricing({
+      model: geminiOmniModels.flashVideo,
+      input: "1.5",
+      output: "17.5",
+    }),
+    generationCostMicros: usdWithMargin("1.02"),
+  },
+};
+
+function geminiOmniCreditPricing(model: string): ProviderCreditPricing | undefined {
+  return geminiOmniModelPricing[model as GeminiOmniModel];
 }
 
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {

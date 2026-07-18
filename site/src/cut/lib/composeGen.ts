@@ -7,7 +7,7 @@ import { readRefText, refsToParts, type InlineImage } from "./refMedia";
 
 // Reference-aware prompt composition, shared by video and image generation.
 //
-// The generators read their input images literally: Veo plays its one input
+// The generators read their input images literally: the video model plays its one input
 // image as the video's first frame, and the image model edits the pixels it is
 // given. So a prompt that asks to *transform* a reference ("turn this into a
 // korean woman") loses to the picture, and text-file references (a script,

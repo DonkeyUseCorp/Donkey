@@ -66,8 +66,31 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-async function blobToInline(blob: Blob): Promise<InlineImage> {
+/** A blob's bytes as an inline image part, mime read from the bytes. */
+export async function blobToInline(blob: Blob): Promise<InlineImage> {
   return splitDataUrl(await blobToDataUrl(blob));
+}
+
+/** Video models take input images only as JPEG or PNG — the render rejects anything
+ * else by format, killing the render after it was billed. Re-encode any other
+ * picture (webp saved off the web is the common case) to PNG; jpeg and png
+ * pass through untouched. */
+export async function videoSafeInline(img: InlineImage): Promise<InlineImage> {
+  if (img.mimeType === "image/jpeg" || img.mimeType === "image/png") return img;
+  const blob = await (await fetch(`data:${img.mimeType};base64,${img.data}`)).blob();
+  const bitmap = await createImageBitmap(blob).catch(() => null);
+  if (!bitmap) throw new Error("A reference image is in a format the video model can't read.");
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not convert a reference image for the video model.");
+    ctx.drawImage(bitmap, 0, 0);
+    return splitDataUrl(canvas.toDataURL("image/png"));
+  } finally {
+    bitmap.close();
+  }
 }
 
 // Keeps the inline payload well under the Gemini per-request inline-data cap

@@ -21,13 +21,13 @@ import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { characterPrompt, stockTitle } from "@/cut/lib/stock";
 import { useEditor } from "@/cut/lib/store";
 import { useLocalPref } from "@/cut/lib/uiState";
+import { useVideoGen } from "@/cut/lib/videoGen";
 import {
-  useVideoGen,
   VIDEO_ASPECT_LABEL,
   VIDEO_MODELS,
   type VideoAspect,
   type VideoModelOption,
-} from "@/cut/lib/videoGen";
+} from "@/cut/lib/videoModels";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
 import { DictationControl } from "./MicDictation";
@@ -39,7 +39,7 @@ import { PillSelect } from "./PillSelect";
 // The generate-video panel: an always-on column in the Video tab, sitting left
 // of the stock-clip browser. Clicking a stock tile loads its saved prompt here.
 //
-// A visual reference (dragged in or @name-mentioned) seeds the render: Veo
+// A visual reference (dragged in or @name-mentioned) seeds the render: the model
 // takes one input image, so the first reference's picture becomes the start
 // frame.
 
@@ -48,20 +48,12 @@ const ASPECT_WORD: Record<VideoAspect, string> = {
   "9:16": "Portrait",
 };
 
-// Segmented pill group, same language as the platform switcher in PlatformPreview.
-const segGroup = "flex h-7 items-center gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-xs";
-const segButton = (active: boolean) =>
-  cn(
-    "rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-colors",
-    active ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
-  );
-
 export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   const signedIn = useSignedIn();
   const allJobs = useGenerate((s) => s.jobs);
   // Panel renders only — a chat- or scene-owned job lives on its chat card.
   const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video" && !j.chatId);
-  const { prompt, refs, character, aspect, resolution } = useVideoGen();
+  const { prompt, refs, character, aspect } = useVideoGen();
   const candidates = useRefCandidates();
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
     (ref) => {
@@ -76,25 +68,14 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   );
   const [tier, setTier] = useLocalPref<VideoModelOption["tier"]>(
     "cut-gen-tier",
-    "fast",
+    "omni",
     (v) => VIDEO_MODELS.some((m) => m.tier === v)
-  );
-  const [seconds, setSeconds] = useLocalPref<number>(
-    "cut-gen-seconds",
-    8,
-    (v) => typeof v === "number" && VIDEO_MODELS.some((m) => m.durations.includes(v))
   );
 
   // Every knob renders from — and is clamped to — what the selected model
   // supports, so a stored pick from another model can never reach the API.
   const model = VIDEO_MODELS.find((m) => m.tier === tier) ?? VIDEO_MODELS[0];
-  const effSeconds = model.durations.includes(seconds)
-    ? seconds
-    : model.durations[model.durations.length - 1];
   const effAspect = model.aspects.includes(aspect) ? aspect : model.aspects[0];
-  const effResolution = model.resolutions.includes(resolution)
-    ? resolution
-    : model.resolutions[0];
 
   // Default the shape to the project's own orientation when the panel opens,
   // same as the image panel (the user can still pick the other one).
@@ -111,10 +92,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
     const composed = character?.persona ? characterPrompt(character.persona, text) : text;
     const seedRefs = character ? [refFromStockVideo(character)] : all;
     void useGenerate.getState().generateVideo(projectId, composed, {
-      tier,
-      durationSeconds: effSeconds,
       aspect: effAspect,
-      resolution: effResolution,
       refs: seedRefs,
       // The character's poster seed is the point — the same person must
       // deliver the line — so free-form prompts alone get the ref rewrite.
@@ -190,7 +168,9 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
           />
         </div>
 
-        {/* Which model renders the clip — a dropdown, since the catalog grows. */}
+        {/* Which model renders the clip — a dropdown, since the catalog grows.
+            The model renders the whole clip with audio in one pass and picks
+            its own length, so aspect below is the only other knob. */}
         <PillSelect
           className="h-7 shrink-0"
           title="Model"
@@ -198,34 +178,12 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
           display={model.model}
           options={VIDEO_MODELS.map((m) => ({
             value: m.tier,
-            label: `${m.word} · ${m.model}`,
+            // A tiered family reads "Fast · Model Fast"; a single-model
+            // entry is just its name.
+            label: m.word === m.model ? m.model : `${m.word} · ${m.model}`,
           }))}
           onChange={setTier}
         />
-
-        {/* The remaining knobs follow the selected model's capabilities. */}
-        <div className="flex shrink-0 items-center justify-between gap-2">
-          <div className={segGroup}>
-            {model.durations.map((s) => (
-              <button
-                key={s}
-                className={segButton(effSeconds === s)}
-                aria-pressed={effSeconds === s}
-                onClick={() => setSeconds(s)}
-              >
-                {s}s
-              </button>
-            ))}
-          </div>
-          <PillSelect
-            className="h-7"
-            title="Resolution"
-            value={effResolution}
-            display={effResolution}
-            options={model.resolutions.map((r) => ({ value: r, label: r }))}
-            onChange={(v) => useVideoGen.getState().setResolution(v)}
-          />
-        </div>
 
         {/* Shape, the same pill family as the image panel. */}
         <PillSelect

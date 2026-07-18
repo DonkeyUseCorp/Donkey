@@ -9,15 +9,16 @@ import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { stockAssetInDoc } from "./genvideo/docWriter";
 import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
-import { refsToInlineImages, visualRefs, type InlineImage } from "./refMedia";
+import { refsToInlineImages, videoSafeInline, visualRefs, type InlineImage } from "./refMedia";
 import { useGenNotify } from "./genNotify";
 import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
 import { mediaUrl, type MediaAsset } from "./types";
-import { videoModel } from "./videoGen";
+import { videoModel } from "./videoModels";
+import { walkLadder, type VideoAttempt } from "./videoLadder";
 
 // AI generation jobs, held outside the panels so a tab switch (which unmounts
-// them) doesn't orphan a running generation — Veo renders take minutes.
+// them) doesn't orphan a running generation — video renders take minutes.
 //
 // Generation runs on Donkey's hosted inference routes with the user's Donkey
 // sign-in and credits. The cut hosts serve the same Next app and the auth
@@ -44,6 +45,9 @@ export interface GenerateJob {
    * resumed caller re-adopts exactly its own in-flight job — never another
    * shot's that happens to share a prompt. */
   genKey?: string;
+  /** Which ladder rung landed the render (0-based index into the attempts) —
+   * how a caller knows whether its take rode an image anchor. */
+  rung?: number;
   /** The provider poll payload for an in-flight render — persisting it is what
    * lets a reload re-attach to the running job instead of orphaning it. */
   poll?: {
@@ -93,6 +97,23 @@ interface GenerateState {
     prompt: string,
     opts?: VideoGenOptions
   ) => { jobId: string; settled: Promise<GenerateJob> };
+  /** Kick off a video render that walks an identity ladder: ONE job spans the
+   * attempts in order, and a failed rung submits the next instead of failing
+   * the job — so a safety-blocked or rejected anchor degrades the render
+   * instead of killing it. An empty balance stops the walk (every rung would
+   * fail the same way). Both the scene pipeline's shots and chat's one-off
+   * renders run on this, so the two have identical fallback behavior. */
+  generateVideoLadder: (
+    projectId: string,
+    attempts: VideoAttempt[],
+    jobOpts?: {
+      chatId?: string;
+      genKey?: string;
+      onDone?: (asset: MediaAsset) => void;
+      /** Called as each rung starts (0-based) — progress narration. */
+      onAttempt?: (rung: number) => void;
+    }
+  ) => { jobId: string; settled: Promise<GenerateJob> };
   dismiss: (id: string) => void;
   /** Re-attach the poll loop of every persisted running render (reload
    * recovery) — called once when the app boots. Idempotent. */
@@ -100,26 +121,23 @@ interface GenerateState {
 }
 
 export interface VideoGenOptions {
-  tier?: "fast" | "high";
-  durationSeconds?: number;
   /** Composition shape; defaults to the project's orientation. */
   aspect?: "16:9" | "9:16";
-  resolution?: "720p" | "1080p";
-  /** Person-safety for the render. Unset, Veo blocks person/face generation, so
-   * any shot with a character fails. ALLOW_ADULT is the most any image input
-   * permits (first-frame seed and reference images alike); ALLOW_ALL (needed
-   * for minors) only works text-to-video. */
-  personGeneration?: "DONT_ALLOW" | "ALLOW_ADULT" | "ALLOW_ALL";
-  /** References of any kind — video, image, text file. Veo takes one
-   * input image, so at most one picture seeds the render. */
+  /** What the render must avoid — the wrong medium's tells, letterbox bars,
+   * on-screen text. The model has no negative-prompt parameter, so the
+   * adapter folds this into the prompt as an avoid clause. */
+  negativePrompt?: string;
+  /** References of any kind — video, image, text file. The model takes one
+   * seed image, so at most one picture seeds the render as its literal
+   * opening frame. */
   refs?: AssetRef[];
-  /** Identity anchors (Veo 3.1 asset references, up to three): the render
+  /** Identity anchors (up to the registry's maxReferenceImages): the render
    * keeps these characters/objects/scenes consistent instead of playing one
    * as the first frame. Mutually exclusive with a `refs` image seed; the
    * prompt rides as written (no compose rewrite). */
   referenceImages?: AssetRef[];
   /** Rewrite the prompt around the references before rendering (the
-   * default when refs are present) — see composeGen.ts. Veo plays the
+   * default when refs are present) — see composeGen.ts. The model plays the
    * input image as the literal first frame, so a prompt that transforms
    * the reference must become a standalone description with the image
    * dropped; the rewrite decides which. Character mode passes false — the
@@ -135,6 +153,8 @@ export interface VideoGenOptions {
   /** Stable identity of the work this render is for — see GenerateJob.genKey. */
   genKey?: string;
 }
+
+export type { VideoAttempt } from "./videoLadder";
 
 const REFRESH_MS = 8000;
 const VIDEO_DEADLINE_MS = 12 * 60_000;
@@ -248,7 +268,7 @@ const providerError = (error: unknown): string | null => {
 /** Resolve a generation's prompt + input images from its refs. Runs the shared
  * compose step (see composeGen.ts) unless the caller opted out; on a compose
  * failure, falls back to the visual refs as-is with text-ref contents folded
- * into the prompt. `maxImages` caps what the generator accepts (Veo: 1). */
+ * into the prompt. `maxImages` caps what the generator accepts (video: 1 seed). */
 async function promptAndImages(
   target: "video" | "image",
   prompt: string,
@@ -382,20 +402,22 @@ export const useGenerate = create<GenerateState>((set, get) => {
     return true;
   };
 
-  /** Poll an in-flight Veo render to completion and land its file as a project
+  /** Poll an in-flight video render to completion and land its file as a project
    * asset — the shared tail of a fresh render and a reload-resumed one. Keeps
    * the job's poll payload fresh so the NEXT reload re-attaches too. */
   const finishVideo = async (
     jobId: string,
     first: GenerationResponse,
-    onDone?: (asset: MediaAsset) => void
+    onDone?: (asset: MediaAsset) => void,
+    since?: number
   ): Promise<void> => {
     const job = get().jobs.find((j) => j.id === jobId);
     if (!job) return;
     let gen = first;
     // A resumed render keeps its original deadline, floored so a reload near
-    // the limit still gets a couple of polls before giving up.
-    const deadline = Math.max(job.startedAt + VIDEO_DEADLINE_MS, Date.now() + 2 * 60_000);
+    // the limit still gets a couple of polls before giving up. A ladder rung
+    // passes its own start so a slow first rung doesn't starve the fallback.
+    const deadline = Math.max((since ?? job.startedAt) + VIDEO_DEADLINE_MS, Date.now() + 2 * 60_000);
     while (gen.status === "in_progress") {
       claimJobLease(jobId); // renewed every cycle; siblings back off until it staled
       update(jobId, {
@@ -409,7 +431,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
           metadata: gen.metadata ?? {},
         },
       });
-      if (Date.now() > deadline) throw new Error("Veo is taking too long — try again.");
+      if (Date.now() > deadline) throw new Error("The video render is taking too long — try again.");
       await sleep(REFRESH_MS);
       const poll = await hostedPost("/api/inference/assets/refresh", {
         id: gen.id,
@@ -555,57 +577,93 @@ export const useGenerate = create<GenerateState>((set, get) => {
       })();
     },
 
-    generateVideo: (projectId, prompt, opts) => {
+    generateVideo: (projectId, prompt, opts) =>
+      get().generateVideoLadder(projectId, [{ prompt, opts }], {
+        ...(opts?.chatId ? { chatId: opts.chatId } : {}),
+        ...(opts?.genKey ? { genKey: opts.genKey } : {}),
+        ...(opts?.onDone ? { onDone: opts.onDone } : {}),
+      }),
+
+    generateVideoLadder: (projectId, attempts, jobOpts) => {
+      // The job (and the landed asset's name) keeps the caller's first-rung
+      // words; only the render sees each rung's composed prompt.
       const job: GenerateJob = {
         id: uid(),
         projectId,
         kind: "video",
-        prompt,
+        prompt: attempts[0]?.prompt ?? "",
         startedAt: Date.now(),
         status: "running",
-        ...(opts?.chatId ? { chatId: opts.chatId } : {}),
-        ...(opts?.genKey ? { genKey: opts.genKey } : {}),
+        ...(jobOpts?.chatId ? { chatId: jobOpts.chatId } : {}),
+        ...(jobOpts?.genKey ? { genKey: jobOpts.genKey } : {}),
       };
       set((s) => ({ jobs: [job, ...s.jobs] }));
       claimJobLease(job.id); // this tab started it, this tab polls it
+
+      /** Compose and submit one rung's render request; resolves the provider's
+       * first response (usually in_progress) or throws the readable error. */
+      const submitRung = async ({ prompt, opts }: VideoAttempt): Promise<GenerationResponse> => {
+        // The model seeds from a single first-frame image, so at most one kept
+        // picture rides along. Identity anchors travel separately: with
+        // referenceImages set, the prompt stands as written and no seed image
+        // rides (the render takes one or the other).
+        // Every picture riding to the video model goes through videoSafeInline:
+        // it takes only JPEG/PNG, and a webp reference would fail the render
+        // after it was already billed.
+        const anchors = opts?.referenceImages?.length
+          ? await Promise.all(
+              (
+                await refsToInlineImages(
+                  visualRefs(opts.referenceImages).slice(0, videoModel("omni").maxReferenceImages)
+                )
+              ).map(videoSafeInline)
+            )
+          : [];
+        const { prompt: sent, images: rawImages } = anchors.length
+          ? { prompt, images: [] as InlineImage[] }
+          : await promptAndImages("video", prompt, opts?.refs ?? [], opts?.composeRefs !== false, 1);
+        const images = await Promise.all(rawImages.map(videoSafeInline));
+        const res = await hostedPost("/api/inference/assets", {
+          kind: "video",
+          prompt: sent,
+          provider: "gemini-omni",
+          ...(anchors.length > 0
+            ? { inputs: { referenceImages: anchors } }
+            : images.length > 0
+              ? { inputs: { images } }
+              : {}),
+          parameters: {
+            aspectRatio: opts?.aspect ?? useEditor.getState().aspect,
+            ...(opts?.negativePrompt ? { negativePrompt: opts.negativePrompt } : {}),
+          },
+        });
+        if (!res.ok) throw new Error(await readError(res, "Video generation failed."));
+        return (await res.json()) as GenerationResponse;
+      };
+
       const settledRun = (async () => {
         try {
-          // The job (and the landed asset's name) keeps the user's own words;
-          // only the render sees the composed prompt. Veo seeds from a single
-          // first-frame image, so at most one kept picture rides along.
-          // Identity anchors travel separately: with referenceImages set, the
-          // prompt stands as written and no seed image rides (Veo takes one
-          // or the other).
-          const tier = opts?.tier === "high" ? "high" : "fast";
-          const anchors = opts?.referenceImages?.length
-            ? await refsToInlineImages(
-                visualRefs(opts.referenceImages).slice(0, videoModel(tier).maxReferenceImages)
-              )
-            : [];
-          const { prompt: sent, images } = anchors.length
-            ? { prompt, images: [] }
-            : await promptAndImages("video", prompt, opts?.refs ?? [], opts?.composeRefs !== false, 1);
-          const res = await hostedPost("/api/inference/assets", {
-            kind: "video",
-            prompt: sent,
-            ...(anchors.length > 0
-              ? { inputs: { referenceImages: anchors } }
-              : images.length > 0
-                ? { inputs: { images } }
-                : {}),
-            parameters: {
-              tier,
-              aspectRatio: opts?.aspect ?? useEditor.getState().aspect,
-              ...(opts?.resolution ? { resolution: opts.resolution } : {}),
-              ...(opts?.durationSeconds ? { durationSeconds: opts.durationSeconds } : {}),
-              ...(opts?.personGeneration ? { personGeneration: opts.personGeneration } : {}),
+          const outcome = await walkLadder(
+            attempts,
+            async (attempt, rung) => {
+              jobOpts?.onAttempt?.(rung);
+              // The rung persists as the attempt starts, not when the walk
+              // settles — a reload that adopts this in-flight job must still
+              // know which rung (anchored or not) produced the take.
+              update(job.id, { rung });
+              const gen = await submitRung(attempt);
+              await finishVideo(job.id, gen, jobOpts?.onDone, Date.now());
             },
-          });
-          if (!res.ok) throw new Error(await readError(res, "Video generation failed."));
-          const gen = (await res.json()) as GenerationResponse;
-          await finishVideo(job.id, gen, opts?.onDone);
-        } catch (err) {
-          fail(job.id, err);
+            {
+              // The next rung is a fresh submission: drop the dead rung's poll
+              // payload so a reload can't resume a render that already failed.
+              onRungFailed: () => update(job.id, { poll: undefined }),
+              // An empty balance fails every rung identically — stop there so
+              // a broke render fails fast, not once per rung.
+              fatal: (error) => error === NO_CREDITS_MESSAGE,
+            }
+          );
+          if (!outcome.ok) fail(job.id, new Error(outcome.error));
         } finally {
           releaseJobLease(job.id);
         }

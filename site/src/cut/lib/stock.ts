@@ -23,7 +23,7 @@ export interface StockImage {
   thumb: string;
 }
 
-/** Veo renders landscape and portrait only — no square video. */
+/** Video renders landscape and portrait only — no square video. */
 export type StockVideoAspect = "16:9" | "9:16";
 
 export interface StockVideo {
@@ -60,7 +60,7 @@ export const STOCK_CATEGORIES = [
 export type StockCategory = (typeof STOCK_CATEGORIES)[number];
 
 /** Video adds a catalog-only "Characters" section: talking-head clips whose
- * prompts carry an editable spoken line (Veo generates the dialogue audio). */
+ * prompts carry an editable spoken line (the model generates the dialogue audio). */
 export const STOCK_VIDEO_CATEGORIES = ["Characters", ...STOCK_CATEGORIES] as const;
 
 export type StockVideoCategory = (typeof STOCK_VIDEO_CATEGORIES)[number];

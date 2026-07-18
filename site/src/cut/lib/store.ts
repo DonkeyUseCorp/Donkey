@@ -680,7 +680,7 @@ export const useEditor = create<EditorState>((set, get) => {
         in: srcIn,
         out: srcIn + out,
         // Muted: generated shots ride under the narration spine, so the clip's
-        // own audio (Veo synthesizes some) must never compete with the voice.
+        // own audio (the model synthesizes some) must never compete with the voice.
         muted: true,
         ...(speed !== undefined ? { speed } : {}),
       };

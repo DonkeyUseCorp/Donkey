@@ -21,24 +21,20 @@ export const geminiModels = {
 
 export type GeminiModel = (typeof geminiModels)[keyof typeof geminiModels];
 
-// Generative text/image-to-video (Veo 3.1). Model selection lives in code, so the
-// ids are hardcoded here rather than gated behind an env var — that keeps the
-// feature on by default instead of silently dormant. Bump here when adopting a
-// newer Veo.
-export const veoModels = {
-  // Best quality, slower, priciest per second.
-  quality: "veo-3.1-generate-001",
-  // Balanced speed/cost; the default when no tier is given.
-  fast: "veo-3.1-fast-generate-001",
-  // Cheapest and quickest, lower fidelity.
-  lite: "veo-3.1-lite-generate-001",
+// Unified video generation (Gemini Omni Flash): one Interactions API call takes
+// text plus optional seed/reference images and renders up to ~10s of 720p video
+// with audio. The clip length is the model's call — there is no duration knob —
+// and image output is not enabled for this model. Bump here when adopting a
+// newer Omni.
+export const geminiOmniModels = {
+  flashVideo: "gemini-omni-flash-preview",
 } as const;
 
-export type VeoModel = (typeof veoModels)[keyof typeof veoModels];
+export type GeminiOmniModel = (typeof geminiOmniModels)[keyof typeof geminiOmniModels];
 
-// Veo 3.1 asset references ("ingredients"): a render keeps at most this many
-// identity anchors consistent. Bump here when a newer Veo raises it.
-export const veoMaxReferenceImages = 3;
+// The most reference images an Omni render accepts; the adapter clamps and the
+// client registry (videoModels.ts) reads the same number.
+export const geminiOmniMaxReferenceImages = 3;
 
 // Generative speech (Gemini TTS): text in, spoken audio out, with prompt-driven
 // style direction and inline audio tags. Bump here when adopting a newer TTS model.
@@ -47,15 +43,6 @@ export const geminiTtsModels = {
 } as const;
 
 export type GeminiTtsModel = (typeof geminiTtsModels)[keyof typeof geminiTtsModels];
-
-// Maps the user-facing speed/quality tier (see the `video` SKILL.md picker) to a
-// Veo model. An unknown/absent tier falls back to `fast` at the call site.
-export const veoTierModels = {
-  lite: veoModels.lite,
-  fast: veoModels.fast,
-  standard: veoModels.fast,
-  high: veoModels.quality,
-} as const;
 
 // Semantic roles map a job to the model we run for it. Prefer referencing a
 // role over a bare constant so intent stays explicit at the call site.
@@ -73,4 +60,8 @@ export const geminiModelRoles = {
   visionGrounding: geminiModels.flashLite,
   // Generative image editing and generation.
   imageGeneration: geminiModels.proImage,
+  // Production review: the director judging rendered takes and minted frames
+  // against the plan, sheets, and benchmarks. Runs the strongest multimodal
+  // judge we serve — bump here to upgrade every review gate at once.
+  review: geminiModels.flash,
 } as const;
