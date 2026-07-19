@@ -412,7 +412,7 @@ export function AudioCardFace({
   const playing = usePreviewAudio((s) => s.url) === url;
   useEffect(() => () => usePreviewAudio.getState().stop(url), [url]);
   return (
-    <div className="relative size-full bg-[#3e6f5f]">
+    <div className="relative size-full bg-[#0F6E56]">
       <CardBars
         peaks={peaks?.length ? peaks : STAND_IN_PEAKS}
         className="absolute inset-x-[8%] top-1/2 h-[36%] -translate-y-1/2"
@@ -421,7 +421,7 @@ export function AudioCardFace({
         type="button"
         title={playing ? "Pause" : "Play"}
         aria-label={playing ? "Pause" : "Play"}
-        className="absolute bottom-2 left-2 grid size-8 place-items-center rounded-full bg-[#e3f2e8] text-[#2f5d4c] shadow transition-transform hover:scale-105"
+        className="absolute bottom-2 left-2 grid size-8 place-items-center rounded-full bg-[#e3f2e8] text-[#0F6E56] shadow transition-transform hover:scale-105"
         onClick={(e) => {
           e.stopPropagation();
           usePreviewAudio.getState().toggle(url);
