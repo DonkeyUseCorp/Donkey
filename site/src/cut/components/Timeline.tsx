@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { AudioLines, Blend, Check, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { AudioLines, Blend, Check, Clapperboard, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
@@ -20,7 +21,7 @@ import {
   hasLibraryDrag,
 } from "@/cut/lib/assetDrag";
 import { draggingRef, hasRefDrag, type AssetRef } from "@/cut/lib/assetRef";
-import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
+import { importLibraryAsset, saveAssetToLibrary, saveTemplate } from "@/cut/lib/library";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
@@ -1549,34 +1550,21 @@ function ClipView({
         className="bottom-1 right-2"
         onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
       />
-      {asset.type === "video" && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                aria-label="Clip options"
-                className="tl-clip-menu absolute top-1 right-2 z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
-                onPointerDown={(e) => e.stopPropagation()}
-              />
-            }
+      <ClipMenu asset={asset}>
+        {asset.type === "video" ? (
+          <DropdownMenuItem
+            disabled={clip.muted}
+            onClick={() => {
+              const s = useEditor.getState();
+              s.select({ kind: "clip", id: clip.id });
+              s.detachAudio();
+              void ensurePeaks(asset);
+            }}
           >
-            <EllipsisVertical className="size-3" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-44">
-            <DropdownMenuItem
-              disabled={clip.muted}
-              onClick={() => {
-                const s = useEditor.getState();
-                s.select({ kind: "clip", id: clip.id });
-                s.detachAudio();
-                void ensurePeaks(asset);
-              }}
-            >
-              <AudioLines /> Detach audio
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+            <AudioLines /> Detach audio
+          </DropdownMenuItem>
+        ) : null}
+      </ClipMenu>
       <span
         className={cn(trimHandle, "tl-trim-l left-0")}
         onPointerDown={(e) => startLaneTrim(e, "clip", clip.id, "l", ui)}
@@ -1586,6 +1574,52 @@ function ClipView({
         onPointerDown={(e) => startLaneTrim(e, "clip", clip.id, "r", ui)}
       />
     </div>
+  );
+}
+
+/** The "⋮" menu on a timeline item. Every item gets the same filing pair —
+ * move its asset into the Media panel (drop the `origin` tag) or copy it into
+ * the shared library — and slots item-specific actions above them via
+ * `children`. */
+function ClipMenu({ asset, children }: { asset: MediaAsset; children?: ReactNode }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            aria-label="Clip options"
+            className="tl-clip-menu absolute top-1 right-2 z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
+            onPointerDown={(e) => e.stopPropagation()}
+          />
+        }
+      >
+        <EllipsisVertical className="size-3" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-44">
+        {children}
+        {children != null && <DropdownMenuSeparator />}
+        <DropdownMenuItem
+          onClick={() =>
+            // Clearing the origin files it into Media; a chat-owned asset also
+            // sheds its thread so deleting the chat won't touch it.
+            useEditor.getState().updateAsset(asset.id, { origin: undefined, chatId: undefined })
+          }
+        >
+          <Clapperboard /> Add to Media
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            const projectId = useEditor.getState().projectId;
+            if (!projectId) return;
+            void saveAssetToLibrary(projectId, asset).catch(() => {
+              // Library write failed; nothing to roll back.
+            });
+          }}
+        >
+          <FolderPlus /> Add to library
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1741,6 +1775,7 @@ function AudioView({
       <span className="pointer-events-none absolute top-[3px] left-2 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
         {asset.name}
       </span>
+      <ClipMenu asset={asset} />
       <MuteChip
         muted={!!clip.hidden}
         className="bottom-1 left-1"
@@ -1892,6 +1927,7 @@ function OverlayClipView({
           {+(clip.speed ?? 1).toFixed(2)}×
         </span>
       )}
+      <ClipMenu asset={asset} />
       <HideChip
         hidden={!!clip.hidden}
         className="bottom-1 right-2"
