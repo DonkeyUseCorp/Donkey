@@ -24,7 +24,7 @@ import { fanOut } from "./pool";
 import { buildNegative, buildPrompt, buildRefPrompt, refsForAsset, shotRefs, styleAnchor } from "./prompt";
 import { segmentByDuration, type ModelSuite, type ReviewVerdict } from "./capabilities";
 import type { EditorBridge } from "./editor";
-import type { BeatVoice, RefAsset, Shot, VideoAsset, VideoEmit, VideoPhase, VideoProject } from "./types";
+import type { BeatVoice, RefAsset, Shot, TranscriptWord, VideoAsset, VideoEmit, VideoPhase, VideoProject } from "./types";
 
 export interface OrchestratorDeps {
   editor: EditorBridge;
@@ -433,7 +433,7 @@ export class VideoOrchestrator {
    * anchor riding along when one exists. */
   private async mintSheet(asset: VideoAsset): Promise<void> {
     if (this.aborted) return; // a paused run spends nothing more
-    this.deps.emit({ type: "activity", message: `Designing ${asset.name}…` });
+    this.deps.emit({ type: "activity", message: `Designing ${asset.name}…`, key: asset.id });
     const anchor = styleAnchor(this.project);
     // screenedImage holds every later sheet to the anchor (the first sheet IS
     // the anchor — with none minted yet the gate skips itself).
@@ -442,7 +442,7 @@ export class VideoOrchestrator {
       [...refsForAsset(asset, this.project), ...(anchor ? [anchor] : [])],
       `a reference sheet of ${asset.name} — ${asset.description}`
     );
-    this.deps.emit({ type: "asset", label: `Designed ${asset.name}`, mediaId: asset.mediaId });
+    this.deps.emit({ type: "asset", label: `Designed ${asset.name}`, mediaId: asset.mediaId, key: asset.id });
   }
 
   // ── Phase D: keyframes (cheap, run in parallel) ──────────────────────────
@@ -708,6 +708,12 @@ export class VideoOrchestrator {
       await this.deps.editor.removeClip(shot.timelineClipId);
       shot.timelineClipId = undefined;
     }
+    // Clips a re-cut left in this shot's span — the replaced footage holds the
+    // slot until the fresh take arrives, then goes with it.
+    if (shot.replacesClipIds?.length) {
+      for (const id of shot.replacesClipIds) await this.deps.editor.removeClip(id);
+      shot.replacesClipIds = undefined;
+    }
   }
 
   // ── Phase H: polish ──────────────────────────────────────────────────────
@@ -789,6 +795,200 @@ export class VideoOrchestrator {
     return this.regenerateShots([id], (shot) => {
       shot.action = shot.action ? `${shot.action} ${note}`.trim() : note;
     });
+  }
+
+  /** Re-cut a contiguous span of shots against the same audio: the segmenter
+   * re-slices just that span's narration (steered by the instruction), fresh
+   * shots replace the old ones between the same frame boundaries — the span
+   * can become more shots or fewer — and only they render. The style, the
+   * bible, and every other shot's clip stay exactly as they are; a genuinely
+   * new person or place gets a bible entry and a sheet first. Each replaced
+   * clip holds its slot until the first fresh shot overlapping it places. */
+  async recutShots(ids: string[], instruction: string): Promise<VideoProject> {
+    const list = this.project.shots;
+    const first = list.findIndex((s) => s.id === ids[0]);
+    const last = list.findIndex((s) => s.id === ids[ids.length - 1]);
+    if (first < 0 || last < first) throw new Error("Those shots are not in this scene.");
+    const span = list.slice(first, last + 1);
+    const startFrame = span[0].startFrame;
+    const endFrame = span[span.length - 1].endFrame;
+    const spanFrames = endFrame - startFrame;
+    this.deps.emit({
+      type: "activity",
+      message: span.length === 1 ? `Re-cutting shot ${first + 1}…` : `Re-cutting shots ${first + 1}–${last + 1}…`,
+    });
+    // Leave the terminal phase for the duration (persisted with the splice
+    // below), so a reload mid-re-cut resumes the render through run() instead
+    // of stranding pending shots behind a "done" plan.
+    this.setPhase("generating");
+    // The segmenter sees the span as a self-contained narration (rebased to
+    // zero) plus the revision ask and the bible roster, so it reuses known
+    // ids and invents one only for a genuinely new person or place.
+    const roster = [...this.project.characters, ...this.project.locations]
+      .map((a) => `${a.id} = ${a.name}`)
+      .join("; ");
+    const brief = [
+      this.project.brief,
+      `Revise this section: ${instruction}`,
+      roster
+        ? `Reuse these existing ids where they fit: ${roster}. Introduce a new char:/loc: id only for a genuinely new person or place.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const input = {
+      transcript: this.spanWords(startFrame, endFrame),
+      brief,
+      durationFrames: spanFrames,
+      fps: this.fps,
+    };
+    // Fresh ids that can never collide with surviving shots (or each other),
+    // however many re-cuts the plan has been through.
+    const used = new Set(list.map((s) => s.id));
+    let seq = 0;
+    const freshId = () => {
+      let id = `shot:r${seq++}`;
+      while (used.has(id)) id = `shot:r${seq++}`;
+      used.add(id);
+      return id;
+    };
+    let cut: Shot[];
+    try {
+      cut = repairCoverage(await this.deps.suite.breakdown.segment(input), spanFrames, this.fps, freshId);
+    } catch {
+      cut = repairCoverage(segmentByDuration(input, MAX_SHOT_SEC), spanFrames, this.fps, freshId);
+    }
+    // Back onto the timeline: absolute frames, then (generated mode) re-nested
+    // into the beat spine so each fresh shot lip-syncs to its own voice slice.
+    const fresh = this.nestIntoBeats(
+      cut.map((s) => ({ ...s, startFrame: s.startFrame + startFrame, endFrame: s.endFrame + startFrame }))
+    );
+    // Every fresh shot lists each replaced clip overlapping its span; the
+    // first of them to place removes it (removal is idempotent). The old
+    // footage holds the span until new footage starts landing, and no two
+    // clips ever overlap on the track.
+    for (const old of span) {
+      if (!old.timelineClipId) continue;
+      const overlapping = fresh.filter(
+        (s) => s.startFrame < old.endFrame && s.endFrame > old.startFrame
+      );
+      for (const s of overlapping.length ? overlapping : [fresh[0]]) {
+        (s.replacesClipIds ??= []).push(old.timelineClipId);
+      }
+    }
+    const addedEntities = this.adoptNewEntities(fresh);
+    this.project.shots = [...list.slice(0, first), ...fresh, ...list.slice(last + 1)];
+    assertCoverage(this.project.shots, this.durationFrames);
+    await this.save();
+    this.deps.emit({ type: "breakdown", shots: this.project.shots });
+    // A new entity's sheet mints before any render seeds from it, exactly like
+    // a first run's design pass.
+    if (addedEntities) await this.style();
+    await fanOut(
+      fresh,
+      async (shot) => {
+        try {
+          await this.makeKeyframes(shot);
+        } catch {
+          /* placeFallback will source a still */
+        }
+        await this.generateAndPlace(shot);
+      },
+      this.poolOpts(0)
+    );
+    this.setPhase("done");
+    await this.save();
+    return this.project;
+  }
+
+  /** The words heard across a frame span, rebased to zero — the transcript
+   * slice in provided mode; in generated mode, synthesized from the script
+   * beats (each beat's dialogue spread evenly over its voiced span). */
+  private spanWords(startFrame: number, endFrame: number): TranscriptWord[] {
+    const t0 = frameToSec(startFrame, this.fps);
+    const t1 = frameToSec(endFrame, this.fps);
+    if (this.project.audioMode === "provided") {
+      return this.project.transcript
+        .filter((w) => w.t1 > t0 && w.t0 < t1)
+        .map((w) => ({ ...w, t0: w.t0 - t0, t1: w.t1 - t0 }));
+    }
+    const beats = this.project.script?.beats ?? [];
+    const spine = this.project.beatVoices ?? [];
+    const words: TranscriptWord[] = [];
+    spine.forEach((bv, bi) => {
+      const text = beats[bi]?.dialogue.trim();
+      if (!text) return;
+      const parts = text.split(/\s+/).filter(Boolean);
+      const beatT0 = frameToSec(bv.startFrame, this.fps);
+      const per = frameToSec(bv.durationFrames, this.fps) / parts.length;
+      parts.forEach((w, wi) => {
+        const wt0 = beatT0 + wi * per;
+        const wt1 = wt0 + per;
+        if (wt1 > t0 && wt0 < t1) words.push({ t0: wt0 - t0, t1: wt1 - t0, w });
+      });
+    });
+    return words;
+  }
+
+  /** Split re-cut shots at beat boundaries and wire each piece to its beat's
+   * voice slice (generated mode) — the spine is placed audio and must not
+   * move, so the new cut nests inside it. Provided mode passes through: those
+   * shots read their slice straight off the one audio asset by frame. */
+  private nestIntoBeats(shots: Shot[]): Shot[] {
+    const beats = this.project.beatVoices;
+    if (this.project.audioMode !== "generated" || !beats?.length) return shots;
+    const script = this.project.script;
+    const out: Shot[] = [];
+    for (const shot of shots) {
+      let at = shot.startFrame;
+      let piece = 0;
+      while (at < shot.endFrame) {
+        const bi = beats.findIndex((b) => at >= b.startFrame && at < b.startFrame + b.durationFrames);
+        const beat = bi >= 0 ? beats[bi] : undefined;
+        const end = Math.min(shot.endFrame, beat ? beat.startFrame + beat.durationFrames : shot.endFrame);
+        out.push({
+          ...shot,
+          id: piece === 0 ? shot.id : `${shot.id}.${piece}`,
+          startFrame: at,
+          endFrame: end,
+          ...(beat?.voiceAssetId
+            ? {
+                voiceAssetId: beat.voiceAssetId,
+                voiceFromSec: frameToSec(at - beat.startFrame, this.fps),
+                voiceToSec: frameToSec(end - beat.startFrame, this.fps),
+              }
+            : {}),
+          ...(bi >= 0 && script?.beats[bi] ? { dialogue: script.beats[bi].dialogue } : {}),
+        });
+        piece++;
+        at = end;
+      }
+    }
+    return out;
+  }
+
+  /** Bible stubs for ids a re-cut introduced — style() then mints their
+   * sheets like any first-run design. Returns whether anything was added. */
+  private adoptNewEntities(shots: Shot[]): boolean {
+    const known = new Set(
+      [...this.project.characters, ...this.project.locations].map((a) => a.id)
+    );
+    let added = false;
+    for (const shot of shots) {
+      for (const id of shot.characters) {
+        if (!id || known.has(id)) continue;
+        known.add(id);
+        this.project.characters.push({ id, kind: "character", name: id, description: shot.action });
+        added = true;
+      }
+      const loc = shot.location;
+      if (loc && !known.has(loc)) {
+        known.add(loc);
+        this.project.locations.push({ id: loc, kind: "location", name: loc, description: shot.action });
+        added = true;
+      }
+    }
+    return added;
   }
 
   /** A style change dirties everything downstream of the style bible. */
@@ -882,6 +1082,7 @@ export class VideoOrchestrator {
 
   private setPhase(phase: VideoPhase, note?: string): void {
     this.project.phase = phase;
+    if (phase === "done" || phase === "failed") this.project.endedAt = Date.now();
     this.deps.emit({ type: "phase", phase, note });
   }
 

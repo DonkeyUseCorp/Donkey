@@ -90,6 +90,10 @@ export interface Shot {
   voiceToSec?: number;
   clip?: string; // generated video, media asset id
   timelineClipId?: string; // the clip placed on the timeline
+  /** Timeline clips from shots a re-cut replaced: the old footage holds this
+   * shot's span until its own take places, then goes with it. Persisted, so a
+   * reload mid-re-cut still clears them. */
+  replacesClipIds?: string[];
   lipSynced?: boolean;
   status: ShotStatus;
   attempts: number;
@@ -160,6 +164,13 @@ export interface VideoProject {
   /** Epoch ms when the user approved and rendering began — the card's render
    * clock counts from here across reloads and project switches. */
   renderStartedAt?: number;
+  /** Epoch ms when the run reached done/failed — freezes the finished card's
+   * elapsed clock across reloads. */
+  endedAt?: number;
+  /** The user closed the finished run's chat card. A terminal run's card is
+   * its durable record — it re-surfaces on every load until this is stamped;
+   * reviving the run (retry, revision) clears it. */
+  cardDismissed?: boolean;
   updatedAt: number;
 }
 
@@ -191,10 +202,11 @@ export type VideoEvent =
   | { type: "progress"; placed: number; total: number }
   | { type: "log"; message: string }
   /** A media asset the run just made (a sheet, a frame, a take) — the chat
-   * card lists these chronologically with a thumbnail. */
-  | { type: "asset"; label: string; mediaId: string }
+   * activity lists these chronologically with a thumbnail. `key` names the
+   * work item, so the milestone replaces that item's in-progress line. */
+  | { type: "asset"; label: string; mediaId: string; key?: string }
   /** The live ticker: one line on what the run is doing right now. */
-  | { type: "activity"; message: string }
+  | { type: "activity"; message: string; key?: string }
   | { type: "error"; message: string };
 
 export type VideoEmit = (event: VideoEvent) => void;

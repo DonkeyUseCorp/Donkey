@@ -27,8 +27,13 @@ export type SceneStatus = "planning" | "awaiting_approval" | "generating" | "don
 export interface SceneFeedItem {
   at: number;
   text: string;
-  /** Project asset this entry produced — the card shows its thumbnail. */
+  /** Project asset this entry produced — the feed shows its thumbnail. */
   mediaId?: string;
+  /** The work item this entry narrates (a sheet, a shot). A new keyed entry
+   * retires the item's previous in-progress lines, so "Designing Mason…"
+   * gives way to "Designed Mason" instead of both lingering. Entries with
+   * media are milestones and always stay. */
+  key?: string;
 }
 
 export interface SceneRun {
@@ -269,9 +274,12 @@ function newProject(projectId: string, params: StartSceneParams): VideoProject {
   };
 }
 
-/** The run's placed timeline clip ids (video track + soundtrack). */
+/** The run's placed timeline clip ids (video track + soundtrack), including
+ * clips a re-cut replaced that still hold their slots. */
 function runClipIds(project: VideoProject): { clipIds: string[]; audioIds: string[] } {
-  const clipIds = project.shots.map((s) => s.timelineClipId).filter((x): x is string => !!x);
+  const clipIds = project.shots
+    .flatMap((s) => [s.timelineClipId, ...(s.replacesClipIds ?? [])])
+    .filter((x): x is string => !!x);
   const audioIds = [
     ...(project.beatVoices ?? []).map((b) => b.voiceClipId),
     project.musicClipId,
@@ -361,13 +369,16 @@ function applyEvent(projectId: string, e: VideoEvent): void {
     if (!s.run || s.run.projectId !== projectId) return s;
     const run = { ...s.run };
     // Every event becomes a feed entry (consecutive repeats collapse), so the
-    // chat card reads as the run's chronological record, assets included.
-    const note = (text: string, mediaId?: string) => {
+    // chat activity reads as the run's chronological record, assets included.
+    // A keyed entry retires its work item's earlier in-progress lines;
+    // entries with media are milestones and always stay.
+    const note = (text: string, mediaId?: string, key?: string) => {
       const last = run.feed[run.feed.length - 1];
       if (last && last.text === text && last.mediaId === mediaId) return;
+      const kept = key ? run.feed.filter((f) => f.key !== key || f.mediaId) : run.feed;
       run.feed = [
-        ...run.feed,
-        { at: Date.now(), text, ...(mediaId ? { mediaId } : {}) },
+        ...kept,
+        { at: Date.now(), text, ...(mediaId ? { mediaId } : {}), ...(key ? { key } : {}) },
       ].slice(-FEED_CAP);
     };
     switch (e.type) {
@@ -389,14 +400,15 @@ function applyEvent(projectId: string, e: VideoEvent): void {
         run.shots = run.shots.map((sh) => (sh.id === e.shot.id ? e.shot : sh));
         const n = run.shots.findIndex((sh) => sh.id === e.shot.id) + 1;
         if (n > 0) {
+          const key = `shot:${e.shot.id}`;
           if (e.shot.startKeyframe && prev?.startKeyframe !== e.shot.startKeyframe)
-            note(`Shot ${n} — opening frame designed`, e.shot.startKeyframe);
+            note(`Shot ${n} — opening frame designed`, e.shot.startKeyframe, key);
           if (e.shot.status === "placed" && prev?.status !== "placed" && e.shot.clip)
-            note(`Shot ${n} — take placed on the timeline`, e.shot.clip);
+            note(`Shot ${n} — take placed on the timeline`, e.shot.clip, key);
           if (e.shot.status === "failed" && prev?.status !== "failed")
-            note(`Shot ${n} — couldn't animate, holding a still`, e.shot.startKeyframe);
+            note(`Shot ${n} — couldn't animate, holding a still`, e.shot.startKeyframe, key);
           const line = e.shot.status !== prev?.status ? shotActivity(e.shot, n) : undefined;
-          if (line) note(line);
+          if (line) note(line, undefined, key);
         }
         break;
       }
@@ -408,10 +420,10 @@ function applyEvent(projectId: string, e: VideoEvent): void {
         note(e.message);
         break;
       case "asset":
-        note(e.label, e.mediaId);
+        note(e.label, e.mediaId, e.key);
         break;
       case "activity":
-        note(e.message);
+        note(e.message, undefined, e.key);
         break;
       case "error":
         note(e.message);
@@ -496,8 +508,15 @@ function mirrorRun(projectId: string, p: VideoProject): void {
         ? { renderStartedAt: p.renderStartedAt ?? Date.now() }
         : {}),
       // A terminal run's mirror is a record, not a live surface: endedAt
-      // freezes the clock and stops the activity bus appending to its feed.
-      ...(isTerminal(statusFor(p)) ? { endedAt: Date.now() } : {}),
+      // freezes the clock (at the plan's stamped end, so the elapsed shown is
+      // the run's real working time) and stops the activity bus appending to
+      // its feed. Plans from before end-stamping clamp to 0:00.
+      ...(isTerminal(statusFor(p))
+        ? {
+            ...(p.renderStartedAt ? { renderStartedAt: p.renderStartedAt } : {}),
+            endedAt: p.endedAt ?? p.renderStartedAt ?? Date.now(),
+          }
+        : {}),
     },
   });
 }
@@ -559,27 +578,16 @@ function failed(projectId: string, orch: VideoOrchestrator): (e: unknown) => voi
  * project. Returns true once a live orchestrator and mirror exist. */
 function resumeDoneRun(): boolean {
   const ed = useEditor.getState();
-  const project = ed.genvideo;
-  if (!ed.projectId || !project || project.phase !== "done") return false;
+  const stored = ed.genvideo;
+  if (!ed.projectId || !stored || stored.phase !== "done") return false;
+  // Reviving the run re-opens its card; a stale dismissal must not hide the
+  // record of the work about to happen on the next load.
+  const project = { ...stored, cardDismissed: undefined };
+  if (stored.cardDismissed) ed.setGenvideo(project);
   orchestrators.get(ed.projectId)?.abort();
   const orch = buildOrchestrator(ed.projectId, project);
   orchestrators.set(ed.projectId, orch);
-  useGenScene.setState({
-    run: {
-      projectId: ed.projectId,
-      chatId: project.chatId ?? null,
-      mode: project.audioMode,
-      title: project.brief || "Animating your audio",
-      status: "done",
-      phase: project.phase,
-      shots: project.shots,
-      placed: project.shots.filter((s) => s.timelineClipId).length,
-      total: project.shots.length,
-      feed: seedFeed(project),
-      startedAt: Date.now(),
-      endedAt: Date.now(),
-    },
-  });
+  mirrorRun(ed.projectId, project);
   return true;
 }
 
@@ -619,6 +627,10 @@ interface GenSceneState {
   approve: () => { ok: boolean; message: string };
   /** Redo one shot (1-based), optionally nudging it ("wider", "at night"). */
   regenerateShot: (n: number, note?: string) => { ok: boolean; message: string };
+  /** Re-cut a contiguous span of shots (1-based, inclusive): replan just that
+   * span against the same audio — it can become more shots or fewer — and
+   * render only the new ones. The rest of the scene stays as it is. */
+  recutShots: (fromN: number, toN: number, instruction: string) => { ok: boolean; message: string };
   /** Redo every shot holding a still in one go — the card's single retry
    * button after a credits top-up or a bad batch. */
   retryFailedShots: () => { ok: boolean; message: string };
@@ -749,6 +761,35 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     return { ok: true, message: `Redoing shot ${n}…` };
   },
 
+  recutShots: (fromN, toN, instruction) => {
+    // Same reload path as regenerateShot: a finished run rebuilds on demand.
+    const openId = useEditor.getState().projectId;
+    if (!openId) return { ok: false, message: "Open a project first." };
+    if (!orchestrators.get(openId) || !get().run) resumeDoneRun();
+    const run = get().run;
+    const orch = orchestrators.get(openId);
+    if (!orch || !run || run.status !== "done") {
+      return { ok: false, message: "The scene isn't finished rendering yet — re-cut it once it's done." };
+    }
+    if (toN < fromN) return { ok: false, message: "to_shot must be at or after from_shot." };
+    const ids: string[] = [];
+    for (let n = fromN; n <= toN; n++) {
+      const id = orch.shotIdByNumber(n);
+      if (!id) return { ok: false, message: `This scene has no shot ${n}.` };
+      ids.push(id);
+    }
+    // The run takes its clips back for the re-cut (they were released at
+    // done), so the replacements stay off the undo stack until it finishes.
+    const owned = runClipIds(orch.project);
+    useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
+    set({ run: { ...run, status: "generating", renderStartedAt: Date.now() } });
+    orch.recutShots(ids, instruction).then(settled(run.projectId, orch)).catch(failed(run.projectId, orch));
+    return {
+      ok: true,
+      message: fromN === toN ? `Re-cutting shot ${fromN}…` : `Re-cutting shots ${fromN}–${toN}…`,
+    };
+  },
+
   retryFailedShots: () => {
     // Same reload path as regenerateShot: a finished run rebuilds on demand.
     const openId = useEditor.getState().projectId;
@@ -772,10 +813,14 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
 
   retryRun: () => {
     const openId = useEditor.getState().projectId;
-    const plan = useEditor.getState().genvideo;
-    if (!openId || !plan || plan.phase !== "failed") {
+    const stored = useEditor.getState().genvideo;
+    if (!openId || !stored || stored.phase !== "failed") {
       return { ok: false, message: "No failed video run to retry here." };
     }
+    // The retry re-opens the card; clear a stale dismissal so the revived
+    // run's record survives the next load too.
+    const plan = { ...stored, cardDismissed: undefined };
+    if (stored.cardDismissed) useEditor.getState().setGenvideo(plan);
     orchestrators.get(openId)?.abort();
     const orch = buildOrchestrator(openId, plan);
     orchestrators.set(openId, orch);
@@ -823,21 +868,13 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     // Re-assert chat ownership over the run's media before anything else, so
     // even a finished run's leftovers never sit in the generate panels.
     claimRunMedia(projectId, project);
-    // A finished or failed run has nothing to resume — its clips are already on
-    // the timeline — so it doesn't re-surface a card on reload; revision tools
-    // rebuild a done run on demand (resumeDoneRun). EXCEPT unfinished business,
-    // where hiding the card would strand its Retry button behind a reload: a
-    // done run holding stills, and a failed run (its paid, approved work only
-    // continues through the card's explicit Retry — nothing auto-resumes a
-    // failed plan). Mirror those back (no orchestrator, nothing spends), at
-    // the cost that dismissing such a card only lasts until the next load.
+    // A finished or failed run has nothing to resume — its clips are already
+    // on the timeline — but its card is the run's durable record, so it
+    // mirrors back on every load (no orchestrator, nothing spends) until the
+    // user dismisses it; the X stamps the plan so the dismissal sticks.
+    // Revision tools rebuild the live run on demand (resumeDoneRun).
     if (project.phase === "done" || project.phase === "failed") {
-      if (
-        project.phase === "failed" ||
-        project.shots.some((sh) => sh.status === "failed")
-      ) {
-        mirrorRun(projectId, project);
-      }
+      if (!project.cardDismissed) mirrorRun(projectId, project);
       return;
     }
     // Rebuild the orchestrator around the persisted plan so approve/regenerate
@@ -908,10 +945,22 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
   dismiss: () => {
     const run = get().run;
     // Dismissing an unrendered plan abandons it: the orchestrator stops and
-    // the persisted plan is cleared, so it can't resurrect on the next load. A
-    // finished (or failed) run keeps its record — its media re-tags from it on
-    // load and nothing re-surfaces a terminal card.
-    if (run && !isTerminal(run.status)) killRun(run.projectId);
+    // the persisted plan is cleared, so it can't resurrect on the next load.
+    // A finished (or failed) run keeps its record — its media re-tags from it
+    // on load — but the dismissal is stamped on the plan so the card stays
+    // closed across loads (until a retry or revision revives the run).
+    if (run && !isTerminal(run.status)) {
+      killRun(run.projectId);
+    } else if (run) {
+      const ed = useEditor.getState();
+      if (ed.projectId === run.projectId && ed.genvideo) {
+        ed.setGenvideo({ ...ed.genvideo, cardDismissed: true });
+      } else {
+        void withProjectDoc(run.projectId, (doc) => {
+          if (doc.genvideo) doc.genvideo = { ...doc.genvideo, cardDismissed: true };
+        }).catch(() => {});
+      }
+    }
     set({ run: null });
   },
 }));

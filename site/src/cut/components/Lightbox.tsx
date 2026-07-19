@@ -116,8 +116,8 @@ export function Lightbox() {
         <LightboxMedia item={item} ratio={ratio} />
 
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-white">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 text-[15px] leading-snug font-semibold tracking-tight break-words text-white">
               {item.name}
             </div>
             {canAdd && (

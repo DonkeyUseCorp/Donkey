@@ -786,6 +786,18 @@ export async function runAiTool(
       return { note: res.message };
     }
 
+    case "recut_scene": {
+      if (!isNum(input.from_shot) || !isNum(input.to_shot))
+        throw new ToolError("from_shot and to_shot (1-based, inclusive) are required.");
+      const instruction = String(input.instruction ?? "").trim();
+      if (!instruction) throw new ToolError("An instruction is required — what should this span become?");
+      const res = useGenScene
+        .getState()
+        .recutShots(Math.round(input.from_shot), Math.round(input.to_shot), instruction);
+      if (!res.ok) throw new ToolError(res.message);
+      return { note: res.message };
+    }
+
     case "restyle_scene": {
       const style = String(input.style ?? "").trim();
       if (!style) throw new ToolError("style is required — the new look for the whole video.");

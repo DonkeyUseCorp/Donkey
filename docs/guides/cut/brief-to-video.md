@@ -12,7 +12,11 @@ persisted, user-approved plan — never a fresh improvisation. If a shot renders
 wrong, fix the plan (its description, its references, its framing) and
 regenerate that shot; if you're tempted to slip an extra instruction into one
 render call, that knowledge belongs in the plan so every later regeneration
-keeps it.
+keeps it. Revisions scale with their scope: a bad take regenerates one shot, a
+section that needs a different cut replans just that span (same audio, same
+bible — the span can become more shots or fewer, and only those render), and a
+look change rebuilds the bible and re-renders everything. A finished scene is
+never replanned from scratch to change part of it.
 
 ## How it works
 

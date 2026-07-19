@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CircleDashed, Clapperboard, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { refFromAsset } from "../lib/assetRef";
+import { lightboxItemFromRef, useLightbox } from "../lib/lightbox";
 import { formatDuration, useGenScene, type SceneRun } from "../lib/genScene";
 import { NO_CREDITS_MESSAGE } from "../lib/generate";
 import { GEN_FPS } from "../lib/genvideo/editorBridge";
@@ -47,9 +48,6 @@ function describe(sh: Shot): string {
 export function SceneCard({ threadId }: { threadId: string }) {
   const run = useGenScene((s) => s.run);
   const projectId = useEditor((s) => s.projectId);
-  // Feed thumbnails resolve against the open project's media (the run's
-  // assets are project assets, chat-owned).
-  const assets = useEditor((s) => s.assets);
   const [open, setOpen] = useState(true);
 
   // Resuming a persisted run is the genScene store's own subscription — it
@@ -66,14 +64,6 @@ export function SceneCard({ threadId }: { threadId: string }) {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [working]);
-
-  // The activity feed follows its newest entry, like the chat itself.
-  const feedRef = useRef<HTMLDivElement>(null);
-  const feedLen = run?.feed.length ?? 0;
-  useEffect(() => {
-    const el = feedRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [feedLen]);
 
   if (!run || run.projectId !== projectId) return null;
   // The card belongs to the thread that asked — a new or different chat starts
@@ -183,33 +173,6 @@ export function SceneCard({ threadId }: { threadId: string }) {
         </div>
       )}
 
-      {run.feed.length > 0 && (
-        // The run's chronological record — every narrated step and every
-        // asset it made, thumbnails included. Nothing the run does is
-        // internal: this is the same story the agent would tell in chat.
-        <div className="mt-2">
-          <div className="text-[10.5px] font-medium text-muted-foreground">Activity</div>
-          <div ref={feedRef} className="mt-1 flex max-h-44 flex-col gap-1 overflow-y-auto">
-            {run.feed.map((f, i) => {
-              const asset = f.mediaId ? assets.find((a) => a.id === f.mediaId) : undefined;
-              const latest = i === run.feed.length - 1;
-              return (
-                <div key={`${f.at}-${i}`} className="flex items-center gap-2">
-                  {asset && <RefThumb item={refFromAsset(asset)} className="size-8 shrink-0" />}
-                  <span
-                    className={`min-w-0 flex-1 text-[11px] text-muted-foreground ${
-                      latest && inFlight ? "animate-pulse" : ""
-                    }`}
-                  >
-                    {f.text}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {run.status === "generating" && (
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
           <div
@@ -291,6 +254,67 @@ export function SceneCard({ threadId }: { threadId: string }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The run's chronological record, streamed into the chat as its own item
+ * right under the scene card — every narrated step and every asset it made,
+ * thumbnails included. Nothing the run does is internal: this is the same
+ * story the agent would tell in chat. */
+export function SceneActivity({ threadId }: { threadId: string }) {
+  const run = useGenScene((s) => s.run);
+  const projectId = useEditor((s) => s.projectId);
+  // Feed thumbnails resolve against the open project's media (the run's
+  // assets are project assets, chat-owned).
+  const assets = useEditor((s) => s.assets);
+
+  // Follow new entries only when the chat is already reading the tail —
+  // never yank the user back down while they scroll through old images.
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const feedLen = run?.feed.length ?? 0;
+  useEffect(() => {
+    const scroller = bottomRef.current?.closest(".ai-messages");
+    if (!scroller) return;
+    const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (gap < 160) scroller.scrollTop = scroller.scrollHeight;
+  }, [feedLen]);
+
+  if (!run || run.projectId !== projectId) return null;
+  if (run.chatId && run.chatId !== threadId) return null;
+  if (run.feed.length === 0) return null;
+  const inFlight = run.status === "planning" || run.status === "generating";
+
+  return (
+    <div className="ai-scene-activity mt-2 mb-3 flex flex-col gap-1.5">
+      <div className="text-[10.5px] font-medium text-muted-foreground">Activity</div>
+      {run.feed.map((f, i) => {
+        const asset = f.mediaId ? assets.find((a) => a.id === f.mediaId) : undefined;
+        const ref = asset ? refFromAsset(asset) : undefined;
+        const latest = i === run.feed.length - 1;
+        return (
+          <div key={`${f.at}-${i}`} className="flex items-center gap-2">
+            {ref && (
+              <button
+                type="button"
+                title={`${ref.name} — click to view`}
+                className="shrink-0"
+                onClick={() => useLightbox.getState().open(lightboxItemFromRef(ref))}
+              >
+                <RefThumb item={ref} className="size-8 rounded-[4px]" />
+              </button>
+            )}
+            <span
+              className={`min-w-0 flex-1 text-[11px] text-muted-foreground ${
+                latest && inFlight ? "animate-pulse" : ""
+              }`}
+            >
+              {f.text}
+            </span>
+          </div>
+        );
+      })}
+      <div ref={bottomRef} />
     </div>
   );
 }
