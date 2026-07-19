@@ -11,6 +11,7 @@ import {
   moveAsset,
   removeAsset,
   renameFolder,
+  renameTemplate,
   saveTemplate,
   useInProject,
   useTemplate,
@@ -51,6 +52,15 @@ export const libraryApi = {
       return Response.json(await useTemplate(id, projectId));
     } catch (e) {
       return caught(e, "Could not add the template.");
+    }
+  },
+
+  async renameTemplate(req: Request, { id }: { id: string }) {
+    try {
+      const { name } = (await req.json()) as { name?: string };
+      return Response.json(await renameTemplate(id, name ?? ""));
+    } catch (e) {
+      return caught(e, "Could not rename the template.");
     }
   },
 

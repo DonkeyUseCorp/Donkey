@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Layers, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
+import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Layers, Loader2, MoreHorizontal, Music, Pencil, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
@@ -15,6 +15,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { SectionTitle } from "@/cut/components/SectionTitle";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
@@ -29,6 +37,7 @@ import {
   fetchLibrary,
   moveLibraryAsset,
   renameLibraryFolder,
+  renameTemplate,
   saveAssetToLibrary,
   type LibraryAsset,
   type LibraryFolder,
@@ -594,6 +603,13 @@ function LibraryPanel({ projectId }: { projectId: string }) {
     await deleteTemplate(id).catch(() => void reload());
   };
 
+  const [renamingTemplate, setRenamingTemplate] = useState<string | null>(null);
+  const [templateDraft, setTemplateDraft] = useState("");
+  const commitTemplateRename = async (id: string, name: string) => {
+    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, name } : t)));
+    await renameTemplate(id, name).catch(() => void reload());
+  };
+
   useEffect(() => {
     void reload();
   }, []);
@@ -636,7 +652,6 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       <PanelHead title="Library" />
       {templates.length > 0 && (
         <div className="shrink-0 px-3.5 pb-3">
-          <SectionTitle className="mb-1.5">Templates</SectionTitle>
           <div className="flex flex-col gap-1.5">
             {templates.map((t) => (
               <div
@@ -645,25 +660,65 @@ function LibraryPanel({ projectId }: { projectId: string }) {
               >
                 <Layers className="size-3.5 shrink-0 text-violet-500" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12px] font-medium">{t.name}</div>
+                  {renamingTemplate === t.id ? (
+                    <Input
+                      autoFocus
+                      value={templateDraft}
+                      className="h-6 w-full text-[12px]"
+                      onChange={(e) => setTemplateDraft(e.target.value)}
+                      onBlur={() => setRenamingTemplate(null)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && templateDraft.trim()) {
+                          void commitTemplateRename(t.id, templateDraft.trim());
+                          setRenamingTemplate(null);
+                        } else if (e.key === "Escape") setRenamingTemplate(null);
+                      }}
+                    />
+                  ) : (
+                    <div className="truncate text-[12px] font-medium">{t.name}</div>
+                  )}
                   <div className="text-[10.5px] text-muted-foreground">
                     {formatTime(t.duration)} · {t.media.length + t.layers.length + t.audio.length} parts
                   </div>
                 </div>
-                <button
-                  title="Add to this project"
-                  className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground hover:brightness-110"
-                  onClick={() => void addTemplateToProject(projectId, t)}
-                >
-                  <Plus className="size-3.5" />
-                </button>
-                <button
-                  title="Delete template"
-                  className={cn(cardIconButton, "opacity-0 group-hover:opacity-100")}
-                  onClick={() => void removeTemplate(t.id)}
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                <div className="flex shrink-0 flex-col gap-1">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <button
+                          title="Template options"
+                          className={cn(
+                            cardIconButton,
+                            "opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
+                          )}
+                        />
+                      }
+                    >
+                      <MoreHorizontal className="size-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setTemplateDraft(t.name);
+                          setRenamingTemplate(t.id);
+                        }}
+                      >
+                        <Pencil /> Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive" onClick={() => void removeTemplate(t.id)}>
+                        <Trash2 /> Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <button
+                    title="Add to this project"
+                    className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 hover:brightness-110 group-hover:opacity-100"
+                    onClick={() => void addTemplateToProject(projectId, t)}
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

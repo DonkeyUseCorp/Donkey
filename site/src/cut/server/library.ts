@@ -419,6 +419,17 @@ export async function useTemplate(templateId: string, projectId: string) {
   return { template, media };
 }
 
+export async function renameTemplate(id: string, name: string): Promise<LibraryTemplate> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Template name required.");
+  return mutateIndex((idx) => {
+    const template = (idx.templates ?? []).find((t) => t.id === id);
+    if (!template) throw new Error("Template not found.");
+    template.name = trimmed.slice(0, 80);
+    return template;
+  });
+}
+
 export async function deleteTemplate(id: string) {
   const template = await mutateIndex((idx) => {
     const t = (idx.templates ?? []).find((x) => x.id === id);

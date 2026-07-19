@@ -164,6 +164,15 @@ export async function saveTemplate(
   return body;
 }
 
+export async function renameTemplate(id: string, name: string): Promise<void> {
+  const res = await apiFetch(`/api/cut/library/templates/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error("Could not rename the template.");
+}
+
 export async function deleteTemplate(id: string): Promise<void> {
   const res = await apiFetch(`/api/cut/library/templates/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Could not delete the template.");
