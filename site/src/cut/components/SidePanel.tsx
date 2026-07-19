@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Layers, Loader2, MoreHorizontal, Music, Pencil, Plus, Trash2, Upload } from "lucide-react";
+import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
@@ -15,33 +15,42 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { SectionTitle } from "@/cut/components/SectionTitle";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
-import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import {
+  clearAssetDrag,
+  draggingLibrary,
+  draggingTemplate,
+  hasLibraryDrag,
+  hasTemplateDrag,
+  setAssetDragData,
+  setCardDragImage,
+} from "@/cut/lib/assetDrag";
+import type { AssetRef } from "@/cut/lib/assetRef";
+import { RefDropZone } from "./RefDropZone";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
 import {
+  addAssetToLibraryTemplate,
   addLibraryAssetToProject,
+  addProjectTemplateToTimeline,
   addTemplateToProject,
   deleteFromLibrary,
   deleteLibraryFolder,
   deleteTemplate,
   fetchLibrary,
+  importLibraryAsset,
+  importTemplateToProject,
+  libraryMediaUrl,
   moveLibraryAsset,
   renameLibraryFolder,
   renameTemplate,
   saveAssetToLibrary,
+  saveTemplate,
   type LibraryAsset,
   type LibraryFolder,
 } from "@/cut/lib/library";
-import type { LibraryTemplate } from "@/cut/lib/types";
+import { mediaUrl, type LibraryTemplate } from "@/cut/lib/types";
 import { isGenTab, useGenNotify, useWatchGenTab } from "@/cut/lib/genNotify";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
@@ -49,11 +58,11 @@ import { formatTime } from "@/cut/lib/time";
 import { useLocalPref } from "@/cut/lib/uiState";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
-import { cardIconButton } from "@/cut/components/iconButton";
 import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
 import { CopyNameLabel } from "./AssetRefs";
 import { AudioCardFace, AudioPanel } from "./AudioPanel";
-import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
+import { FolderCrumb, FolderShelf } from "./desktopFolders";
+import { TemplateCard } from "./TemplateCard";
 import { GenerateVideoPanel } from "./GeneratePanel";
 import { ImageGenPanel } from "./ImageGenPanel";
 import { StockImagesPanel } from "./StockImagesPanel";
@@ -90,6 +99,29 @@ export function SidePanel({
   const [tab, setTab] = useLocalPref<Tab>("cut-side-tab", "media", (v) =>
     TABS.some((t) => t.id === v)
   );
+  // Rail tiles as drop targets: a Library card (asset or template) dropped on
+  // Media joins the project; a Media card dropped on Library saves it there.
+  // Project media (cards and timeline clips) arrives through the ref zones
+  // below; these HTML5 handlers cover the library-asset and template drags.
+  const [dropTab, setDropTab] = useState<Tab | null>(null);
+  const acceptsDrop = (id: Tab, e: React.DragEvent) => {
+    const tpl = hasTemplateDrag(e) ? draggingTemplate() : null;
+    if (id === "media") return hasLibraryDrag(e) || tpl?.scope === "library";
+    if (id === "library") return tpl?.scope === "project";
+    return false;
+  };
+  // A project asset dropped on a rail tile — from a Media card or dragged
+  // straight off the timeline: Media reveals it in the panel (clears its
+  // origin tag), Library saves a copy to the shared library.
+  const dropRefOnTab = (id: Tab, ref: AssetRef) => {
+    if (ref.scope !== "project") return;
+    if (id === "media") {
+      useEditor.getState().updateAsset(ref.id, { origin: undefined, chatId: undefined });
+    } else {
+      const asset = useEditor.getState().assets.find((a) => a.id === ref.id);
+      if (asset) void saveAssetToLibrary(projectId, asset);
+    }
+  };
   // Generations that finished while their tab was closed: a blue count rides
   // the rail icon, and opening the tab lets the new tiles pulse for a beat.
   const unseen = useGenNotify((s) => s.unseen);
@@ -123,7 +155,8 @@ export function SidePanel({
               <span
                 className={cn(
                   "relative grid size-9 place-items-center rounded-lg transition-colors",
-                  tab === id ? "bg-muted text-foreground" : "hover:bg-muted/60"
+                  tab === id ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                  dropTab === id && "bg-primary/15 text-primary"
                 )}
               >
                 <Icon className="size-4.5" />
@@ -139,19 +172,56 @@ export function SidePanel({
             </>
           );
 
+          const tile = (
+            <button
+              className={tileClass}
+              aria-pressed={tab === id}
+              onClick={() => setTab(id)}
+              onDragOver={(e) => {
+                if (!acceptsDrop(id, e)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                setDropTab(id);
+              }}
+              onDragLeave={() => setDropTab((d) => (d === id ? null : d))}
+              onDrop={(e) => {
+                if (!acceptsDrop(id, e)) return;
+                e.preventDefault();
+                setDropTab(null);
+                const tpl = draggingTemplate();
+                if (id === "media") {
+                  if (tpl?.scope === "library") void importTemplateToProject(projectId, tpl.template);
+                  else {
+                    const lib = draggingLibrary();
+                    if (lib) void importLibraryAsset(projectId, lib);
+                  }
+                } else if (tpl?.scope === "project") {
+                  void saveTemplate(projectId, tpl.template);
+                }
+                clearAssetDrag();
+              }}
+            >
+              {inner}
+            </button>
+          );
+
           return (
             <Fragment key={id}>
               {/* Soft breaks between the file tabs, the AI-generate tabs, and the finishing tabs. */}
               {(id === "video" || id === "subtitles") && (
                 <div aria-hidden className="my-1 h-px w-8 shrink-0 bg-border" />
               )}
-              <button
-                className={tileClass}
-                aria-pressed={tab === id}
-                onClick={() => setTab(id)}
-              >
-                {inner}
-              </button>
+              {id === "media" || id === "library" ? (
+                <RefDropZone
+                  onRef={(ref) => dropRefOnTab(id, ref)}
+                  className="shrink-0 rounded-lg"
+                  activeClassName="bg-primary/10"
+                >
+                  {tile}
+                </RefDropZone>
+              ) : (
+                tile
+              )}
             </Fragment>
           );
         })}
@@ -216,6 +286,7 @@ function MediaPanel({
   // generations, voiceovers, freeze frames, stock adds) is tagged with an
   // `origin` and stays where it was made.
   const assets = useEditor((s) => s.assets).filter((a) => a.origin == null);
+  const templates = useEditor((s) => s.templates);
   const exportOpen = useEditor((s) => s.exportOpen);
   // A render that finishes in the background (dialog closed) drops a new file in
   // the exports folder; re-read the list when it lands so it shows without a
@@ -278,6 +349,30 @@ function MediaPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3.5">
+        {templates.length > 0 && (
+          <div className="flex flex-col gap-1.5 px-3.5 pb-3">
+            {templates.map((t) => (
+              <TemplateCard
+                key={t.id}
+                template={t}
+                mediaSrc={(f) => mediaUrl(projectId, f)}
+                dragScope="project"
+                addTitle="Add to timeline"
+                onAdd={() => addProjectTemplateToTimeline(projectId, t)}
+                onRename={(name) => useEditor.getState().renameTemplate(t.id, name)}
+                onDelete={() => useEditor.getState().removeTemplate(t.id)}
+                onRefDrop={(r) => {
+                  if (r.scope === "project") useEditor.getState().addAssetToTemplate(t.id, r.id);
+                }}
+                extraMenu={
+                  <DropdownMenuItem onClick={() => void saveTemplate(projectId, t)}>
+                    <FolderPlus /> Add to Library
+                  </DropdownMenuItem>
+                }
+              />
+            ))}
+          </div>
+        )}
         {assets.length === 0 && !importing ? (
           <div className="mx-3.5 px-4 py-7 text-center text-xs leading-relaxed text-muted-foreground">
             <div className="mb-3 flex justify-center gap-3.5">
@@ -443,7 +538,10 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
       className="asset-card group flex flex-col gap-1.5 text-left"
       title="Drag onto the timeline, or click + to add"
       draggable
-      onDragStart={(e) => setAssetDragData(e, asset.id)}
+      onDragStart={(e) => {
+        setAssetDragData(e, asset.id);
+        setCardDragImage(e, e.currentTarget);
+      }}
       onDragEnd={clearAssetDrag}
       onMouseEnter={() => {
         void videoRef.current?.play().catch(() => {});
@@ -602,8 +700,6 @@ function LibraryPanel({ projectId }: { projectId: string }) {
     await deleteTemplate(id).catch(() => void reload());
   };
 
-  const [renamingTemplate, setRenamingTemplate] = useState<string | null>(null);
-  const [templateDraft, setTemplateDraft] = useState("");
   const commitTemplateRename = async (id: string, name: string) => {
     setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, name } : t)));
     await renameTemplate(id, name).catch(() => void reload());
@@ -632,14 +728,11 @@ function LibraryPanel({ projectId }: { projectId: string }) {
   };
 
   // Let a clip be dragged onto a folder tile to file it (alongside the timeline
-  // drag payload the card already sets).
+  // drag payload the card already sets). The ghost is the card itself.
   const onCardDragExtra = (e: React.DragEvent, a: LibraryAsset) => {
     e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify([a.id]));
     e.dataTransfer.effectAllowed = "copyMove";
-    const ghost = buildDragGhost(1, a.name);
-    document.body.appendChild(ghost);
-    e.dataTransfer.setDragImage(ghost, 18, 16);
-    setTimeout(() => ghost.remove(), 0);
+    setCardDragImage(e, e.currentTarget as HTMLElement);
   };
 
   const all = assets ?? [];
@@ -653,72 +746,26 @@ function LibraryPanel({ projectId }: { projectId: string }) {
         <div className="shrink-0 px-3.5 pb-3">
           <div className="flex flex-col gap-1.5">
             {templates.map((t) => (
-              <div
+              <TemplateCard
                 key={t.id}
-                className="group flex items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-1.5"
-              >
-                <Layers className="size-3.5 shrink-0 text-violet-500" />
-                <div className="min-w-0 flex-1">
-                  {renamingTemplate === t.id ? (
-                    <Input
-                      autoFocus
-                      value={templateDraft}
-                      className="h-6 w-full text-[12px]"
-                      onChange={(e) => setTemplateDraft(e.target.value)}
-                      onBlur={() => setRenamingTemplate(null)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && templateDraft.trim()) {
-                          void commitTemplateRename(t.id, templateDraft.trim());
-                          setRenamingTemplate(null);
-                        } else if (e.key === "Escape") setRenamingTemplate(null);
-                      }}
-                    />
-                  ) : (
-                    <div className="truncate text-[12px] font-medium">{t.name}</div>
-                  )}
-                  <div className="text-[10.5px] text-muted-foreground">
-                    {formatTime(t.duration)} · {t.media.length + t.layers.length + t.audio.length} parts
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-col gap-1">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <button
-                          title="Template options"
-                          className={cn(
-                            cardIconButton,
-                            "opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
-                          )}
-                        />
-                      }
-                    >
-                      <MoreHorizontal className="size-3.5" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onClick={() => {
-                          setTemplateDraft(t.name);
-                          setRenamingTemplate(t.id);
-                        }}
-                      >
-                        <Pencil /> Rename
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem variant="destructive" onClick={() => void removeTemplate(t.id)}>
-                        <Trash2 /> Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <button
-                    title="Add to this project"
-                    className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 hover:brightness-110 group-hover:opacity-100"
-                    onClick={() => void addTemplateToProject(projectId, t)}
-                  >
-                    <Plus className="size-3.5" />
-                  </button>
-                </div>
-              </div>
+                template={t}
+                mediaSrc={libraryMediaUrl}
+                dragScope="library"
+                addTitle="Add to this project"
+                onAdd={() => void addTemplateToProject(projectId, t)}
+                onRename={(name) => void commitTemplateRename(t.id, name)}
+                onDelete={() => void removeTemplate(t.id)}
+                onRefDrop={(r) => {
+                  if (r.scope !== "project") return;
+                  const asset = useEditor.getState().assets.find((a) => a.id === r.id);
+                  if (!asset) return;
+                  void addAssetToLibraryTemplate(projectId, t.id, asset)
+                    .then((updated) =>
+                      setTemplates((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+                    )
+                    .catch(() => void reload());
+                }}
+              />
             ))}
           </div>
         </div>
@@ -753,6 +800,17 @@ function LibraryPanel({ projectId }: { projectId: string }) {
               await deleteLibraryFolder(id).catch(() => void reload());
             }}
             onDropIds={(ids, fid) => ids.forEach((id) => void move(id, fid))}
+            onRefDrop={(ref, fid) => {
+              // Project media dropped on a folder tile (a Media card or a
+              // timeline clip): save it to the library, filed in that folder.
+              if (ref.scope !== "project") return;
+              const asset = useEditor.getState().assets.find((a) => a.id === ref.id);
+              if (!asset) return;
+              void saveAssetToLibrary(projectId, asset)
+                .then((saved) => moveLibraryAsset(saved.id, fid))
+                .then(() => void reload())
+                .catch(() => {});
+            }}
           />
         </div>
       ) : null}

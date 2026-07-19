@@ -17,11 +17,18 @@ import {
   draggedLibraryId,
   draggingAssetId,
   draggingLibrary,
+  draggingTemplate,
   hasAssetDrag,
   hasLibraryDrag,
+  hasTemplateDrag,
 } from "@/cut/lib/assetDrag";
 import { draggingRef, hasRefDrag, type AssetRef } from "@/cut/lib/assetRef";
-import { importLibraryAsset, saveAssetToLibrary, saveTemplate } from "@/cut/lib/library";
+import {
+  addProjectTemplateToTimeline,
+  addTemplateToProject,
+  importLibraryAsset,
+  saveAssetToLibrary,
+} from "@/cut/lib/library";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
@@ -583,6 +590,17 @@ export function Timeline() {
       className="relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border bg-card select-none"
       style={{ height: timelineH }}
       onDragOver={(e) => {
+        // A template materializes as a whole arrangement, so it accepts the
+        // drop without a single-clip landing preview.
+        if (hasTemplateDrag(e)) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setAssetDrop(null);
+          setOverlayDrop(null);
+          setAudioDrop(null);
+          setDropType(null);
+          return;
+        }
         const isLib = hasLibraryDrag(e);
         const still = draggingStill(e);
         const stockVideo = draggingStockVideo(e);
@@ -668,8 +686,15 @@ export function Timeline() {
         const libId = draggedLibraryId(e);
         const still = draggingStill(e);
         const stockVideo = draggingStockVideo(e);
+        const tpl = draggingTemplate();
         const projectId = useEditor.getState().projectId;
         clearAssetDrag();
+        if (tpl && projectId) {
+          e.preventDefault();
+          if (tpl.scope === "project") addProjectTemplateToTimeline(projectId, tpl.template, t);
+          else void addTemplateToProject(projectId, tpl.template, t).catch(() => {});
+          return;
+        }
         if (libId && lib && projectId) {
           e.preventDefault();
           void importLibraryAsset(projectId, lib)
@@ -1206,27 +1231,23 @@ function HoverLine({
 }
 
 /**
- * Saves the current multi-selection as a by-reference library template — the
- * source media plus the edit that arranges it, never a flattened video. Re-adding
- * it from the library re-materializes editable clips, overlays, and captions.
+ * Saves the current multi-selection as a by-reference template in this
+ * project's Media — the source media plus the edit that arranges it, never a
+ * flattened video. Re-adding it re-materializes editable clips, overlays, and
+ * captions; the Media panel can push it to the shared Library.
  */
 function SaveSelectionButton() {
   const multiSelection = useEditor((s) => s.multiSelection);
   const [state, setState] = useState<"idle" | "saving" | "done">("idle");
   if (multiSelection.length === 0) return null;
 
-  const save = async () => {
+  const save = () => {
     const s = useEditor.getState();
     const input = s.selectionTemplate();
-    if (!s.projectId || !input) return;
-    setState("saving");
-    try {
-      await saveTemplate(s.projectId, input);
-      setState("done");
-      setTimeout(() => setState("idle"), 1800);
-    } catch {
-      setState("idle");
-    }
+    if (!input) return;
+    s.addTemplate(input);
+    setState("done");
+    setTimeout(() => setState("idle"), 1800);
   };
 
   return (

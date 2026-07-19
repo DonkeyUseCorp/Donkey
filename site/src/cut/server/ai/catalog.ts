@@ -411,7 +411,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "save_template",
     description:
-      "Save timeline items as a reusable Library template, kept by reference — the source media plus the edit arranging it, re-editable when added back. Pass the ids of the items to include: video clips (any track), soundtrack clips, titles, and subtitle cues.",
+      "Save timeline items as a reusable template in this project's Media, kept by reference — the source media plus the edit arranging it, re-editable when added back. The user can push it to the shared Library from the Media panel. Pass the ids of the items to include: video clips (any track), soundtrack clips, titles, and subtitle cues.",
     inputSchema: obj({
       name: str("Template name"),
       item_ids: {

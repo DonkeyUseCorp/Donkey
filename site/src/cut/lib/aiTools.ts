@@ -17,7 +17,6 @@ import {
   moveLibraryAsset,
   renameLibraryFolder,
   saveAssetToLibrary,
-  saveTemplate,
 } from "./library";
 import { enrichAsset, ensurePeaks, importImage, importStockVideo, importUrlMedia } from "./media";
 import { refToInlineAudio } from "./refMedia";
@@ -936,7 +935,7 @@ export async function runAiTool(
           id: t.id,
           name: t.name,
           duration: round2(t.duration),
-          parts: t.media.length + t.layers.length + t.audio.length + t.texts.length,
+          parts: t.layers.length + t.audio.length + t.texts.length + t.cues.length,
         })),
       };
     }
@@ -982,13 +981,12 @@ export async function runAiTool(
       return {
         added: t.name,
         duration: round2(t.duration),
-        parts: t.media.length + t.layers.length + t.audio.length + t.texts.length,
+        parts: t.layers.length + t.audio.length + t.texts.length + t.cues.length,
       };
     }
 
     case "save_template": {
-      const projectId = s.projectId;
-      if (!projectId) throw new ToolError("No project open.");
+      if (!s.projectId) throw new ToolError("No project open.");
       const name = String(input.name ?? "").trim();
       if (!name) throw new ToolError("A template name is required.");
       const ids = Array.isArray(input.item_ids) ? input.item_ids.map(String) : [];
@@ -1006,7 +1004,7 @@ export async function runAiTool(
       for (const sel of sels.slice(1)) s.toggleSelect(sel);
       const built = useEditor.getState().selectionTemplate();
       if (!built) throw new ToolError("Could not build a template from those items.");
-      const saved = await saveTemplate(projectId, { ...built, name });
+      const saved = useEditor.getState().addTemplate({ ...built, name });
       return { id: saved.id, name: saved.name, duration: round2(saved.duration) };
     }
 

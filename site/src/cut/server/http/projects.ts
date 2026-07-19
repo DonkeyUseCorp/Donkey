@@ -119,6 +119,7 @@ export const projectsApi = {
             ? []
             : existing.overlayClips,
         overlays: Array.isArray(body.overlays) ? body.overlays : existing.overlays,
+        templates: Array.isArray(body.templates) ? body.templates : existing.templates,
         aspect: body.aspect === "9:16" || body.aspect === "16:9" ? body.aspect : existing.aspect,
         fadeIn: typeof body.fadeIn === "number" ? body.fadeIn : existing.fadeIn,
         fadeOut: typeof body.fadeOut === "number" ? body.fadeOut : existing.fadeOut,

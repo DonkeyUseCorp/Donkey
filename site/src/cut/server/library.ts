@@ -419,6 +419,42 @@ export async function useTemplate(templateId: string, projectId: string) {
   return { template, media };
 }
 
+/** Append one project media file to a template as a part at its end: the file
+ * is copied into the library (templates own their media privately) and the
+ * given layer/audio shape lands re-pointed at the new media entry, starting at
+ * the template's current end. `extend` grows the stored duration. */
+export async function addMediaToTemplate(
+  templateId: string,
+  projectId: string,
+  input: {
+    media: Omit<TemplateMedia, "fileName"> & { fileName: string };
+    layer?: Omit<TemplateLayer, "media" | "start">;
+    audio?: Omit<TemplateAudio, "media" | "start">;
+    extend: number;
+  }
+): Promise<LibraryTemplate> {
+  const src = projectMediaPath(projectId, input.media.fileName);
+  if (!(await exists(src))) throw new Error("Media file not found in project.");
+  await mkdir(LIB_MEDIA, { recursive: true });
+  const dest = await freeName(input.media.fileName);
+  await copyFile(src, libMediaPath(dest));
+  try {
+    return await mutateIndex((idx) => {
+      const t = (idx.templates ?? []).find((x) => x.id === templateId);
+      if (!t) throw new Error("Template not found.");
+      const mi = t.media.length;
+      t.media = [...t.media, { ...input.media, fileName: dest }];
+      if (input.audio) t.audio = [...t.audio, { ...input.audio, media: mi, start: t.duration }];
+      else if (input.layer) t.layers = [...t.layers, { ...input.layer, media: mi, start: t.duration }];
+      t.duration += input.extend;
+      return t;
+    });
+  } catch (e) {
+    await rm(libMediaPath(dest), { force: true });
+    throw e;
+  }
+}
+
 export async function renameTemplate(id: string, name: string): Promise<LibraryTemplate> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Template name required.");

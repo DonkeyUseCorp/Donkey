@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Folder, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import type { AssetRef } from "@/cut/lib/assetRef";
+import { RefDropZone } from "./RefDropZone";
 import { cn } from "@/lib/utils";
 
 // A desktop-style folder surface shared by the projects home and the library:
@@ -208,6 +210,7 @@ export function FolderShelf<F extends DeskFolder>({
   onDelete,
   onDropIds,
   onDropFiles,
+  onRefDrop,
   creating = false,
   onCreatingChange,
 }: {
@@ -221,6 +224,9 @@ export function FolderShelf<F extends DeskFolder>({
   onDropIds: (ids: string[], folderId: string) => void;
   /** Desktop files dropped onto a folder tile — dropped straight into it. */
   onDropFiles?: (files: FileList, folderId: string) => void;
+  /** When set, folder tiles also take media drops from cards and timeline
+   * clips — filter by `ref.scope` and file the media into the folder. */
+  onRefDrop?: (ref: AssetRef, folderId: string) => void;
   creating?: boolean;
   onCreatingChange?: (creating: boolean) => void;
 }) {
@@ -248,26 +254,27 @@ export function FolderShelf<F extends DeskFolder>({
       {folders.map((f) => {
         const s = statOf(f.id);
         const isOver = over === f.id;
-        return editingId === f.id ? (
-          <div key={f.id} className="flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5">
-            <FolderGlyph className="size-[40px]" />
-            <Input
-              autoFocus
-              value={draft}
-              className="h-6 w-full text-[11px]"
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={closeRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && draft.trim()) {
-                  void onRename(f.id, draft.trim());
-                  closeRename();
-                } else if (e.key === "Escape") closeRename();
-              }}
-            />
-          </div>
-        ) : (
+        if (editingId === f.id)
+          return (
+            <div key={f.id} className="flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5">
+              <FolderGlyph className="size-[40px]" />
+              <Input
+                autoFocus
+                value={draft}
+                className="h-6 w-full text-[11px]"
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={closeRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && draft.trim()) {
+                    void onRename(f.id, draft.trim());
+                    closeRename();
+                  } else if (e.key === "Escape") closeRename();
+                }}
+              />
+            </div>
+          );
+        const tile = (
           <div
-            key={f.id}
             className="group/f relative flex w-[92px] cursor-pointer flex-col items-start rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
             onClick={() => onOpen(f.id)}
             onDoubleClick={() => {
@@ -335,6 +342,17 @@ export function FolderShelf<F extends DeskFolder>({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+        );
+        return onRefDrop ? (
+          <RefDropZone
+            key={f.id}
+            onRef={(r) => onRefDrop(r, f.id)}
+            activeClassName="rounded-xl bg-primary/10"
+          >
+            {tile}
+          </RefDropZone>
+        ) : (
+          <Fragment key={f.id}>{tile}</Fragment>
         );
       })}
 

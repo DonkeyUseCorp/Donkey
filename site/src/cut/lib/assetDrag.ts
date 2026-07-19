@@ -4,6 +4,7 @@ import type React from "react";
 import { clearRefDrag, refFromAsset, refFromLibrary, setRefDragData } from "./assetRef";
 import type { LibraryAsset } from "./library";
 import { useEditor } from "./store";
+import type { LibraryTemplate } from "./types";
 
 /** Internal HTML5 drag payload for project media assets. The custom MIME
  * keeps these drags invisible to the window-level OS-file import overlay,
@@ -60,10 +61,93 @@ export function draggedLibraryId(e: React.DragEvent | DragEvent): string | null 
   return dt.getData(LIBRARY_MIME) || null;
 }
 
+/** A template dragged from the Media panel (project scope) or the Library
+ * panel (library scope), so the rail tiles can move it the other way. */
+export const TEMPLATE_MIME = "application/x-cut-template";
+
+let inFlightTemplate: { scope: "project" | "library"; template: LibraryTemplate } | null = null;
+
+export function setTemplateDragData(
+  e: React.DragEvent,
+  scope: "project" | "library",
+  template: LibraryTemplate
+) {
+  e.dataTransfer.setData(TEMPLATE_MIME, template.id);
+  e.dataTransfer.effectAllowed = "copy";
+  inFlightTemplate = { scope, template };
+}
+
+/** The template drag in flight, readable during `dragover`. */
+export function draggingTemplate() {
+  return inFlightTemplate;
+}
+
+export function hasTemplateDrag(e: React.DragEvent | DragEvent): boolean {
+  const dt = "dataTransfer" in e ? e.dataTransfer : null;
+  return !!dt && Array.from(dt.types).includes(TEMPLATE_MIME);
+}
+
+/** Use the card itself as the drag ghost: a clone at rendered size, so the
+ * ghost matches the card exactly — rounded corners, fills, labels. Live
+ * `<video>`/`<canvas>` content is baked into the clone (clones of those paint
+ * blank), and hover-revealed controls drop out since the clone is not hovered.
+ * The clone lives off-screen just long enough for the browser to snapshot it. */
+export function setCardDragImage(e: React.DragEvent, el: HTMLElement) {
+  const rect = el.getBoundingClientRect();
+  const clone = el.cloneNode(true) as HTMLElement;
+  const srcMedia = el.querySelectorAll<HTMLElement>("video, canvas");
+  clone.querySelectorAll<HTMLElement>("video, canvas").forEach((node, i) => {
+    const src = srcMedia[i];
+    if (!src) return;
+    const r = src.getBoundingClientRect();
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(r.width * devicePixelRatio));
+    c.height = Math.max(1, Math.round(r.height * devicePixelRatio));
+    c.className = node.className;
+    c.style.cssText = node.style.cssText;
+    c.style.width = `${r.width}px`;
+    c.style.height = `${r.height}px`;
+    const ctx = c.getContext("2d");
+    if (ctx) {
+      try {
+        if (src instanceof HTMLVideoElement) {
+          // Match object-cover: scale to fill and center-crop.
+          const vw = src.videoWidth || r.width;
+          const vh = src.videoHeight || r.height;
+          const scale = Math.max(c.width / vw, c.height / vh);
+          ctx.drawImage(
+            src,
+            (c.width - vw * scale) / 2,
+            (c.height - vh * scale) / 2,
+            vw * scale,
+            vh * scale
+          );
+        } else {
+          ctx.drawImage(src as HTMLCanvasElement, 0, 0, c.width, c.height);
+        }
+      } catch {
+        // A frame that cannot be painted just leaves that slot blank.
+      }
+    }
+    node.replaceWith(c);
+  });
+  clone.style.position = "absolute";
+  clone.style.top = "-1000px";
+  clone.style.left = "-1000px";
+  clone.style.width = `${rect.width}px`;
+  clone.style.height = `${rect.height}px`;
+  clone.style.margin = "0";
+  clone.style.pointerEvents = "none";
+  document.body.appendChild(clone);
+  e.dataTransfer.setDragImage(clone, e.clientX - rect.left, e.clientY - rect.top);
+  setTimeout(() => clone.remove(), 0);
+}
+
 /** Clear the in-flight ids; call on `dragend` and after a drop. */
 export function clearAssetDrag() {
   inFlightAssetId = null;
   inFlightLibrary = null;
+  inFlightTemplate = null;
   clearRefDrag();
 }
 

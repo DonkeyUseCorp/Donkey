@@ -4,7 +4,7 @@ import { apiFetch, apiJson, apiUrl } from "./api";
 import { enrichAsset } from "./media";
 import { useEditor } from "./store";
 import type { LibraryTemplate, MediaAsset, TemplateMedia, TemplateSaveInput } from "./types";
-import { mediaUrl } from "./types";
+import { IMAGE_CLIP_SECONDS, mediaUrl } from "./types";
 
 export interface LibrarySource {
   url: string;
@@ -164,6 +164,41 @@ export async function saveTemplate(
   return body;
 }
 
+/** Append a project asset to a library template as one more part at its end:
+ * the engine copies the file into the library and returns the updated
+ * template. */
+export async function addAssetToLibraryTemplate(
+  projectId: string,
+  templateId: string,
+  asset: MediaAsset
+): Promise<LibraryTemplate> {
+  const len = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
+  const part =
+    asset.type === "audio"
+      ? { audio: { in: 0, out: len, volume: 1 } }
+      : { layer: { in: 0, out: len, muted: false, track: 1, asClip: true } };
+  const res = await apiFetch(`/api/cut/library/templates/${templateId}/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId,
+      media: {
+        fileName: asset.fileName,
+        name: asset.name,
+        type: asset.type,
+        duration: asset.duration,
+        width: asset.width,
+        height: asset.height,
+      },
+      extend: len,
+      ...part,
+    }),
+  });
+  const body = await apiJson<LibraryTemplate>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not add to the template.");
+  return body;
+}
+
 export async function renameTemplate(id: string, name: string): Promise<void> {
   const res = await apiFetch(`/api/cut/library/templates/${id}`, {
     method: "PUT",
@@ -182,7 +217,8 @@ export async function deleteTemplate(id: string): Promise<void> {
  * overlays, and captions at the playhead — everything editable, nothing baked. */
 export async function addTemplateToProject(
   projectId: string,
-  template: LibraryTemplate
+  template: LibraryTemplate,
+  at?: number
 ): Promise<void> {
   const res = await apiFetch(`/api/cut/library/templates/${template.id}/use`, {
     method: "POST",
@@ -194,7 +230,8 @@ export async function addTemplateToProject(
 
   const s = useEditor.getState();
   // Each returned media file (in template.media order) becomes a project asset;
-  // the layer/audio media indices resolve against this array.
+  // the layer/audio media indices resolve against this array. Enrichment gives
+  // the new clips their filmstrip thumbnails and waveform peaks.
   const assetIds = body.media.map((m) => {
     const asset: MediaAsset = {
       id: crypto.randomUUID().slice(0, 8),
@@ -207,9 +244,64 @@ export async function addTemplateToProject(
       url: mediaUrl(projectId, m.fileName),
     };
     s.addAsset(asset);
+    void enrichAsset(asset);
     return asset.id;
   });
-  s.insertTemplate(template, assetIds, useEditor.getState().currentTime);
+  s.insertTemplate(template, assetIds, at ?? useEditor.getState().currentTime);
+}
+
+/** Copy a library template into the project as a project template: its media
+ * land in the project's media folder and the template joins the Media panel.
+ * Nothing is placed on the timeline. */
+export async function importTemplateToProject(
+  projectId: string,
+  template: LibraryTemplate
+): Promise<void> {
+  const res = await apiFetch(`/api/cut/library/templates/${template.id}/use`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId }),
+  });
+  const body = await apiJson<{ media?: TemplateMedia[] }>(res);
+  if (!res.ok || !body.media) throw new Error(body.error ?? "Could not add the template.");
+  useEditor.getState().addTemplate({
+    name: template.name,
+    duration: template.duration,
+    media: body.media,
+    layers: template.layers,
+    audio: template.audio,
+    texts: template.texts,
+    cues: template.cues,
+  });
+}
+
+/** Materialize a project template onto the timeline at the playhead. Its media
+ * already live in the project; assets are matched by file name and re-registered
+ * if the Media entry was removed. */
+export function addProjectTemplateToTimeline(
+  projectId: string,
+  template: LibraryTemplate,
+  at?: number
+) {
+  const s = useEditor.getState();
+  const assetIds = template.media.map((m) => {
+    const existing = s.assets.find((a) => a.fileName === m.fileName);
+    if (existing) return existing.id;
+    const asset: MediaAsset = {
+      id: crypto.randomUUID().slice(0, 8),
+      fileName: m.fileName,
+      name: m.name,
+      type: m.type,
+      duration: m.duration,
+      width: m.width,
+      height: m.height,
+      url: mediaUrl(projectId, m.fileName),
+    };
+    s.addAsset(asset);
+    void enrichAsset(asset);
+    return asset.id;
+  });
+  useEditor.getState().insertTemplate(template, assetIds, at ?? useEditor.getState().currentTime);
 }
 
 /** Copy a project asset into the shared library for reuse. */

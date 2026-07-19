@@ -182,6 +182,7 @@ export function Editor({
         s.clips !== (last.clips as unknown) ||
         s.audioClips !== (last.audioClips as unknown) ||
         s.overlays !== (last.overlays as unknown) ||
+        s.templates !== (last.templates as unknown) ||
         s.subtitles !== (last.subtitles as unknown) ||
         s.aspect !== last.aspect ||
         s.fadeIn !== (last.fadeIn ?? 0) ||

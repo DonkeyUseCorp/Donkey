@@ -279,6 +279,14 @@ export interface EditorState {
   /** Re-materialize a template into the project at `offset` seconds. `assetIds`
    * maps each `template.media` index to a freshly-added project asset id. */
   insertTemplate: (template: LibraryTemplate, assetIds: string[], offset: number) => void;
+  /** Templates saved in this project (shown in the Media panel; persisted on
+   * the doc). Their media reference project files by name. */
+  templates: LibraryTemplate[];
+  addTemplate: (input: TemplateSaveInput) => LibraryTemplate;
+  renameTemplate: (id: string, name: string) => void;
+  removeTemplate: (id: string) => void;
+  /** Append a project asset to a template as one more part at its end. */
+  addAssetToTemplate: (templateId: string, assetId: string) => void;
   select: (sel: Selection) => void;
   /** ⌘/⇧-click: add the item to the selection (or remove it if already in),
    * making it the new primary. */
@@ -519,6 +527,7 @@ export const useEditor = create<EditorState>((set, get) => {
     clips: [],
     audioClips: [],
     overlays: [],
+    templates: [],
     aspect: "9:16",
     fadeIn: 0,
     fadeOut: 0,
@@ -558,6 +567,7 @@ export const useEditor = create<EditorState>((set, get) => {
         clips: [],
         audioClips: [],
         overlays: [],
+        templates: [],
         aspect: "9:16",
         fadeIn: 0,
         fadeOut: 0,
@@ -614,6 +624,7 @@ export const useEditor = create<EditorState>((set, get) => {
           clips: merged,
           audioClips: doc.audioClips,
           overlays: doc.overlays,
+          templates: doc.templates ?? [],
           aspect: doc.aspect ?? "9:16",
           fadeIn: doc.fadeIn ?? 0,
           fadeOut: doc.fadeOut ?? 0,
@@ -1498,6 +1509,55 @@ export const useEditor = create<EditorState>((set, get) => {
       return { name: "Template", duration, media, layers, audio, texts, cues };
     },
 
+    addTemplate: (input) => {
+      const t: LibraryTemplate = { id: uid(), addedAt: Date.now(), ...input };
+      set({ templates: [t, ...get().templates] });
+      return t;
+    },
+
+    renameTemplate: (id, name) =>
+      set({
+        templates: get().templates.map((t) => (t.id === id ? { ...t, name } : t)),
+      }),
+
+    removeTemplate: (id) => set({ templates: get().templates.filter((t) => t.id !== id) }),
+
+    addAssetToTemplate: (templateId, assetId) => {
+      const s = get();
+      const t = s.templates.find((x) => x.id === templateId);
+      const a = s.assets.find((x) => x.id === assetId);
+      if (!t || !a) return;
+      // Reuse the media entry when the template already references this file.
+      const existing = t.media.findIndex((m) => m.fileName === a.fileName);
+      const media =
+        existing >= 0
+          ? t.media
+          : [
+              ...t.media,
+              { fileName: a.fileName, name: a.name, type: a.type, duration: a.duration, width: a.width, height: a.height },
+            ];
+      const mi = existing >= 0 ? existing : media.length - 1;
+      const len = a.type === "image" ? IMAGE_CLIP_SECONDS : a.duration;
+      const updated: LibraryTemplate =
+        a.type === "audio"
+          ? {
+              ...t,
+              media,
+              duration: t.duration + len,
+              audio: [...t.audio, { media: mi, start: t.duration, in: 0, out: len, volume: 1 }],
+            }
+          : {
+              ...t,
+              media,
+              duration: t.duration + len,
+              layers: [
+                ...t.layers,
+                { media: mi, start: t.duration, in: 0, out: len, muted: false, track: 1, asClip: true },
+              ],
+            };
+      set({ templates: s.templates.map((x) => (x.id === templateId ? updated : x)) });
+    },
+
     insertTemplate: (template, assetIds, offset) => {
       push();
       const usable = template.layers.filter((l) => assetIds[l.media]);
@@ -2365,6 +2425,7 @@ export function serializeDoc(s: {
   clips: VideoClip[];
   audioClips: AudioClip[];
   overlays: TextOverlay[];
+  templates: LibraryTemplate[];
   aspect: Aspect;
   fadeIn: number;
   fadeOut: number;
@@ -2379,6 +2440,7 @@ export function serializeDoc(s: {
     clips: s.clips,
     audioClips: s.audioClips,
     overlays: s.overlays,
+    templates: s.templates,
     aspect: s.aspect,
     fadeIn: s.fadeIn,
     fadeOut: s.fadeOut,

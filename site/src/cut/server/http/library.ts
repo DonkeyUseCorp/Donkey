@@ -1,5 +1,6 @@
 import {
   addFromProject,
+  addMediaToTemplate,
   addUpload,
   createFolder,
   deleteFolder,
@@ -52,6 +53,18 @@ export const libraryApi = {
       return Response.json(await useTemplate(id, projectId));
     } catch (e) {
       return caught(e, "Could not add the template.");
+    }
+  },
+
+  /** Append a project media file to a template as one more part. */
+  async addToTemplate(req: Request, { id }: { id: string }) {
+    try {
+      const { projectId, ...input } = (await req.json()) as { projectId: string } & Parameters<
+        typeof addMediaToTemplate
+      >[2];
+      return Response.json(await addMediaToTemplate(id, projectId, input));
+    } catch (e) {
+      return caught(e, "Could not add to the template.");
     }
   },
 

@@ -30,20 +30,24 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { clearAssetDrag, setLibraryDragData } from "@/cut/lib/assetDrag";
+import { clearAssetDrag, setCardDragImage, setLibraryDragData } from "@/cut/lib/assetDrag";
 import {
   createLibraryFolder,
   deleteFromLibrary,
   deleteLibraryFolder,
+  deleteTemplate,
   fetchLibrary,
   importUrlToLibrary,
   libraryMediaUrl,
   moveLibraryAsset,
   renameLibraryFolder,
+  renameTemplate,
   uploadToLibrary,
   type LibraryAsset,
   type LibraryFolder,
 } from "@/cut/lib/library";
+import type { LibraryTemplate } from "@/cut/lib/types";
+import { TemplateCard } from "./TemplateCard";
 import { homeHref, useCutBase } from "@/cut/lib/nav";
 import { useRevealFlash } from "@/cut/lib/refReveal";
 import { formatTime } from "@/cut/lib/time";
@@ -61,6 +65,7 @@ export function LibraryView() {
   const base = useCutBase();
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
+  const [templates, setTemplates] = useState<LibraryTemplate[]>([]);
   // The open folder lives in the URL (?folder=…) so the browser's back button
   // steps folder → root and the location survives reloads.
   const openFolder = useSearchParams().get("folder");
@@ -79,8 +84,19 @@ export function LibraryView() {
       .then((d) => {
         setAssets(d.assets);
         setFolders(d.folders);
+        setTemplates(d.templates);
       })
       .catch(() => setAssets([]));
+
+  const renameTpl = async (id: string, name: string) => {
+    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, name } : t)));
+    await renameTemplate(id, name).catch(() => void reload());
+  };
+
+  const removeTpl = async (id: string) => {
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+    await deleteTemplate(id).catch(() => void reload());
+  };
 
   useEffect(() => {
     void reload();
@@ -155,21 +171,26 @@ export function LibraryView() {
 
   // Carry the current selection (or just this card) as a folder-move payload,
   // with a ghost — alongside the timeline-drag payload the card already sets.
+  // A single card drags as itself; a multi-selection keeps the counted stack.
   const onCardDragExtra = (e: React.DragEvent, a: LibraryAsset) => {
     const ids = selected.has(a.id) && selected.size > 0 ? Array.from(selected) : [a.id];
     if (!selected.has(a.id)) setSelected(new Set([a.id]));
     e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify(ids));
     e.dataTransfer.effectAllowed = "copyMove";
-    const ghost = buildDragGhost(ids.length, ids.length > 1 ? `${ids.length} items` : a.name);
-    document.body.appendChild(ghost);
-    e.dataTransfer.setDragImage(ghost, 18, 16);
-    setTimeout(() => ghost.remove(), 0);
+    if (ids.length > 1) {
+      const ghost = buildDragGhost(ids.length, `${ids.length} items`);
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 18, 16);
+      setTimeout(() => ghost.remove(), 0);
+    } else {
+      setCardDragImage(e, e.currentTarget as HTMLElement);
+    }
   };
 
   const all = assets ?? [];
   const shown = all.filter((a) => (a.folderId ?? null) === openFolder);
   const openFolderName = folders.find((f) => f.id === openFolder)?.name;
-  const hasContent = all.length > 0 || folders.length > 0;
+  const hasContent = all.length > 0 || folders.length > 0 || templates.length > 0;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-10 py-9">
@@ -238,6 +259,20 @@ export function LibraryView() {
           onDropIds={(ids, fid) => void moveAssets(ids, fid)}
         />
       ) : null}
+
+      {openFolder === null && templates.length > 0 && (
+        <div className="mb-6 grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
+          {templates.map((t) => (
+            <TemplateCard
+              key={t.id}
+              template={t}
+              mediaSrc={libraryMediaUrl}
+              onRename={(name) => void renameTpl(t.id, name)}
+              onDelete={() => void removeTpl(t.id)}
+            />
+          ))}
+        </div>
+      )}
 
       {assets === null ? (
         <div className="grid place-items-center py-24 text-muted-foreground">

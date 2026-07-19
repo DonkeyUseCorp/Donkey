@@ -468,6 +468,9 @@ export interface ProjectDoc {
     publishedAt?: string; // ISO date (yyyy-mm-dd)
     links?: string[];
   };
+  /** Templates saved in this project (their media reference project files by
+   * name). Adding one to the shared Library copies its media out. */
+  templates?: LibraryTemplate[];
   /** Which project folder this belongs to (null/absent = ungrouped). */
   folderId?: string | null;
   /** In-progress or finished brief-to-video run (genvideo). Persisted so a
