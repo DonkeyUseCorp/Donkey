@@ -267,7 +267,6 @@ export function AiPanel({ projectId, onClose }: { projectId: string; onClose: ()
   return (
     <aside className="ai-panel relative flex min-h-0 w-[340px] shrink-0 animate-in flex-col border-l border-border bg-card duration-300 ease-out slide-in-from-right-full">
       <div className="flex h-[46px] shrink-0 items-center gap-1.5 border-b border-border pr-2 pl-3.5">
-        <Sparkles className="size-4 text-[#0a84ff]" />
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -669,7 +668,7 @@ function ChatSession({
         )}
       </div>
 
-      <div className="shrink-0 p-2.5">
+      <div className="shrink-0 px-2.5 pb-2.5">
         <div className="relative">
           {outOfCredits && (
             // Folder tab behind the box: its bottom few pixels slide under the
