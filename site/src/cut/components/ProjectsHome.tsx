@@ -7,6 +7,7 @@ import {
   Copy,
   Film,
   Folder,
+  FolderPlus,
   LayoutGrid,
   List,
   Loader2,
@@ -82,6 +83,7 @@ export function ProjectsHome() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [view, setView] = useState<View>("gallery");
   const [createOpen, setCreateOpen] = useState(false);
+  const [folderCreating, setFolderCreating] = useState(false);
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
   const [name, setName] = useState("");
@@ -360,37 +362,49 @@ export function ProjectsHome() {
               onDropOut={(ids) => void moveProjects(ids, null)}
             />
           )}
-          {projects.length > 0 && (
-            <div className="flex rounded-lg border border-border bg-card p-0.5">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Gallery view"
-                aria-pressed={view === "gallery"}
-                className={cn(view === "gallery" && "bg-muted text-foreground")}
-                onClick={() => switchView("gallery")}
-              >
-                <LayoutGrid />
+          <div className="flex items-center gap-2">
+            {openFolder === null && (
+              <Button variant="outline" onClick={() => setFolderCreating(true)}>
+                <FolderPlus data-icon="inline-start" /> New folder
               </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="List view"
-                aria-pressed={view === "list"}
-                className={cn(view === "list" && "bg-muted text-foreground")}
-                onClick={() => switchView("list")}
-              >
-                <List />
-              </Button>
-            </div>
-          )}
+            )}
+            <Button onClick={() => void newProjectHere()}>
+              <Plus data-icon="inline-start" /> New project
+            </Button>
+            {projects.length > 0 && (
+              <div className="flex rounded-lg border border-border bg-card p-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Gallery view"
+                  aria-pressed={view === "gallery"}
+                  className={cn(view === "gallery" && "bg-muted text-foreground")}
+                  onClick={() => switchView("gallery")}
+                >
+                  <LayoutGrid />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="List view"
+                  aria-pressed={view === "list"}
+                  className={cn(view === "list" && "bg-muted text-foreground")}
+                  onClick={() => switchView("list")}
+                >
+                  <List />
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {!engineDown && projects && openFolder === null && hasContent && (
+      {!engineDown && projects && openFolder === null && (folders.length > 0 || folderCreating) && (
         <FolderShelf
           folders={folders}
           mime={PROJECT_MIME}
+          creating={folderCreating}
+          onCreatingChange={setFolderCreating}
           statOf={(id) => {
             const items = all.filter((p) => (p.folderId ?? null) === id);
             return { count: items.length, size: items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
@@ -464,17 +478,6 @@ export function ProjectsHome() {
           selected={selected}
           setSelected={setSelected}
         >
-          <button
-            type="button"
-            data-no-marquee
-            aria-label="New project"
-            onClick={() => void newProjectHere()}
-            className="group/new flex flex-col"
-          >
-            <span className="grid aspect-[9/16] place-items-center rounded-2xl border-2 border-dashed border-border text-muted-foreground transition-colors group-hover/new:border-[#0a84ff] group-hover/new:bg-[#0a84ff]/5 group-hover/new:text-[#0a84ff]">
-              <Plus className="size-8" />
-            </span>
-          </button>
           {shown.map((p) => (
             <div
               key={p.id}
@@ -499,7 +502,7 @@ export function ProjectsHome() {
                 )}
               >
                 <CardPreview project={p} />
-                <span className="absolute top-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+                <span className="absolute bottom-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
                   {p.name}
                 </span>
                 <span className="absolute right-2 bottom-2 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
@@ -517,9 +520,6 @@ export function ProjectsHome() {
                   onMove={(folderId) => void moveProjects([p.id], folderId)}
                   onDelete={() => setDeleting(p)}
                 />
-              </div>
-              <div className="mt-2 px-0.5 text-xs text-muted-foreground">
-                {formatBytes(p.sizeBytes ?? 0)} · edited {formatDate(p.updatedAt)}
               </div>
             </div>
           ))}

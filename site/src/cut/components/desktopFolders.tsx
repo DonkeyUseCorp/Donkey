@@ -207,6 +207,8 @@ export function FolderShelf<F extends DeskFolder>({
   onDelete,
   onDropIds,
   onDropFiles,
+  creating: creatingProp,
+  onCreatingChange,
 }: {
   folders: F[];
   statOf: (id: string) => { count: number; size?: number };
@@ -218,16 +220,33 @@ export function FolderShelf<F extends DeskFolder>({
   onDropIds: (ids: string[], folderId: string) => void;
   /** Desktop files dropped onto a folder tile — dropped straight into it. */
   onDropFiles?: (files: FileList, folderId: string) => void;
+  /** When provided, folder creation is driven by the host (e.g. a header
+   * button) and the shelf drops its own dashed "New folder" tile. */
+  creating?: boolean;
+  onCreatingChange?: (creating: boolean) => void;
 }) {
   // A folder tile accepts both an internal selection (its MIME) and, when the
   // host wires it up, OS files dragged from the desktop.
   const dragTypes = (e: React.DragEvent) => Array.from(e.dataTransfer.types);
   const accepts = (e: React.DragEvent) =>
     dragTypes(e).includes(mime) || (!!onDropFiles && dragTypes(e).includes("Files"));
-  const [creating, setCreating] = useState(false);
+  const [creatingLocal, setCreatingLocal] = useState(false);
+  const hostControlled = creatingProp !== undefined;
+  const creating = creatingProp ?? creatingLocal;
+  const setCreating = onCreatingChange ?? setCreatingLocal;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [over, setOver] = useState<string | null>(null);
+  // Every close path clears the draft, so the next create (including one
+  // triggered by the host) opens with an empty name field.
+  const closeCreate = () => {
+    setDraft("");
+    setCreating(false);
+  };
+  const closeRename = () => {
+    setDraft("");
+    setEditingId(null);
+  };
 
   return (
     <div className="mb-7 flex flex-wrap gap-2" data-no-marquee>
@@ -242,12 +261,12 @@ export function FolderShelf<F extends DeskFolder>({
               value={draft}
               className="h-6 w-full text-center text-[11px]"
               onChange={(e) => setDraft(e.target.value)}
-              onBlur={() => setEditingId(null)}
+              onBlur={closeRename}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && draft.trim()) {
                   void onRename(f.id, draft.trim());
-                  setEditingId(null);
-                } else if (e.key === "Escape") setEditingId(null);
+                  closeRename();
+                } else if (e.key === "Escape") closeRename();
               }}
             />
           </div>
@@ -333,17 +352,16 @@ export function FolderShelf<F extends DeskFolder>({
             placeholder="Name"
             className="h-6 w-full text-center text-[11px]"
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => setCreating(false)}
+            onBlur={closeCreate}
             onKeyDown={(e) => {
               if (e.key === "Enter" && draft.trim()) {
                 void onCreate(draft.trim());
-                setDraft("");
-                setCreating(false);
-              } else if (e.key === "Escape") setCreating(false);
+                closeCreate();
+              } else if (e.key === "Escape") closeCreate();
             }}
           />
         </div>
-      ) : (
+      ) : hostControlled ? null : (
         <button
           className="flex w-[92px] flex-col items-center rounded-xl px-2 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
           onClick={() => {
