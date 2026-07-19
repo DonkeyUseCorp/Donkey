@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Check,
-  Folder,
   FolderOpen,
   FolderPlus,
   Link as LinkIcon,
@@ -31,13 +29,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { clearAssetDrag, setLibraryDragData } from "@/cut/lib/assetDrag";
 import {
@@ -279,10 +270,8 @@ export function LibraryView() {
             <LibraryCard
               key={a.id}
               asset={a}
-              folders={folders}
               selected={selected.has(a.id)}
               onDelete={() => setDeleting(a)}
-              onMove={(folderId) => void moveAssets([a.id], folderId)}
               onDragStartExtra={(e) => onCardDragExtra(e, a)}
             />
           ))}
@@ -373,19 +362,15 @@ export function LibraryView() {
 
 export function LibraryCard({
   asset: a,
-  folders,
   selected,
   onDelete,
   onUse,
-  onMove,
   onDragStartExtra,
 }: {
   asset: LibraryAsset;
-  folders?: LibraryFolder[];
   selected?: boolean;
   onDelete?: () => void;
   onUse?: () => void;
-  onMove?: (folderId: string | null) => void;
   onDragStartExtra?: (e: React.DragEvent) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -465,34 +450,6 @@ export function LibraryCard({
           </button>
         )}
         <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100">
-          {onMove && folders && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label="Move to folder"
-                    title="Move to folder"
-                    className="bg-black/40 text-white hover:bg-black/60 hover:text-white"
-                  />
-                }
-              >
-                <Folder />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => onMove(null)}>
-                  {(a.folderId ?? null) === null && <Check />} No folder
-                </DropdownMenuItem>
-                {folders.length > 0 && <DropdownMenuSeparator />}
-                {folders.map((f) => (
-                  <DropdownMenuItem key={f.id} onClick={() => onMove(f.id)}>
-                    {a.folderId === f.id && <Check />} {f.name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
           {onDelete && (
             <Button
               variant="ghost"
@@ -512,7 +469,7 @@ export function LibraryCard({
           name={a.name}
           dark={a.type === "audio"}
           className={cn(
-            "absolute top-1.5 left-1.5 max-w-[70%] px-2 py-1 text-[11px] font-medium text-white transition-[max-width] group-hover:max-w-[calc(100%-4.75rem)]",
+            "absolute top-1.5 left-1.5 max-w-[70%] px-2 py-1 text-[11px] font-medium text-white transition-[max-width] group-hover:max-w-[calc(100%-2.75rem)]",
             // The emerald fill is its own backdrop; thumbnails need the scrim pill.
             a.type !== "audio" && "rounded-lg bg-black/55 backdrop-blur-sm"
           )}
