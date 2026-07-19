@@ -311,7 +311,16 @@ export function CopyRefButton({ name, className }: { name: string; className?: s
 
 /** A card's name caption with its short handle; clicking copies the reference
  * token, ready to paste into any prompt. */
-export function CopyNameLabel({ name, className }: { name: string; className?: string }) {
+export function CopyNameLabel({
+  name,
+  className,
+  dark,
+}: {
+  name: string;
+  className?: string;
+  /** On a dark/filled surface (audio cards): white badge and copied text. */
+  dark?: boolean;
+}) {
   const [copied, copy] = useCopied();
   const ref = useRefFor(name);
   const token = ref ? refToken(ref) : mentionToken(name);
@@ -325,9 +334,16 @@ export function CopyNameLabel({ name, className }: { name: string; className?: s
         copy(token);
       }}
     >
-      {ref?.handle && <RefHandleBadge handle={ref.handle} className="shrink-0" />}
+      {ref?.handle && (
+        <RefHandleBadge
+          handle={ref.handle}
+          className={cn("shrink-0", dark && "bg-white/25 text-white")}
+        />
+      )}
       {copied ? (
-        <span className="truncate text-emerald-600">Copied {token}</span>
+        <span className={cn("truncate", dark ? "text-white" : "text-emerald-600")}>
+          Copied {token}
+        </span>
       ) : (
         <span className="truncate">{name}</span>
       )}

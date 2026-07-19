@@ -44,7 +44,7 @@ import { cn } from "@/lib/utils";
 import { cardIconButton } from "@/cut/components/iconButton";
 import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
 import { CopyNameLabel } from "./AssetRefs";
-import { AudioPanel } from "./AudioPanel";
+import { AudioCardFace, AudioPanel } from "./AudioPanel";
 import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
 import { GenerateVideoPanel } from "./GeneratePanel";
 import { ImageGenPanel } from "./ImageGenPanel";
@@ -469,16 +469,26 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
           // eslint-disable-next-line @next/next/no-img-element -- engine/static file, not Next-optimizable
           <img src={asset.url} alt={asset.name} loading="lazy" className="size-full object-cover" />
         ) : (
-          <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
-            <Music className="size-4.5" />
-          </div>
+          <AudioCardFace
+            url={asset.url}
+            duration={asset.duration}
+            peaks={asset.peaks}
+            // On hover the + button takes the pill's corner, as on Library cards.
+            durationClassName="transition-opacity group-hover:opacity-0"
+          />
         )}
-        {asset.type !== "image" && (
+        {asset.type === "video" && (
           <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
             {formatTime(asset.duration)}
           </span>
         )}
-        <span className="absolute top-1 left-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <span
+          className={cn(
+            "absolute flex gap-1 opacity-0 transition-opacity group-hover:opacity-100",
+            // Audio keeps play bottom-left; + swaps in where the duration pill hides.
+            asset.type === "audio" ? "right-1.5 bottom-2.5" : "top-1 left-1"
+          )}
+        >
           <span
             role="button"
             title="Add to timeline"
@@ -509,8 +519,17 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
             <Trash2 className="size-3" />
           </span>
         </span>
+        {asset.type === "audio" && (
+          <CopyNameLabel
+            name={asset.name}
+            dark
+            className="absolute top-1.5 left-1.5 max-w-[70%] px-2 py-1 text-[11px] font-medium text-white transition-[max-width] group-hover:max-w-[calc(100%-4.75rem)]"
+          />
+        )}
       </div>
-      <CopyNameLabel name={asset.name} className="text-[11px] text-muted-foreground" />
+      {asset.type !== "audio" && (
+        <CopyNameLabel name={asset.name} className="text-[11px] text-muted-foreground" />
+      )}
     </div>
     <AlertDialog open={confirmUses !== null} onOpenChange={(o) => !o && setConfirmUses(null)}>
       <AlertDialogContent aria-describedby={undefined}>

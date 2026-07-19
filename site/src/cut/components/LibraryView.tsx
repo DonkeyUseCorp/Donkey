@@ -9,7 +9,6 @@ import {
   FolderPlus,
   Link as LinkIcon,
   Loader2,
-  Music,
   Plus,
   Trash2,
   Upload,
@@ -59,6 +58,7 @@ import { useRevealFlash } from "@/cut/lib/refReveal";
 import { formatTime } from "@/cut/lib/time";
 import { cn } from "@/lib/utils";
 import { CopyNameLabel } from "./AssetRefs";
+import { AudioCardFace } from "./AudioPanel";
 import { buildDragGhost, FolderCrumb, FolderShelf, Marquee } from "./desktopFolders";
 
 // A dragged library selection travels as a JSON array of asset ids, so a whole
@@ -435,11 +435,14 @@ export function LibraryCard({
           // eslint-disable-next-line @next/next/no-img-element -- library media file, not Next-optimizable
           <img src={libraryMediaUrl(a.fileName)} alt={a.name} loading="lazy" className="size-full object-cover" />
         ) : (
-          <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
-            <Music className="size-5" />
-          </div>
+          <AudioCardFace
+            url={libraryMediaUrl(a.fileName)}
+            duration={a.duration}
+            // On hover the + button takes the pill's corner.
+            durationClassName={!!onUse && "transition-opacity group-hover:opacity-0"}
+          />
         )}
-        {a.type !== "image" && (
+        {a.type === "video" && (
           <span className="absolute right-1.5 bottom-1.5 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
             {formatTime(a.duration)}
           </span>
@@ -448,7 +451,11 @@ export function LibraryCard({
           <button
             aria-label="Add to timeline"
             title="Add to timeline"
-            className="absolute bottom-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 shadow transition-all group-hover:opacity-100 hover:scale-110"
+            className={cn(
+              "absolute grid size-6 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 shadow transition-all group-hover:opacity-100 hover:scale-110",
+              // Audio keeps play bottom-left; + swaps in where the badge hides.
+              a.type === "audio" ? "right-1.5 bottom-1.5" : "bottom-1.5 left-1.5"
+            )}
             onClick={(e) => {
               e.stopPropagation();
               onUse();
@@ -503,7 +510,12 @@ export function LibraryCard({
         </div>
         <CopyNameLabel
           name={a.name}
-          className="absolute top-1.5 left-1.5 max-w-[70%] rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm"
+          dark={a.type === "audio"}
+          className={cn(
+            "absolute top-1.5 left-1.5 max-w-[70%] px-2 py-1 text-[11px] font-medium text-white transition-[max-width] group-hover:max-w-[calc(100%-4.75rem)]",
+            // The emerald fill is its own backdrop; thumbnails need the scrim pill.
+            a.type !== "audio" && "rounded-lg bg-black/55 backdrop-blur-sm"
+          )}
         />
       </div>
     </div>

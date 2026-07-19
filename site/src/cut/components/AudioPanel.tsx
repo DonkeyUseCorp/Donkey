@@ -338,7 +338,7 @@ export function PeakStrip({ peaks, className }: { peaks: number[]; className?: s
 
 /** Stand-in peaks while an asset's real ones haven't landed — the same gentle
  * wave the timeline drag ghost draws, so the pill still reads as audio. */
-const STAND_IN_PEAKS = Array.from({ length: 48 }, (_, i) => 0.32 + 0.26 * Math.abs(Math.sin(i / 2)));
+export const STAND_IN_PEAKS = Array.from({ length: 48 }, (_, i) => 0.32 + 0.26 * Math.abs(Math.sin(i / 2)));
 
 /** The emerald audio surface, mirroring a timeline audio clip: gradient pill
  * with a white waveform. Panel rows, chat cards, and attachment tiles draw on
@@ -362,6 +362,81 @@ export function AudioPillSurface({
         className="absolute inset-x-0 inset-y-1 mt-0 h-[calc(100%-8px)] text-white/85"
       />
       {children}
+    </div>
+  );
+}
+
+/** Rounded voice-memo bars for the square audio cards — thicker and softer
+ * than PeakStrip so they read at card size. */
+function CardBars({ peaks, className }: { peaks: number[]; className?: string }) {
+  const BARS = 30;
+  const step = Math.max(1, Math.floor(peaks.length / BARS));
+  const bars: number[] = [];
+  for (let i = 0; i < BARS; i++) {
+    let m = 0;
+    for (let j = i * step; j < Math.min(peaks.length, (i + 1) * step); j++) {
+      if (peaks[j] > m) m = peaks[j];
+    }
+    bars.push(m);
+  }
+  return (
+    <div className={cn("flex items-center gap-[2px]", className)} aria-hidden>
+      {bars.map((p, i) => (
+        <div
+          key={i}
+          className="min-w-0 flex-1 rounded-full bg-[#8fcba9]"
+          style={{ height: `${Math.round(Math.max(0.15, p) * 100)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** The square audio card face: muted green fill, rounded mint bars, a play
+ * circle bottom-left, and a duration pill bottom-right. The Library and Media
+ * cards drop it in as their audio tile and overlay their own controls. Play
+ * goes through the shared preview player; unmounting silences its own preview. */
+export function AudioCardFace({
+  url,
+  duration,
+  peaks,
+  durationClassName,
+}: {
+  url: string;
+  duration: number;
+  peaks?: number[];
+  /** Extra classes for the duration pill (e.g. hide it while hover controls
+   * take its corner). */
+  durationClassName?: string | false;
+}) {
+  const playing = usePreviewAudio((s) => s.url) === url;
+  useEffect(() => () => usePreviewAudio.getState().stop(url), [url]);
+  return (
+    <div className="relative size-full bg-[#3e6f5f]">
+      <CardBars
+        peaks={peaks?.length ? peaks : STAND_IN_PEAKS}
+        className="absolute inset-x-[8%] top-1/2 h-[36%] -translate-y-1/2"
+      />
+      <button
+        type="button"
+        title={playing ? "Pause" : "Play"}
+        aria-label={playing ? "Pause" : "Play"}
+        className="absolute bottom-2 left-2 grid size-8 place-items-center rounded-full bg-[#e3f2e8] text-[#2f5d4c] shadow transition-transform hover:scale-105"
+        onClick={(e) => {
+          e.stopPropagation();
+          usePreviewAudio.getState().toggle(url);
+        }}
+      >
+        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5 translate-x-px" />}
+      </button>
+      <span
+        className={cn(
+          "absolute right-2 bottom-3 rounded-md bg-[#2b4e42] px-1.5 py-0.5 font-mono text-[10px] text-[#d6eddf] tabular-nums",
+          durationClassName
+        )}
+      >
+        {formatTime(duration)}
+      </span>
     </div>
   );
 }
