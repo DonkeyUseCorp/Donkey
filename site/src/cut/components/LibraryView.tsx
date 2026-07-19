@@ -4,10 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
-  Film,
   Folder,
   FolderOpen,
-  Image as ImageIcon,
+  FolderPlus,
   Link as LinkIcon,
   Loader2,
   Music,
@@ -80,6 +79,7 @@ export function LibraryView() {
   const [importing, setImporting] = useState(false);
   const [url, setUrl] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
+  const [folderCreating, setFolderCreating] = useState(false);
   const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -194,9 +194,16 @@ export function LibraryView() {
             onDropOut={(ids) => void moveAssets(ids, null)}
           />
         )}
-        <Button onClick={() => { setUrlError(null); setAddOpen(true); }}>
-          <Upload data-icon="inline-start" /> Add media
-        </Button>
+        <div className="flex items-center gap-2">
+          {openFolder === null && (
+            <Button variant="outline" onClick={() => setFolderCreating(true)}>
+              <FolderPlus data-icon="inline-start" /> New folder
+            </Button>
+          )}
+          <Button onClick={() => { setUrlError(null); setAddOpen(true); }}>
+            <Upload data-icon="inline-start" /> Add media
+          </Button>
+        </div>
         <input
           ref={inputRef}
           type="file"
@@ -213,10 +220,12 @@ export function LibraryView() {
         />
       </div>
 
-      {openFolder === null && hasContent ? (
+      {openFolder === null && (folders.length > 0 || folderCreating) ? (
         <FolderShelf
           folders={folders}
           mime={LIBRARY_MOVE_MIME}
+          creating={folderCreating}
+          onCreatingChange={setFolderCreating}
           statOf={(id) => ({ count: all.filter((a) => (a.folderId ?? null) === id).length })}
           onOpen={gotoFolder}
           onCreate={async (name) => {
@@ -295,7 +304,7 @@ export function LibraryView() {
           </DialogHeader>
           <div className="flex flex-col gap-4">
             <button
-              className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border py-8 transition-colors hover:border-primary/50 hover:bg-muted/40"
+              className="flex flex-col items-center gap-2 rounded-xl py-8 transition-colors hover:bg-muted/40"
               onClick={() => inputRef.current?.click()}
             >
               <Upload className="size-6 text-muted-foreground" />
@@ -390,7 +399,7 @@ export function LibraryCard({
     <div
       ref={attachReveal}
       data-sel-id={a.id}
-      className="group flex flex-col gap-1.5"
+      className="group flex flex-col"
       draggable
       onDragStart={(e) => {
         setLibraryDragData(e, a);
@@ -492,18 +501,11 @@ export function LibraryCard({
             </Button>
           )}
         </div>
-        {a.type === "video" && (
-          <span className="absolute bottom-1.5 left-1.5 text-white/90">
-            <Film className="size-3.5 drop-shadow" />
-          </span>
-        )}
-        {a.type === "image" && (
-          <span className="absolute bottom-1.5 left-1.5 text-white/90">
-            <ImageIcon className="size-3.5 drop-shadow" />
-          </span>
-        )}
+        <CopyNameLabel
+          name={a.name}
+          className="absolute bottom-1.5 left-1.5 max-w-[70%] rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm"
+        />
       </div>
-      <CopyNameLabel name={a.name} className="px-0.5 text-xs text-muted-foreground" />
     </div>
   );
 }
