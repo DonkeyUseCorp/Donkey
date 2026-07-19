@@ -30,7 +30,6 @@ import { useExport } from "@/cut/lib/exportStore";
 import {
   addLibraryAssetToProject,
   addTemplateToProject,
-  createLibraryFolder,
   deleteFromLibrary,
   deleteLibraryFolder,
   deleteTemplate,
@@ -734,17 +733,13 @@ function LibraryPanel({ projectId }: { projectId: string }) {
             onDropOut={(ids) => ids.forEach((id) => void move(id, null))}
           />
         </div>
-      ) : all.length > 0 || folders.length > 0 ? (
+      ) : folders.length > 0 ? (
         <div className="shrink-0 px-3.5">
           <FolderShelf
             folders={folders}
             mime={LIBRARY_MOVE_MIME}
             statOf={(id) => ({ count: all.filter((a) => (a.folderId ?? null) === id).length })}
             onOpen={(id) => setOpenFolder(id)}
-            onCreate={async (name) => {
-              const f = await createLibraryFolder(name);
-              setFolders((prev) => [...prev, f]);
-            }}
             onRename={async (id, name) => {
               setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
               await renameLibraryFolder(id, name).catch(() => void reload());

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Folder, FolderPlus, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Folder, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -196,7 +196,8 @@ export function FolderCrumb({
 }
 
 /** The desktop-style folder shelf at the root: each folder as a blue folder
- * icon, a drop target for dragged items, plus a dashed "New folder" tile. */
+ * icon and a drop target for dragged items. Folder creation is driven by the
+ * host (e.g. a header button) through `creating`/`onCreatingChange`. */
 export function FolderShelf<F extends DeskFolder>({
   folders,
   statOf,
@@ -207,21 +208,19 @@ export function FolderShelf<F extends DeskFolder>({
   onDelete,
   onDropIds,
   onDropFiles,
-  creating: creatingProp,
+  creating = false,
   onCreatingChange,
 }: {
   folders: F[];
   statOf: (id: string) => { count: number; size?: number };
   mime: string;
   onOpen: (id: string) => void;
-  onCreate: (name: string) => void | Promise<void>;
+  onCreate?: (name: string) => void | Promise<void>;
   onRename: (id: string, name: string) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
   onDropIds: (ids: string[], folderId: string) => void;
   /** Desktop files dropped onto a folder tile — dropped straight into it. */
   onDropFiles?: (files: FileList, folderId: string) => void;
-  /** When provided, folder creation is driven by the host (e.g. a header
-   * button) and the shelf drops its own dashed "New folder" tile. */
   creating?: boolean;
   onCreatingChange?: (creating: boolean) => void;
 }) {
@@ -230,18 +229,14 @@ export function FolderShelf<F extends DeskFolder>({
   const dragTypes = (e: React.DragEvent) => Array.from(e.dataTransfer.types);
   const accepts = (e: React.DragEvent) =>
     dragTypes(e).includes(mime) || (!!onDropFiles && dragTypes(e).includes("Files"));
-  const [creatingLocal, setCreatingLocal] = useState(false);
-  const hostControlled = creatingProp !== undefined;
-  const creating = creatingProp ?? creatingLocal;
-  const setCreating = onCreatingChange ?? setCreatingLocal;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [over, setOver] = useState<string | null>(null);
-  // Every close path clears the draft, so the next create (including one
-  // triggered by the host) opens with an empty name field.
+  // Every close path clears the draft, so the next create opens with an empty
+  // name field.
   const closeCreate = () => {
     setDraft("");
-    setCreating(false);
+    onCreatingChange?.(false);
   };
   const closeRename = () => {
     setDraft("");
@@ -249,17 +244,17 @@ export function FolderShelf<F extends DeskFolder>({
   };
 
   return (
-    <div className="mb-7 flex flex-wrap gap-2" data-no-marquee>
+    <div className="-ml-2 mb-7 flex flex-wrap gap-2" data-no-marquee>
       {folders.map((f) => {
         const s = statOf(f.id);
         const isOver = over === f.id;
         return editingId === f.id ? (
-          <div key={f.id} className="flex w-[92px] flex-col items-center gap-1 pt-1.5">
+          <div key={f.id} className="flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5">
             <FolderGlyph className="size-[40px]" />
             <Input
               autoFocus
               value={draft}
-              className="h-6 w-full text-center text-[11px]"
+              className="h-6 w-full text-[11px]"
               onChange={(e) => setDraft(e.target.value)}
               onBlur={closeRename}
               onKeyDown={(e) => {
@@ -273,7 +268,7 @@ export function FolderShelf<F extends DeskFolder>({
         ) : (
           <div
             key={f.id}
-            className="group/f relative flex w-[92px] cursor-pointer flex-col items-center rounded-xl px-2 py-1.5 text-center transition-colors hover:bg-muted/60"
+            className="group/f relative flex w-[92px] cursor-pointer flex-col items-start rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
             onClick={() => onOpen(f.id)}
             onDoubleClick={() => {
               setDraft(f.name);
@@ -343,37 +338,24 @@ export function FolderShelf<F extends DeskFolder>({
         );
       })}
 
-      {creating ? (
-        <div className="flex w-[92px] flex-col items-center gap-1 pt-1.5">
+      {creating && (
+        <div className="flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5">
           <FolderGlyph className="size-[40px] opacity-60" />
           <Input
             autoFocus
             value={draft}
             placeholder="Name"
-            className="h-6 w-full text-center text-[11px]"
+            className="h-6 w-full text-[11px]"
             onChange={(e) => setDraft(e.target.value)}
             onBlur={closeCreate}
             onKeyDown={(e) => {
               if (e.key === "Enter" && draft.trim()) {
-                void onCreate(draft.trim());
+                void onCreate?.(draft.trim());
                 closeCreate();
               } else if (e.key === "Escape") closeCreate();
             }}
           />
         </div>
-      ) : hostControlled ? null : (
-        <button
-          className="flex w-[92px] flex-col items-center rounded-xl px-2 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-          onClick={() => {
-            setDraft("");
-            setCreating(true);
-          }}
-        >
-          <span className="grid h-[38px] w-[56px] place-items-center rounded-lg border-2 border-dashed border-border">
-            <FolderPlus className="size-5" />
-          </span>
-          <span className="mt-0.5 text-xs">New folder</span>
-        </button>
       )}
     </div>
   );
