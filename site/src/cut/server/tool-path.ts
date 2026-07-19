@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
-import { findOnPath } from "../server/util";
+import { exists, findOnPath } from "./util";
 
 /** Directories a GUI-spawned process misses but user CLIs commonly live in. */
 const COMMON_BIN_DIRS = [
@@ -30,14 +30,15 @@ function loginShellPath(): Promise<string | null> {
   });
 }
 
-/**
- * The engine is spawned by an app, not a terminal, so it inherits a bare
- * PATH. Rebuild it: tools shipped beside the engine binary first (they
- * version with the app), then the app's bundled tools (bundled tool always
- * wins), then the user's login-shell PATH, common install dirs, and whatever
- * was already there.
- */
-export async function widenPath(): Promise<void> {
+/** The repo's vendor/donkey-tools when running from a source checkout (the
+ * Next dev server and `engine:dev` both run with cwd = site/). The packaged
+ * app has no such directory, so this resolves to nothing there. */
+async function devVendorToolsDir(): Promise<string | null> {
+  const dir = path.resolve(process.cwd(), "..", "vendor", "donkey-tools");
+  return (await exists(dir)) ? dir : null;
+}
+
+async function widenPath(): Promise<void> {
   const parts: string[] = [];
   const push = (p?: string | null) => {
     if (!p) return;
@@ -47,10 +48,26 @@ export async function widenPath(): Promise<void> {
   };
   push(path.dirname(process.execPath));
   push(process.env.DONKEY_CUT_TOOLS_DIR);
+  push(await devVendorToolsDir());
   push(await loginShellPath());
   for (const dir of COMMON_BIN_DIRS) push(dir);
   push(process.env.PATH);
   process.env.PATH = parts.join(":");
+}
+
+let widened: Promise<void> | null = null;
+
+/**
+ * Rebuild PATH so bundled tools (yt-dlp, ffmpeg, …) resolve identically on
+ * every Cut API surface: tools shipped beside the engine binary first (they
+ * version with the app), then the app's bundled tools (bundled tool always
+ * wins), the repo's vendor tools in dev, the user's login-shell PATH, common
+ * install dirs, and whatever was already there. Memoized — the engine runs it
+ * at startup, the Next dev server on the first API request.
+ */
+export function ensureToolPath(): Promise<void> {
+  widened ??= widenPath();
+  return widened;
 }
 
 /** First executable named `name` on the (widened) PATH, or null. */

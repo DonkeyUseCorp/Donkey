@@ -1,4 +1,5 @@
 import { hostedApiBlock } from "../local-only";
+import { ensureToolPath } from "../tool-path";
 import { matchCutRoute } from "./routes";
 
 /**
@@ -11,6 +12,10 @@ import { matchCutRoute } from "./routes";
 export async function cutCatchAll(req: Request): Promise<Response> {
   const blocked = hostedApiBlock();
   if (blocked) return blocked;
+
+  // The dev server spawns tools (yt-dlp, ffmpeg, …) in-process, so it needs
+  // the same widened PATH the packaged engine builds at startup.
+  await ensureToolPath();
 
   const { pathname } = new URL(req.url);
   const match = matchCutRoute(req.method, pathname);

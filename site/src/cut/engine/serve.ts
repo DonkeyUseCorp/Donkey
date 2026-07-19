@@ -3,8 +3,8 @@ import { Readable } from "node:stream";
 
 import { allowedOrigin, corsHeaders, preflightHeaders } from "../server/cors";
 import { matchCutRoute } from "../server/http/routes";
+import { ensureToolPath, resolveOnPath } from "../server/tool-path";
 import { enginePort } from "./config";
-import { resolveOnPath, widenPath } from "./paths";
 
 // Throws (and exits with a clear message) on a bad DONKEY_CUT_PORT rather than
 // binding a random port the client would never find.
@@ -73,7 +73,7 @@ function exitWithParent() {
 
 async function start() {
   exitWithParent();
-  await widenPath();
+  await ensureToolPath();
 
   // The Agent SDK can't resolve its built-in CLI from inside a compiled
   // binary; point it at the user's own Claude Code install (their login is

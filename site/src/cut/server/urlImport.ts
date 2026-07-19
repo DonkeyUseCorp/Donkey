@@ -8,7 +8,7 @@ import { mediaDir, mediaPath as projectMediaPath, readProject } from "./projects
 import { uniqueName } from "./util";
 
 // Download a media URL (TikTok, YouTube, Instagram, …) with the bundled
-// yt-dlp. The engine finds yt-dlp on its widened PATH exactly like ffmpeg.
+// yt-dlp, resolved from the widened PATH (tool-path.ts) exactly like ffmpeg.
 
 const MEDIA_EXT = /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|aac|wav|ogg|flac)$/i;
 
