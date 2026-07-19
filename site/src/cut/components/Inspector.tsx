@@ -24,7 +24,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
-import { baseClips, getClipSpans, useEditor, type EditorState } from "@/cut/lib/store";
+import { baseClips, clipWindow, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import {
   parseNumberInput,
@@ -177,13 +177,7 @@ export function Inspector() {
   return (
     <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-border bg-card">
       {clip ? (
-        // The base row (track 0) carries transitions and the sequence controls;
-        // a layer clip gets the compositing panel (track, framing, layout).
-        clip.track === 0 ? (
-          <ClipPanel key={clip.id} clip={clip} />
-        ) : (
-          <LayerClipPanel key={clip.id} clip={clip} />
-        )
+        <ClipPanel key={clip.id} clip={clip} />
       ) : audio ? (
         <AudioPanel key={audio.id} clip={audio} />
       ) : overlay ? (
@@ -325,54 +319,6 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const [xfadeDraft, setXfadeDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
   const volume = volumeDraft ?? clip.volume ?? 1;
-  // Subtitle cues overlapping this clip's timeline span, for the per-clip
-  // readout. A selector rather than a snapshot so the generate button reads
-  // fresh ids after it auto-transcribes the cut.
-  const selectClipCueIds = useCallback(
-    (s: EditorState) => {
-      const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
-      if (!sp) return [];
-      return s.subtitles.cues
-        .filter((c) => c.text.trim() && c.end > sp.start && c.start < sp.start + sp.len)
-        .map((c) => c.id);
-    },
-    [clip.id]
-  );
-  const ensureClipCues = useCallback(
-    () => useEditor.getState().generateClipSubtitles(clip.id),
-    [clip.id]
-  );
-  // Generated voiceover clips overlapping this clip's span — the "Generated
-  // audio" slider drives them all, so clip sound and voiceover balance from one
-  // panel. Same joined-string trick as the cue ids for reference stability.
-  const [genVolDraft, setGenVolDraft] = useState<number | null>(null);
-  const genCk = useSliderCheckpoint();
-  const genAudioKey = useEditor((s) => {
-    const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
-    if (!sp) return "";
-    // AI-voice audio regardless of where it was made: the Audio panel tags
-    // voiceovers, the chat tags its own — both are voice over this clip.
-    const voiceAssets = new Set(
-      s.assets
-        .filter((a) => a.origin === "voiceover" || (a.origin === "chat" && a.type === "audio"))
-        .map((a) => a.id)
-    );
-    return s.audioClips
-      .filter((a) => {
-        const len = (a.out - a.in) / (a.speed && a.speed > 0 ? a.speed : 1);
-        return (
-          voiceAssets.has(a.assetId) && a.start < sp.start + sp.len && a.start + len > sp.start
-        );
-      })
-      .map((a) => a.id)
-      .join("\n");
-  });
-  const genAudioIds = useMemo(() => (genAudioKey ? genAudioKey.split("\n") : []), [genAudioKey]);
-  const genVolStore = useEditor((s) => {
-    const first = s.audioClips.find((a) => a.id === genAudioIds[0]);
-    return first ? first.volume : 1;
-  });
-  const genVol = genVolDraft ?? genVolStore;
   const speed = speedDraft ?? clip.speed ?? 1;
   const xfade = xfadeDraft ?? clip.transition ?? 0;
   const speedLen = (clip.out - clip.in) / (speed > 0 ? speed : 1);
@@ -419,6 +365,22 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               onClick={() => useEditor.getState().setClipTrim(clip.id, 0, maxOut)}
             />
           )}
+        </Row>
+        <Row label="Starts at">
+          <ScrubValue
+            label="Starts at"
+            value={clip.start}
+            min={0}
+            max={Infinity}
+            step={0.1}
+            keyStep={1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => {
+              updateClip(clip.id, { start: Math.max(0, v) });
+              useEditor.getState().sortClips();
+            }}
+          />
         </Row>
         <Row label="Speed">
           <Slider
@@ -645,59 +607,117 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
           rect={rectOf(clip)}
           onPick={(frame, fit) => updateClip(clip.id, { frame, fit })}
         />
-        <div className="mt-2 flex flex-col gap-1 border-t border-border pt-3">
-          <GenerateSubtitlesAudio
-            selectCueIds={selectClipCueIds}
-            ensureCues={ensureClipCues}
-            label="Generate audio for clip"
-          />
-          {genAudioIds.length > 0 && (
-            <Row label="Volume">
-              <Slider
-                className="clip-gen-volume data-horizontal:w-24"
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={genVol}
-                onValueChange={(v) => {
-                  genCk.begin();
-                  setGenVolDraft(Number(v));
-                  const s = useEditor.getState();
-                  genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: Number(v) }));
-                }}
-                onValueCommitted={() => {
-                  genCk.end();
-                  setGenVolDraft(null);
-                }}
-              />
-              <ScrubValue
-                label="Generated audio volume"
-                className="w-9 text-muted-foreground"
-                value={genVol}
-                min={0}
-                max={1.5}
-                step={0.05}
-                format={formatPercent}
-                parse={parsePercentInput}
-                onScrub={(v) => {
-                  genCk.begin();
-                  setGenVolDraft(v);
-                  const s = useEditor.getState();
-                  genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: v }));
-                }}
-                onCommit={(v) => {
-                  genCk.begin();
-                  const s = useEditor.getState();
-                  genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: v }));
-                  genCk.end();
-                  setGenVolDraft(null);
-                }}
-              />
-            </Row>
-          )}
-        </div>
+        <ClipGeneratedAudio clip={clip} />
       </div>
     </>
+  );
+}
+
+/** Per-clip generated-audio block: the voice picker, "Generate audio for clip"
+ * (which transcribes just this clip when it has no cues yet), and one volume
+ * slider driving the voiceovers laid over the clip. Shared by the base-row and
+ * layer clip panels. */
+function ClipGeneratedAudio({ clip }: { clip: VideoClip }) {
+  // Subtitle cues overlapping this clip's timeline span, for the per-clip
+  // readout. A selector rather than a snapshot so the generate button reads
+  // fresh ids after it auto-transcribes the cut.
+  const selectClipCueIds = useCallback(
+    (s: EditorState) => {
+      const sp = clipWindow(s.clips, s.assets, clip.id);
+      if (!sp) return [];
+      return s.subtitles.cues
+        .filter((c) => c.text.trim() && c.end > sp.start && c.start < sp.start + sp.len)
+        .map((c) => c.id);
+    },
+    [clip.id]
+  );
+  const ensureClipCues = useCallback(
+    () => useEditor.getState().generateClipSubtitles(clip.id),
+    [clip.id]
+  );
+  // Generated voiceover clips overlapping this clip's span — the "Generated
+  // audio" slider drives them all, so clip sound and voiceover balance from one
+  // panel. Same joined-string trick as the cue ids for reference stability.
+  const [genVolDraft, setGenVolDraft] = useState<number | null>(null);
+  const genCk = useSliderCheckpoint();
+  const genAudioKey = useEditor((s) => {
+    const sp = clipWindow(s.clips, s.assets, clip.id);
+    if (!sp) return "";
+    // AI-voice audio regardless of where it was made: the Audio panel tags
+    // voiceovers, the chat tags its own — both are voice over this clip.
+    const voiceAssets = new Set(
+      s.assets
+        .filter((a) => a.origin === "voiceover" || (a.origin === "chat" && a.type === "audio"))
+        .map((a) => a.id)
+    );
+    return s.audioClips
+      .filter((a) => {
+        const len = (a.out - a.in) / (a.speed && a.speed > 0 ? a.speed : 1);
+        return (
+          voiceAssets.has(a.assetId) && a.start < sp.start + sp.len && a.start + len > sp.start
+        );
+      })
+      .map((a) => a.id)
+      .join("\n");
+  });
+  const genAudioIds = useMemo(() => (genAudioKey ? genAudioKey.split("\n") : []), [genAudioKey]);
+  const genVolStore = useEditor((s) => {
+    const first = s.audioClips.find((a) => a.id === genAudioIds[0]);
+    return first ? first.volume : 1;
+  });
+  const genVol = genVolDraft ?? genVolStore;
+  return (
+    <div className="mt-2 flex flex-col gap-1 border-t border-border pt-3">
+      <GenerateSubtitlesAudio
+        selectCueIds={selectClipCueIds}
+        ensureCues={ensureClipCues}
+        label="Generate audio for clip"
+      />
+      {genAudioIds.length > 0 && (
+        <Row label="Volume">
+          <Slider
+            className="clip-gen-volume data-horizontal:w-24"
+            min={0}
+            max={1.5}
+            step={0.05}
+            value={genVol}
+            onValueChange={(v) => {
+              genCk.begin();
+              setGenVolDraft(Number(v));
+              const s = useEditor.getState();
+              genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: Number(v) }));
+            }}
+            onValueCommitted={() => {
+              genCk.end();
+              setGenVolDraft(null);
+            }}
+          />
+          <ScrubValue
+            label="Generated audio volume"
+            className="w-9 text-muted-foreground"
+            value={genVol}
+            min={0}
+            max={1.5}
+            step={0.05}
+            format={formatPercent}
+            parse={parsePercentInput}
+            onScrub={(v) => {
+              genCk.begin();
+              setGenVolDraft(v);
+              const s = useEditor.getState();
+              genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: v }));
+            }}
+            onCommit={(v) => {
+              genCk.begin();
+              const s = useEditor.getState();
+              genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: v }));
+              genCk.end();
+              setGenVolDraft(null);
+            }}
+          />
+        </Row>
+      )}
+    </div>
   );
 }
 
@@ -910,139 +930,6 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             checked={!!clip.hidden}
             onCheckedChange={(v) => useEditor.getState().updateAudio(clip.id, { hidden: v })}
           />
-        </Row>
-      </div>
-    </>
-  );
-}
-
-function LayerClipPanel({ clip }: { clip: VideoClip }) {
-  const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
-  const update = useEditor((s) => s.updateOverlayClip);
-  const updateTransient = useEditor((s) => s.updateOverlayClipTransient);
-  const ck = useSliderCheckpoint();
-  const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
-  const len = (clip.out - clip.in) / speed;
-  const maxOut = asset && asset.type !== "image" ? asset.duration : Infinity;
-  const setLayer = (patch: Partial<VideoClip>) => {
-    ck.begin();
-    updateTransient(clip.id, patch);
-  };
-  const commitLayer = (patch: Partial<VideoClip>) => {
-    setLayer(patch);
-    ck.end();
-  };
-  return (
-    <>
-      <PanelTitle>Video clip</PanelTitle>
-      <div className="flex flex-col gap-1 px-3.5 pb-4">
-        <div className="mb-1.5 flex items-baseline justify-between gap-2 border-b border-border pb-2.5">
-          <div className="truncate text-xs font-medium" title={asset?.name}>
-            {asset?.name}
-          </div>
-          <Value className="shrink-0 text-muted-foreground">{formatTime(len)}</Value>
-        </div>
-        <Row label="Trim">
-          <ScrubValue
-            label="Trim start"
-            value={clip.in}
-            min={0}
-            max={clip.out - MIN_TRIM}
-            step={0.1}
-            keyStep={1}
-            format={formatTime}
-            parse={parseTimeInput}
-            onCommit={(v) => commitLayer({ in: v })}
-          />
-          <Value className="text-muted-foreground">–</Value>
-          <ScrubValue
-            label="Trim end"
-            value={clip.out}
-            min={clip.in + MIN_TRIM}
-            max={maxOut}
-            step={0.1}
-            keyStep={1}
-            format={formatTime}
-            parse={parseTimeInput}
-            onCommit={(v) => commitLayer({ out: v })}
-          />
-          {Number.isFinite(maxOut) && (clip.in > 1e-3 || clip.out < maxOut - 1e-3) && (
-            <ResetButton
-              title="Reset trim"
-              onClick={() => commitLayer({ in: 0, out: maxOut })}
-            />
-          )}
-        </Row>
-        <Row label="Starts at">
-          <ScrubValue
-            label="Starts at"
-            value={clip.start}
-            min={0}
-            max={Infinity}
-            step={0.1}
-            keyStep={1}
-            format={formatTime}
-            parse={parseTimeInput}
-            onCommit={(v) => commitLayer({ start: v })}
-          />
-        </Row>
-        <Row label="Speed">
-          <Slider
-            className="layer-speed data-horizontal:w-24"
-            min={SPEED_MIN}
-            max={SPEED_MAX}
-            step={0.05}
-            value={speed}
-            onValueChange={(v) => {
-              ck.begin();
-              const n = Number(v);
-              updateTransient(clip.id, { speed: Math.abs(n - 1) < 1e-4 ? undefined : n });
-            }}
-            onValueCommitted={ck.end}
-          />
-          <ScrubValue
-            label="Speed"
-            className="w-9 text-muted-foreground"
-            value={speed}
-            min={SPEED_FLOOR}
-            max={Infinity}
-            step={0.05}
-            format={formatSpeed}
-            parse={parseSpeedInput}
-            onScrub={(v) => setLayer({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
-            onCommit={(v) => commitLayer({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
-          />
-          {Math.abs(speed - 1) > 1e-4 && (
-            <ResetButton title="Reset speed" onClick={() => commitLayer({ speed: undefined })} />
-          )}
-        </Row>
-        <LayoutButtons
-          rect={rectOf(clip)}
-          onPick={(frame, fit) => update(clip.id, { frame, fit })}
-        />
-        <Row label="Framing">
-          <div className="flex rounded-lg border border-input p-0.5">
-            {(["fit", "fill"] as const).map((mode) => (
-              <button
-                key={mode}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
-                  (clip.fit ?? "fit") === mode
-                    ? "bg-neutral-900 text-white"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => update(clip.id, { fit: mode })}
-              >
-                {mode === "fit" ? "Fit" : "Fill"}
-              </button>
-            ))}
-          </div>
-        </Row>
-        <Row label="Mute audio">
-          <Switch checked={clip.muted} onCheckedChange={(v) => update(clip.id, { muted: v })} />
-        </Row>
-        <Row label="Hidden">
-          <Switch checked={!!clip.hidden} onCheckedChange={(v) => update(clip.id, { hidden: v })} />
         </Row>
       </div>
     </>

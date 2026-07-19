@@ -238,6 +238,7 @@ async function buildExportForm(
       // covers what's below" branch fires — normalizing to "fit" defeated it.
       fit: c.fit,
       muted: c.muted,
+      volume: c.volume,
       speed: c.speed,
       image: assetById.get(c.assetId)!.type === "image",
     }));

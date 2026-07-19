@@ -173,7 +173,7 @@ const overlayClipAdapter: LaneAdapter<VideoClip> = {
   multiLane: false,
   raws: (s) => overlayLayers(s.clips),
   view: (c) => ({ id: c.id, start: c.start, len: clipLen(c), lane: c.track }),
-  apply: (patches) => useEditor.getState().updateOverlayClipsTransient(patches),
+  apply: (patches) => useEditor.getState().updateClipsTransient(patches),
   movePatch: (c, start) => ({ id: c.id, patch: { start } }),
   trimLeftPatch: (c, newStart) => ({
     id: c.id,

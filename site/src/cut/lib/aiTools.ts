@@ -327,7 +327,7 @@ export async function runAiTool(
       if (!id) throw new ToolError("Could not create the overlay clip.");
       // Same undo step as the add: the layout rides the transient patch.
       if (typeof input.layout === "string")
-        cur.updateOverlayClipTransient(id, layoutPatch(input.layout));
+        cur.updateClipTransient(id, layoutPatch(input.layout));
       const c = useEditor.getState().clips.find((x) => x.id === id)!;
       return {
         id: c.id,
@@ -371,7 +371,7 @@ export async function runAiTool(
       if (input.fit === "fit" || input.fit === "fill") patch.fit = input.fit;
       if (isNum(input.speed)) patch.speed = Math.max(SPEED_FLOOR, input.speed);
       if (Object.keys(patch).length === 0) throw new ToolError("Nothing to change.");
-      s.updateOverlayClip(c.id, patch);
+      s.updateClip(c.id, patch);
       const next = useEditor.getState().clips.find((x) => x.id === c.id)!;
       return {
         id: next.id,
@@ -417,10 +417,6 @@ export async function runAiTool(
       const id = input.clipId ? String(input.clipId) : s.selection?.kind === "clip" ? s.selection.id : null;
       if (!id) throw new ToolError("Pass clipId or select a video clip first.");
       const clip = requireItem(s.clips, id, "video clip");
-      // detachAudio lifts sound off the base sequence; a layer clip has no
-      // span there and the store would silently do nothing.
-      if (clip.track !== 0)
-        throw new ToolError("That clip is on an overlay track — detach works on timeline (track 0) clips.");
       if (clip.muted) throw new ToolError("That clip's audio is muted — nothing to detach.");
       s.select({ kind: "clip", id: clip.id });
       s.detachAudio();

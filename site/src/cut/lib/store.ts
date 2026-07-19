@@ -199,9 +199,6 @@ export interface EditorState {
    * and push whole lanes at a time (one bulk patcher per lane-track kind). */
   updateOverlaysTransient: (patches: { id: string; patch: Partial<TextOverlay> }[]) => void;
   updateAudiosTransient: (patches: { id: string; patch: Partial<AudioClip> }[]) => void;
-  /** Bulk-patch layer (non-base-track) clips in one commit — the lane
-   * coordinator parts and pushes a whole track at a time. */
-  updateOverlayClipsTransient: (patches: { id: string; patch: Partial<VideoClip> }[]) => void;
   updateCuesTransient: (patches: { id: string; patch: Partial<SubtitleCue> }[]) => void;
   updateClipsTransient: (patches: { id: string; patch: Partial<VideoClip> }[]) => void;
   updateClipTransient: (id: string, patch: Partial<VideoClip>) => void;
@@ -220,8 +217,6 @@ export interface EditorState {
    * Inserting a track renumbers the ones above it; dropping onto track 0 lands
    * free-positioned at the drop time. Owns its own history. */
   dropVideoClip: (id: string, place: VideoTrackPlacement, start: number) => void;
-  updateOverlayClip: (id: string, patch: Partial<VideoClip>) => void;
-  updateOverlayClipTransient: (id: string, patch: Partial<VideoClip>) => void;
   /** iMovie "Detach Audio": lift the selected clip's sound onto the
    * soundtrack track (and mute the clip) so it can be cut independently. */
   detachAudio: () => void;
@@ -1064,17 +1059,6 @@ export const useEditor = create<EditorState>((set, get) => {
         };
       }),
 
-    updateOverlayClipsTransient: (patches) =>
-      set((s) => {
-        const byId = new Map(patches.map((p) => [p.id, p.patch]));
-        return {
-          clips: s.clips.map((c) => {
-            const patch = byId.get(c.id);
-            return patch ? { ...c, ...patch } : c;
-          }),
-        };
-      }),
-
     updateCuesTransient: (patches) =>
       set((s) => {
         const byId = new Map(patches.map((p) => [p.id, p.patch]));
@@ -1220,22 +1204,12 @@ export const useEditor = create<EditorState>((set, get) => {
       });
     },
 
-    updateOverlayClip: (id, patch) => {
-      push();
-      get().updateOverlayClipTransient(id, patch);
-    },
-
-    updateOverlayClipTransient: (id, patch) =>
-      set((s) => ({
-        clips: s.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)),
-      })),
-
     detachAudio: () => {
       const { clips, assets, selection } = get();
       if (selection?.kind !== "clip") return;
       const clip = clips.find((c) => c.id === selection.id);
       if (!clip || clip.muted) return; // no sound to detach
-      const span = getClipSpans(clips, assets).find((sp) => sp.clip.id === clip.id);
+      const span = clipWindow(clips, assets, clip.id);
       if (!span) return;
       push();
       const audio: AudioClip = {
@@ -1785,7 +1759,7 @@ export const useEditor = create<EditorState>((set, get) => {
         throw new Error("Subtitles are already generating — try again in a moment.");
       }
       const projectId = s.projectId;
-      const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clipId);
+      const sp = clipWindow(s.clips, s.assets, clipId);
       if (!sp) throw new Error("The clip is no longer on the timeline.");
       const lane = s.subtitleLane;
       const epoch = laneEpoch;
@@ -2503,6 +2477,24 @@ export function getClipSpans(
     spans.push({ clip, asset, start: clip.start, len, transitionOut: overlap });
   }
   return spans;
+}
+
+/** One video clip's timeline window with its asset, wherever the clip lives:
+ * track-0 clips read theirs off the span fold, layer clips straight from their
+ * own placement. Null when the clip or its asset is gone. */
+export function clipWindow(
+  clips: VideoClip[],
+  assets: MediaAsset[],
+  clipId: string
+): { clip: VideoClip; asset: MediaAsset; start: number; len: number } | null {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip) return null;
+  if (clip.track === 0) {
+    const sp = getClipSpans(clips, assets).find((x) => x.clip.id === clipId);
+    return sp ? { clip: sp.clip, asset: sp.asset, start: sp.start, len: sp.len } : null;
+  }
+  const asset = assets.find((a) => a.id === clip.assetId);
+  return asset ? { clip, asset, start: clip.start, len: clipLen(clip) } : null;
 }
 
 /** End of video track 0: where its last clip runs out (clips are free-placed,

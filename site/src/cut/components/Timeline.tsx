@@ -1994,7 +1994,7 @@ function OverlayClipView({
         <MuteChip
           muted={clip.muted}
           className="bottom-1 left-1"
-          onToggle={() => useEditor.getState().updateOverlayClip(clip.id, { muted: !clip.muted })}
+          onToggle={() => useEditor.getState().updateClip(clip.id, { muted: !clip.muted })}
         />
       )}
       {(clip.speed ?? 1) !== 1 && (
@@ -2009,7 +2009,7 @@ function OverlayClipView({
       <HideChip
         hidden={!!clip.hidden}
         className="bottom-1 right-2"
-        onToggle={() => useEditor.getState().updateOverlayClip(clip.id, { hidden: !clip.hidden })}
+        onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
       />
       <span
         className={cn(trimHandle, "tl-trim-l left-0")}

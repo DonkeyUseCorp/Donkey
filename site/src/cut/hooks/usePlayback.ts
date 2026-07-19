@@ -353,11 +353,7 @@ class Engine {
   }
 
   private overlayVideoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
-    const had = this.overlayEls.get(clip.id);
-    const el = this.elFor(this.overlayEls, clip.id, asset);
-    // Overlay audio is mixed on export, not previewed here.
-    if (el !== had && !isImageEl(el)) el.muted = true;
-    return el;
+    return this.elFor(this.overlayEls, clip.id, asset);
   }
 
   private clearCanvas() {
@@ -432,6 +428,14 @@ class Engine {
     const target = clip.in + Math.max(0, t - clip.start) * speed;
     const tol = play ? 0.34 : 0.05;
     if (Math.abs(el.currentTime - target) > tol && !el.seeking) el.currentTime = target;
+    // Overlay audio previews like the export mixes it: the clip's own volume,
+    // ducked under a live voiceover, silent when muted. (The tick dims it
+    // further with the project fade.)
+    el.muted = !!clip.muted;
+    el.volume = Math.max(
+      0,
+      Math.min(1, (clip.volume ?? 1) * duckGainAt(useEditor.getState().audioClips, t))
+    );
     if (play) {
       if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
     } else if (!el.paused) {
@@ -726,9 +730,14 @@ class Engine {
     // The whole-video fade veils the finished frame and dims the sound —
     // the master's element volume (set by composite) and the soundtrack.
     const fadeGain = this.projectFadeGain(t, total);
-    if (fadeGain < 1 && span) {
-      const mel = this.videoEls.get(span.clip.id);
-      if (mel && !isImageEl(mel)) mel.volume = Math.min(mel.volume, fadeGain);
+    if (fadeGain < 1) {
+      if (span) {
+        const mel = this.videoEls.get(span.clip.id);
+        if (mel && !isImageEl(mel)) mel.volume = Math.min(mel.volume, fadeGain);
+      }
+      for (const el of this.overlayEls.values()) {
+        if (!isImageEl(el)) el.volume = Math.min(el.volume, fadeGain);
+      }
     }
     this.drawProjectFade(fadeGain);
     this.cleanupOverlays(active);

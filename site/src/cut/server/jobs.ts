@@ -62,6 +62,8 @@ export interface ExportSpec {
     frame?: { x: number; y: number; w: number; h: number };
     fit?: "fit" | "fill";
     muted: boolean;
+    /** Gain on the clip's own audio, 0..1.5; absent = 1 (unchanged). */
+    volume?: number;
     speed?: number;
     /** A still image: looped for the clip's length instead of trimmed. */
     image?: boolean;
@@ -663,10 +665,11 @@ async function runExport(job: Job, spec: ExportSpec) {
     );
     if (!oc.muted && audioPresence.get(oc.file)) {
       const tempo = ospeed !== 1 ? `${atempoChain(ospeed)},` : "";
+      const vol = (oc.volume ?? 1) !== 1 ? `volume=${num(oc.volume ?? 1)},` : "";
       const delayMs = Math.max(0, Math.round(oc.start * 1000));
       const lab = `ovs${k}`;
       filters.push(
-        `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}` +
+        `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}${vol}` +
           `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${delayMs}:all=1[${lab}]`
       );
       overlaySoundLabels.push(lab);
