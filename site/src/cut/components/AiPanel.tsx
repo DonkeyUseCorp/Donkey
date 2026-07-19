@@ -93,13 +93,17 @@ interface ChatThread {
 }
 
 const THREAD_LIMIT = 30;
-const threadsKey = () => `cut-ai-threads-${useEditor.getState().projectId ?? "global"}`;
+// Chat history is strictly per project. The keys derive from the route's
+// project id passed down as a prop — never from the editor store, whose
+// projectId still points at the previously open project until loadProject
+// lands, which used to leak one project's chat into another.
+const threadsKey = (projectId: string) => `cut-ai-threads-${projectId}`;
 // The open chat survives hiding the panel — only the + button starts a new one.
-const activeChatKey = () => `cut-ai-active-${useEditor.getState().projectId ?? "global"}`;
+const activeChatKey = (projectId: string) => `cut-ai-active-${projectId}`;
 
-function readThreads(): ChatThread[] {
+function readThreads(projectId: string): ChatThread[] {
   try {
-    const v = JSON.parse(localStorage.getItem(threadsKey()) ?? "[]") as unknown;
+    const v = JSON.parse(localStorage.getItem(threadsKey(projectId)) ?? "[]") as unknown;
     return Array.isArray(v) ? (v as ChatThread[]) : [];
   } catch {
     return [];
@@ -130,7 +134,7 @@ function slimForStorage(list: ChatThread[]): ChatThread[] {
   }));
 }
 
-function writeThreads(list: ChatThread[]) {
+function writeThreads(projectId: string, list: ChatThread[]) {
   // Cap history, but retain any overflow thread that still owns chat media or
   // a working scene run — killing media or work is an explicit act (deleting
   // its thread), never a side effect of the history cap.
@@ -145,7 +149,7 @@ function writeThreads(list: ChatThread[]) {
     if (!keptIds.has(t.id)) useGenScene.getState().killThread(t.id);
   }
   try {
-    localStorage.setItem(threadsKey(), JSON.stringify(slimForStorage(kept)));
+    localStorage.setItem(threadsKey(projectId), JSON.stringify(slimForStorage(kept)));
   } catch {
     // Storage full/blocked — history just won't persist.
   }
@@ -179,7 +183,7 @@ const provider = (id: string): string =>
         ? "test"
         : "codex";
 
-export function AiPanel({ onClose }: { onClose: () => void }) {
+export function AiPanel({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const [info, setInfo] = useState<ModelsInfo | null>(null);
   const signedIn = useSignedIn();
   const [model, setModel] = useState<string>(() =>
@@ -190,11 +194,11 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
   const [activeChat, setActiveChat] = useState<string>(() =>
     typeof window === "undefined"
       ? crypto.randomUUID()
-      : localStorage.getItem(activeChatKey()) ?? crypto.randomUUID()
+      : localStorage.getItem(activeChatKey(projectId)) ?? crypto.randomUUID()
   );
   useEffect(() => {
-    localStorage.setItem(activeChatKey(), activeChat);
-  }, [activeChat]);
+    localStorage.setItem(activeChatKey(projectId), activeChat);
+  }, [activeChat, projectId]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [threads, setThreads] = useState<ChatThread[]>([]);
 
@@ -220,12 +224,12 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
   };
 
   const toggleHistory = () => {
-    if (!historyOpen) setThreads(readThreads());
+    if (!historyOpen) setThreads(readThreads(projectId));
     setHistoryOpen((v) => !v);
   };
 
   const deleteThread = (id: string) => {
-    writeThreads(readThreads().filter((t) => t.id !== id));
+    writeThreads(projectId, readThreads(projectId).filter((t) => t.id !== id));
     setThreads((p) => p.filter((t) => t.id !== id));
     // The thread's chat-only assets go with it; anything placed or filed
     // into Media/Library stays.
@@ -342,6 +346,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
 
       <ChatSession
         key={activeChat}
+        projectId={projectId}
         threadId={activeChat}
         info={mergedInfo}
         model={model}
@@ -354,11 +359,13 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
 /** One chat with the agent. Remounts per active thread; its messages and
  * provider session are restored from the saved thread on open. */
 function ChatSession({
+  projectId,
   threadId,
   info,
   model,
   onModelChange,
 }: {
+  projectId: string;
   threadId: string;
   info: ModelsInfo | null;
   model: string;
@@ -393,11 +400,10 @@ function ChatSession({
   // empty-state intro/suggestions must yield to it so the two don't stack. The
   // card shows in the thread that asked (unowned = pre-chatId runs, shown
   // anywhere), so only that thread suppresses the intro.
-  const sceneProjectId = useEditor((s) => s.projectId);
   const hasSceneRun = useGenScene(
     (s) =>
       !!s.run &&
-      s.run.projectId === sceneProjectId &&
+      s.run.projectId === projectId &&
       (!s.run.chatId || s.run.chatId === threadId)
   );
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
@@ -406,8 +412,6 @@ function ChatSession({
     // into the project on the way, chat-owned so they stay off the Media
     // panel; text files ride as-is).
     (files) => {
-      const projectId = useEditor.getState().projectId;
-      if (!projectId) return;
       void refsFromDroppedFiles(projectId, files, { chatId: threadId }).then((refs) =>
         setAttachments((prev) => refs.reduce(addRefOnce, prev))
       );
@@ -416,7 +420,7 @@ function ChatSession({
   const sessionKeyRef = useRef<string | null>(null);
   // Resume from the saved thread when this id exists in history.
   const [initialThread] = useState<ChatThread | undefined>(() =>
-    typeof window === "undefined" ? undefined : readThreads().find((t) => t.id === threadId)
+    typeof window === "undefined" ? undefined : readThreads(projectId).find((t) => t.id === threadId)
   );
   const providerSessions = useRef<Record<string, string>>({ ...(initialThread?.sessions ?? {}) });
   const modelRef = useRef(model);
@@ -558,8 +562,8 @@ function ChatSession({
         .join("")
         .trim()
         .slice(0, 80) || "New chat";
-    const rest = readThreads().filter((t) => t.id !== threadId);
-    writeThreads([
+    const rest = readThreads(projectId).filter((t) => t.id !== threadId);
+    writeThreads(projectId, [
       {
         id: threadId,
         title,
@@ -569,7 +573,7 @@ function ChatSession({
       },
       ...rest,
     ]);
-  }, [messages, threadId]);
+  }, [messages, threadId, projectId]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

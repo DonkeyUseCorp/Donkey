@@ -39,6 +39,10 @@ export function Editor({
   const back = backTarget(useCutBase(), from, folder);
   const loaded = useEditor((s) => s.loaded);
   const loadError = useEditor((s) => s.loadError);
+  // Until loadProject runs, the store still holds the previously open project;
+  // rendering the editor against it would leak that project's state (chat,
+  // clips, selection) into this route.
+  const stale = useEditor((s) => s.projectId) !== projectId;
   const exportOpen = useEditor((s) => s.exportOpen);
   const aiOpen = useEditor((s) => s.aiOpen);
   // The inspector only earns its column when the selection has a panel to
@@ -379,7 +383,7 @@ export function Editor({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (loadError) {
+  if (loadError && !stale) {
     return (
       <div className="grid h-screen place-items-center">
         <div className="flex flex-col items-center gap-3 text-center">
@@ -395,7 +399,7 @@ export function Editor({
     );
   }
 
-  if (!loaded) {
+  if (!loaded || stale) {
     return (
       <div className="grid h-screen place-items-center text-muted-foreground">
         <Loader2 className="size-5 animate-spin" />
@@ -420,7 +424,13 @@ export function Editor({
         </div>
         <Timeline />
       </div>
-      {aiOpen && <AiPanel onClose={() => useEditor.getState().setAiOpen(false)} />}
+      {aiOpen && (
+        <AiPanel
+          key={projectId}
+          projectId={projectId}
+          onClose={() => useEditor.getState().setAiOpen(false)}
+        />
+      )}
       {exportOpen && <ExportDialog />}
       <ExportStatus />
       <Lightbox />
