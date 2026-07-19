@@ -215,12 +215,21 @@ function MediaCard({ item, asset }: ChatCardProps) {
       {...dragProps(item, asset)}
       onDoubleClick={() => expandRef(item, asset)}
       onMouseEnter={() => {
-        void videoRef.current?.play().catch(() => {});
+        const v = videoRef.current;
+        if (!v) return;
+        v.muted = false;
+        void v.play().catch(() => {
+          // Before any page interaction the browser refuses sound — keep the
+          // silent preview rather than none.
+          v.muted = true;
+          void v.play().catch(() => {});
+        });
       }}
       onMouseLeave={() => {
         const v = videoRef.current;
         if (v) {
           v.pause();
+          v.muted = true;
           v.currentTime = 0.1;
         }
       }}
