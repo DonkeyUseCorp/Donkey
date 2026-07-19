@@ -1,16 +1,28 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CircleDashed, Clapperboard, TriangleAlert, X } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  CircleDashed,
+  Clapperboard,
+  Maximize2,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { refFromAsset } from "../lib/assetRef";
+import { refFromAsset, type AssetRef } from "../lib/assetRef";
 import { lightboxItemFromRef, useLightbox } from "../lib/lightbox";
 import { formatDuration, useGenScene, type SceneRun } from "../lib/genScene";
 import { NO_CREDITS_MESSAGE } from "../lib/generate";
 import { GEN_FPS } from "../lib/genvideo/editorBridge";
 import { useEditor } from "../lib/store";
+import { formatTime } from "../lib/time";
+import type { MediaAsset } from "../lib/types";
 import type { Shot, ShotStatus } from "../lib/genvideo/types";
+import { cn } from "@/lib/utils";
 import { HostedErrorText } from "./hostedError";
+import { scrimIconButton } from "./iconButton";
 import { RefThumb } from "./AssetRefs";
 
 // The brief-to-video progress card, pinned into the chat while a "generate a
@@ -293,28 +305,113 @@ export function SceneActivity({ threadId }: { threadId: string }) {
         const ref = asset ? refFromAsset(asset) : undefined;
         const latest = i === run.feed.length - 1;
         return (
-          <div key={`${f.at}-${i}`} className="flex items-center gap-2">
-            {ref && (
-              <button
-                type="button"
-                title={`${ref.name} — click to view`}
-                className="shrink-0"
-                onClick={() => useLightbox.getState().open(lightboxItemFromRef(ref))}
-              >
-                <RefThumb item={ref} className="size-8 rounded-[4px]" />
-              </button>
-            )}
-            <span
-              className={`min-w-0 flex-1 text-[11px] text-muted-foreground ${
-                latest && inFlight ? "animate-pulse" : ""
-              }`}
-            >
-              {f.text}
-            </span>
-          </div>
+          <FeedEntry
+            key={`${f.at}-${i}`}
+            text={f.text}
+            item={ref}
+            asset={asset}
+            pulse={latest && inFlight}
+          />
         );
       })}
       <div ref={bottomRef} />
+    </div>
+  );
+}
+
+/** One feed line. Clicking the thumbnail expands the media in place — the same
+ * inline tile chat asset cards use — and a second click collapses it back;
+ * the tile's corner button opens the lightbox. */
+function FeedEntry({
+  text,
+  item,
+  asset,
+  pulse,
+}: {
+  text: string;
+  item?: AssetRef;
+  asset?: MediaAsset;
+  pulse: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const inPlace = item?.kind === "image" || item?.kind === "video";
+  const caption = (
+    <span
+      className={`min-w-0 flex-1 text-[11px] text-muted-foreground ${pulse ? "animate-pulse" : ""}`}
+    >
+      {text}
+    </span>
+  );
+
+  if (item && inPlace && expanded) {
+    const ratio =
+      asset?.width && asset?.height
+        ? asset.width / asset.height
+        : item.kind === "image"
+          ? 1
+          : 16 / 10;
+    const width = Math.round(Math.min(248, Math.max(132, 210 * ratio)));
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <div
+          className="group relative cursor-zoom-out overflow-hidden rounded-xl border border-border bg-muted"
+          style={{ width, aspectRatio: ratio }}
+          title={`${item.name} — click to minimize`}
+          onClick={() => setExpanded(false)}
+        >
+          {item.kind === "video" ? (
+            <video
+              src={`${item.url}#t=0.1`}
+              preload="metadata"
+              muted
+              playsInline
+              className="size-full object-cover"
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element -- engine/static file, not Next-optimizable
+            <img src={item.url} alt={item.name} className="size-full object-cover" />
+          )}
+          {item.kind === "video" && item.duration !== undefined && (
+            <span className="absolute right-1.5 bottom-1.5 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9px] text-white tabular-nums">
+              {formatTime(item.duration)}
+            </span>
+          )}
+          <button
+            title="Expand"
+            className={cn(
+              scrimIconButton,
+              "absolute top-1 right-1 opacity-0 transition-opacity group-hover:opacity-100"
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
+              useLightbox.getState().open(lightboxItemFromRef(item));
+            }}
+          >
+            <Maximize2 className="size-3" />
+          </button>
+        </div>
+        {caption}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {item && (
+        <button
+          type="button"
+          title={`${item.name} — click to view`}
+          className="shrink-0"
+          onClick={() =>
+            inPlace
+              ? setExpanded(true)
+              : useLightbox.getState().open(lightboxItemFromRef(item))
+          }
+        >
+          <RefThumb item={item} className="size-8 rounded-[4px]" />
+        </button>
+      )}
+      {caption}
     </div>
   );
 }
