@@ -502,7 +502,7 @@ export function ProjectsHome() {
                 )}
               >
                 <CardPreview project={p} />
-                <span className="absolute bottom-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+                <span className="absolute top-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
                   {p.name}
                 </span>
                 <span className="absolute right-2 bottom-2 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
@@ -520,6 +520,9 @@ export function ProjectsHome() {
                   onMove={(folderId) => void moveProjects([p.id], folderId)}
                   onDelete={() => setDeleting(p)}
                 />
+              </div>
+              <div className="mt-2 px-0.5 text-xs text-muted-foreground">
+                {formatBytes(p.sizeBytes ?? 0)} · edited {formatDate(p.updatedAt)}
               </div>
             </div>
           ))}

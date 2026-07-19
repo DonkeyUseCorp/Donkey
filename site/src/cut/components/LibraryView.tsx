@@ -448,7 +448,7 @@ export function LibraryCard({
           <button
             aria-label="Add to timeline"
             title="Add to timeline"
-            className="absolute top-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 shadow transition-all group-hover:opacity-100 hover:scale-110"
+            className="absolute bottom-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 shadow transition-all group-hover:opacity-100 hover:scale-110"
             onClick={(e) => {
               e.stopPropagation();
               onUse();
@@ -503,7 +503,7 @@ export function LibraryCard({
         </div>
         <CopyNameLabel
           name={a.name}
-          className="absolute bottom-1.5 left-1.5 max-w-[70%] rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm"
+          className="absolute top-1.5 left-1.5 max-w-[70%] rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm"
         />
       </div>
     </div>
