@@ -101,10 +101,16 @@ const STILL_SECONDS = IMAGE_CLIP_SECONDS;
 const laneRail = (top: number, key?: React.Key) => (
   <div
     key={key}
+    data-tl-rail
     className="pointer-events-none absolute h-px bg-border"
     style={{ top, left: -PAD_SIDE, right: -PAD_SIDE }}
   />
 );
+
+/** The resting-track pattern an empty project shows: the same hairline rails
+ * the video rows draw, repeating downward. Shared by the scroll content and
+ * the overscroll underlay so both paint the identical picture. */
+const REST_RAILS = `repeating-linear-gradient(to bottom, transparent 0 ${VIDEO_H + 4}px, var(--border) ${VIDEO_H + 4}px ${VIDEO_H + 5}px, transparent ${VIDEO_H + 5}px ${VIDEO_H + 6}px)`;
 
 /** An asset type that lands as a video clip — footage or a still image. */
 const isClipMedia = (t: string | undefined): t is "video" | "image" =>
@@ -144,6 +150,40 @@ export function Timeline() {
   const fileDropHint = useEditor((s) => s.dropActive === "media");
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+  // The static ruler band behind the scroller follows vertical scroll so it
+  // stays glued under the in-content ruler; overscroll can't move it, so the
+  // band runs unbroken through the bounce. (Horizontal position is moot — the
+  // band is uniform across the full width.)
+  const rulerUnderlayRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    const band = rulerUnderlayRef.current;
+    if (!el || !band) return;
+    const sync = () => {
+      band.style.transform = `translateY(${-el.scrollTop}px)`;
+    };
+    sync();
+    el.addEventListener("scroll", sync);
+    return () => el.removeEventListener("scroll", sync);
+  }, []);
+  // The track rails are content-anchored, so the bounce drags them along and
+  // cuts them off at the content edge just like the ruler. The underlay
+  // repeats each rail as a static full-width line at the same height;
+  // measuring the live rails after every render keeps the copies honest
+  // against whatever rows the current layout (or an active drag) shows.
+  const [railYs, setRailYs] = useState<number[]>([]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const ys = Array.from(
+      el.querySelectorAll<HTMLElement>("[data-tl-rail]"),
+      (r) => Math.round(r.getBoundingClientRect().top - box.top + el.scrollTop)
+    );
+    setRailYs((prev) =>
+      prev.length === ys.length && prev.every((v, i) => v === ys[i]) ? prev : ys
+    );
+  });
   // Measured width of the scroll viewport, so the ruler and tracks always draw
   // end-to-end no matter how wide the window is.
   const [viewportW, setViewportW] = useState(900);
@@ -775,20 +815,42 @@ export function Timeline() {
         </Button>
       </div>
 
-      <div ref={scrollRef} data-tl-scroll className="tl-scroll min-h-0 flex-1 overflow-auto">
-        <div className="flex min-h-full flex-col" style={{ width: contentW + PAD_SIDE * 2 }}>
+      {/* Rubber-band overscroll translates the scroller's content and
+          background wholesale, so the wrapper behind it paints the resting
+          picture the bounce reveals: the card-white ruler band (with its
+          baseline) over the track gray. The scroller stays transparent — the
+          underlay IS the timeline's surface. */}
+      <div className="relative min-h-0 flex-1 bg-muted">
+      <div ref={rulerUnderlayRef} className="pointer-events-none absolute inset-x-0 top-0">
+        <div
+          className="absolute inset-x-0 top-0 border-b border-border bg-card"
+          style={{ height: RULER_H }}
+        />
+        {railYs.map((y, i) => (
+          <div key={i} className="absolute inset-x-0 h-px bg-border" style={{ top: y }} />
+        ))}
+        {total <= 0 && (
+          <div
+            className="absolute inset-x-0"
+            style={{ top: RULER_H, height: timelineH, background: REST_RAILS }}
+          />
+        )}
+      </div>
+      <div
+        ref={scrollRef}
+        data-tl-scroll
+        className="tl-scroll relative h-full overflow-auto overscroll-y-none"
+      >
+        <div
+          className="relative flex min-h-full min-w-full flex-col"
+          style={{ width: contentW + PAD_SIDE * 2 }}
+        >
           <div
             ref={innerRef}
             className="tl-content relative flex-1 pb-2"
             style={{ width: contentW, marginLeft: PAD_SIDE }}
             onPointerDown={deselectIfSelf}
           >
-          {/* The track area under the ruler reads as its own light-gray
-              surface, running edge to edge past the content's side padding. */}
-          <div
-            className="pointer-events-none absolute bottom-0 bg-muted"
-            style={{ top: RULER_H, left: -PAD_SIDE, right: -PAD_SIDE }}
-          />
           {/* An empty project reads as a stack of resting tracks: the same
               hairline rails the video rows draw, repeating to the bottom. */}
           {total <= 0 && (
@@ -798,7 +860,7 @@ export function Timeline() {
                 top: RULER_H,
                 left: -PAD_SIDE,
                 right: -PAD_SIDE,
-                background: `repeating-linear-gradient(to bottom, transparent 0 ${VIDEO_H + 4}px, var(--border) ${VIDEO_H + 4}px ${VIDEO_H + 5}px, transparent ${VIDEO_H + 5}px ${VIDEO_H + 6}px)`,
+                background: REST_RAILS,
               }}
             />
           )}
@@ -1179,6 +1241,7 @@ export function Timeline() {
           </div>
         </div>
       </div>
+      </div>
       {/* Subtle valid-target hint while an OS media drag is over the window:
           a tint and inset ring over the track area, under the toolbar. */}
       {fileDropHint && (
@@ -1341,12 +1404,6 @@ function Ruler({
           </span>
         </div>
       ))}
-      {/* The ruler baseline bleeds past the content's side padding so it runs
-          flush to both window edges, matching the full-width toolbar divider. */}
-      <div
-        className="pointer-events-none absolute bottom-0 h-px bg-border"
-        style={{ left: -PAD_SIDE, right: -PAD_SIDE }}
-      />
     </div>
   );
 }
