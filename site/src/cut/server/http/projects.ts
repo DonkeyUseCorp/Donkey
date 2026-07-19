@@ -22,6 +22,7 @@ import {
   writeProject,
 } from "../projects";
 import { serveFileRange } from "../serveFile";
+import { importUrlToProject } from "../urlImport";
 import { createTranscribeJob, getTranscribeJob, type TranscribeSpec } from "../transcribe";
 import { exists } from "../util";
 
@@ -175,6 +176,17 @@ export const projectsApi = {
       return new Response("Bad request.", { status: 400 });
     }
     return serveFileRange(p, req, { contentType: "video/mp4" });
+  },
+
+  /** Download a media URL straight into the project's media folder. */
+  async importUrl(req: Request, { id }: { id: string }) {
+    try {
+      const { url } = (await req.json()) as { url?: string };
+      if (!url) return err("No URL provided.", 400);
+      return Response.json(await importUrlToProject(id, url));
+    } catch (e) {
+      return caught(e, "Could not import that URL.");
+    }
   },
 
   async uploadMedia(req: Request, { id }: { id: string }) {

@@ -14,13 +14,12 @@ import {
   deleteTemplate,
   fetchLibrary,
   importLibraryAsset,
-  importUrlToLibrary,
   moveLibraryAsset,
   renameLibraryFolder,
   saveAssetToLibrary,
   saveTemplate,
 } from "./library";
-import { enrichAsset, ensurePeaks, importImage, importStockVideo } from "./media";
+import { enrichAsset, ensurePeaks, importImage, importStockVideo, importUrlMedia } from "./media";
 import { refToInlineAudio } from "./refMedia";
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
@@ -892,6 +891,24 @@ export async function runAiTool(
       };
     }
 
+    case "import_url": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const url = String(input.url ?? "").trim();
+      if (!url) throw new ToolError("A URL is required.");
+      // Captured before the download: the media files under the chat that
+      // asked, even if the user switches threads while it downloads.
+      const chatId = chatOwner();
+      const asset = await importUrlMedia(projectId, url);
+      tagChatAsset(asset.id, chatId);
+      return {
+        assetId: asset.id,
+        name: asset.name,
+        kind: asset.type,
+        duration: round2(asset.duration),
+      };
+    }
+
     case "library_list": {
       const lib = await fetchLibrary();
       return {
@@ -1012,12 +1029,6 @@ export async function runAiTool(
         case "delete_template": {
           await deleteTemplate(String(input.id ?? ""));
           return { deleted: true };
-        }
-        case "import_url": {
-          const url = String(input.url ?? "").trim();
-          if (!url) throw new ToolError("A URL is required.");
-          const a = await importUrlToLibrary(url);
-          return { id: a.id, name: a.name, kind: a.type, duration: round2(a.duration) };
         }
         default:
           throw new ToolError(`Unknown action "${String(input.action)}".`);

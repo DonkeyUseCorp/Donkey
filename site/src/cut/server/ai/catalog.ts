@@ -370,6 +370,12 @@ export const AI_TOOLS: AiToolDef[] = [
     }, ["id"]),
   },
   {
+    name: "import_url",
+    description:
+      "Download a media URL — TikTok, YouTube, Instagram Reels, or a direct video/audio link — with the bundled downloader and import it into the project. Free and local. It lands on a card in this chat, and the user drags it from there to the timeline, Media, or the Library; place it yourself (add_clip) only when they asked for it in the cut. A short clip downloads in seconds; a long video can take a couple of minutes.",
+    inputSchema: obj({ url: str("The page or media URL to download") }, ["url"]),
+  },
+  {
     name: "library_list",
     description:
       "List the shared Library — reusable media saved across projects: folders, assets (video/audio/image), and templates (saved arrangements of clips, overlays, titles, and captions). Library items live outside the project: library_add imports an asset, template_add re-materializes a template.",
@@ -408,17 +414,16 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "library_organize",
     description:
-      "Organize the shared Library: create_folder / rename_folder / delete_folder (a deleted folder's assets drop to the root), move_asset files an asset into a folder (omit folder_id for the root), delete_asset / delete_template remove an item, import_url downloads a media URL into the Library. Deletes are permanent — projects keep their own copies, but delete only what the user explicitly asked to remove.",
+      "Organize the shared Library: create_folder / rename_folder / delete_folder (a deleted folder's assets drop to the root), move_asset files an asset into a folder (omit folder_id for the root), delete_asset / delete_template remove an item. Deletes are permanent — projects keep their own copies, but delete only what the user explicitly asked to remove.",
     inputSchema: obj({
       action: {
         type: "string",
-        enum: ["create_folder", "rename_folder", "delete_folder", "move_asset", "delete_asset", "delete_template", "import_url"],
+        enum: ["create_folder", "rename_folder", "delete_folder", "move_asset", "delete_asset", "delete_template"],
         description: "The organize operation",
       },
       name: str("Folder name (create_folder, rename_folder)"),
       folder_id: str("Folder id (rename_folder, delete_folder, move_asset destination — omit for root)"),
       id: str("Library asset or template id (move_asset, delete_asset, delete_template)"),
-      url: str("Media URL to import (import_url)"),
     }, ["action"]),
   },
   {
@@ -711,7 +716,7 @@ subtitles_set_view: showOnVideo (preview + export burn-in), showOnTimeline (ambe
 Caption look: the Subtitles panel offers 10 visual presets (clean, hook, punchy, minimal, editorial, typewriter, block, highlight, bubble, neon), a per-word karaoke highlight with accent overrides, and each track's caption drags to a new spot in the preview. No tool sets the look — direct the user to the panel. captions_generate's clean/hook/punchy choice shapes the caption text it writes; the visual preset is separate.`,
 
   "ai-generation": `# Stock media & AI generation
-Two ways to get footage the user doesn't have: bundled stock (local, free) and hosted generation (signed in, spends credits). Prefer stock when it genuinely fits; generate when the shot needs to be specific.
+Three ways to get footage the user doesn't have: bundled stock (local, free), a URL they point at (import_url downloads TikTok / YouTube / Instagram / direct links, free), and hosted generation (signed in, spends credits). Prefer stock when it genuinely fits; generate when the shot needs to be specific.
 Stock: stock_search browses the bundled catalogs — footage clips and images in 8 categories plus ~20 UGC talking characters — matching prompts, categories, and tags. stock_add imports an item into the project as a chat card; add_to_timeline:true (or a start) also drops it on the timeline when the user asked. In the UI these live in the Video and Image tabs beside the generators; clicking a stock tile seeds the generate panel with its prompt.
 Generation:
 - generate_image(prompt, aspect?, resolution?, reference_asset_ids?, add_to_timeline?, index?): the hosted image model renders the prompt at 16:9, 9:16, or 1:1 (default: project aspect) and 1K/2K/4K. The still previews in the chat; placed (add_to_timeline:true or an index) it rides video track 0 as a still clip (8s default, stretchable). Great for a cover/hook frame (index 0), a background, or a b-roll still.
@@ -735,7 +740,8 @@ Project media (\`media\` in editor_state) is every file in the open project. The
 - delete_asset removes an asset from the project plus its timeline clips; the media does not come back with undo, so only on an explicit ask, and say what went with it.
 The Library is shared across every project: folders, reusable assets, and templates — a template is a saved arrangement (clips, overlays, titles, captions, by reference) that comes back editable.
 - library_list browses it; library_add copies an asset into the project (the import step "library"-scope attachments need); template_add re-materializes a template; save_template saves timeline items as one.
-- library_organize handles folders (create/rename/delete), filing (move_asset), deletes (permanent — explicit ask only), and import_url for a media URL.
+- library_organize handles folders (create/rename/delete), filing (move_asset), and deletes (permanent — explicit ask only).
+- import_url downloads a media URL (TikTok, YouTube, Instagram, direct links) into the project as a card in the chat; the user drags it to the timeline, Media, or the Library. Place it with add_clip only when they asked for it in the cut.
 Attachments: media files dropped on the chat import into project media by themselves; library attachments wait for library_add.`,
 
   "publish-and-export": `# Publish & export

@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { addDownloaded, type LibraryAsset } from "./library";
+import { addDownloaded, type LibraryAsset, type LibrarySource } from "./library";
 import { assertLocalRuntime } from "./local-only";
+import { mediaDir, mediaPath as projectMediaPath, readProject } from "./projects";
+import { uniqueName } from "./util";
 
-// Download a media URL (TikTok, YouTube, Instagram, …) into the shared library
-// with the bundled yt-dlp. The engine finds yt-dlp on its widened PATH exactly
-// like ffmpeg.
+// Download a media URL (TikTok, YouTube, Instagram, …) with the bundled
+// yt-dlp. The engine finds yt-dlp on its widened PATH exactly like ffmpeg.
 
 const MEDIA_EXT = /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|aac|wav|ogg|flac)$/i;
 
@@ -22,15 +23,25 @@ interface YtMeta {
   webpage_url?: string;
 }
 
-export async function importFromUrl(url: string): Promise<LibraryAsset> {
+/** What a finished download hands its consumer: the merged media file (inside
+ * a temp dir the wrapper deletes afterwards) plus what yt-dlp knew about it. */
+interface Downloaded {
+  file: string;
+  title: string;
+  source: LibrarySource;
+}
+
+/** Run one guarded download and hand the file to `consume` before the temp
+ * dir is deleted. The active slot spans the whole operation; mkdtemp runs
+ * inside the try so a failure there still releases the slot (else a rejection
+ * would leak it and, after MAX_ACTIVE failures, brick URL import until
+ * restart). */
+async function withDownload<T>(url: string, consume: (dl: Downloaded) => Promise<T>): Promise<T> {
   assertLocalRuntime();
   if (!/^https?:\/\//i.test(url.trim())) throw new Error("Enter a valid http(s) URL.");
   if (active >= MAX_ACTIVE) {
     throw new Error("Too many downloads in progress. Try again in a moment.");
   }
-  // Count the slot around the whole operation. mkdtemp is inside the try so a
-  // failure there still releases the slot (else a rejection would leak it and,
-  // after MAX_ACTIVE failures, brick URL import until restart).
   active++;
   try {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "cut-dl-"));
@@ -43,12 +54,15 @@ export async function importFromUrl(url: string): Promise<LibraryAsset> {
         names.map(async (n) => ({ n, size: (await stat(path.join(tmp, n))).size }))
       );
       const file = sized.sort((a, b) => b.size - a.size)[0].n;
-      const title = (meta.title || "Imported clip").slice(0, 120);
-      return await addDownloaded(path.join(tmp, file), title, {
-        url: meta.webpage_url || url.trim(),
-        title: meta.title,
-        uploader: meta.uploader,
-        uploadDate: meta.upload_date,
+      return await consume({
+        file: path.join(tmp, file),
+        title: (meta.title || "Imported clip").slice(0, 120),
+        source: {
+          url: meta.webpage_url || url.trim(),
+          title: meta.title,
+          uploader: meta.uploader,
+          uploadDate: meta.upload_date,
+        },
       });
     } finally {
       void rm(tmp, { recursive: true, force: true });
@@ -56,6 +70,27 @@ export async function importFromUrl(url: string): Promise<LibraryAsset> {
   } finally {
     active--;
   }
+}
+
+/** Download a URL into the shared Library (the Library panel's import box). */
+export async function importFromUrl(url: string): Promise<LibraryAsset> {
+  return withDownload(url, (dl) => addDownloaded(dl.file, dl.title, dl.source));
+}
+
+/** Download a URL straight into a project's media folder (the chat's
+ * import_url tool). Returns the project file name; the client builds and
+ * registers the asset. */
+export async function importUrlToProject(
+  projectId: string,
+  url: string
+): Promise<{ fileName: string; title: string; source: LibrarySource }> {
+  if (!(await readProject(projectId))) throw new Error("Project not found.");
+  return withDownload(url, async (dl) => {
+    await mkdir(mediaDir(projectId), { recursive: true });
+    const dest = await uniqueName(path.basename(dl.file), (n) => projectMediaPath(projectId, n));
+    await copyFile(dl.file, projectMediaPath(projectId, dest));
+    return { fileName: dest, title: dl.title, source: dl.source };
+  });
 }
 
 function runYtDlp(url: string, dir: string): Promise<YtMeta> {

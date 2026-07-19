@@ -208,6 +208,23 @@ export async function importStockVideo(
   return asset;
 }
 
+/** Download a media URL (TikTok, YouTube, …) into the project through the
+ * engine's bundled downloader and register it, without placing it on the
+ * timeline. Callers choose where it lands. */
+export async function importUrlMedia(projectId: string, url: string): Promise<MediaAsset> {
+  const res = await apiFetch(`/api/cut/projects/${projectId}/import-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const body = await apiJson<{ fileName?: string; title?: string }>(res);
+  if (!res.ok || !body.fileName) throw new Error(body.error ?? "Could not import that URL.");
+  const asset = await assetFromProjectFile(projectId, body.fileName, body.title || "Imported clip");
+  useEditor.getState().addAsset(asset);
+  void enrichAsset(asset);
+  return asset;
+}
+
 /** Build a runtime asset for a media file the engine already wrote into the
  * project folder (freeze frames, AI generations) — probe metadata, no upload. */
 export async function assetFromProjectFile(
