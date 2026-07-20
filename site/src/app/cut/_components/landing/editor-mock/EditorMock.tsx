@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 // The mock is authored at a fixed design size and scaled to the hero's width,
 // so its internals never reflow — it behaves like a live screenshot.
 const DESIGN_W = 1200;
-const DESIGN_H = 660;
+const DESIGN_H = 726;
 
 // A hand-built, display-only replica of the Cut editor showing two finished
 // projects. The panels copy the real components' chrome (see the Mock*

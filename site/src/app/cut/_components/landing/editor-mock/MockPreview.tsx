@@ -24,8 +24,8 @@ export function MockPreview({ project, active }: { project: MockProject; active:
 
   const stage =
     project.aspect === "9:16"
-      ? { width: 214, height: 380 }
-      : { width: 480, height: 270 };
+      ? { width: 250, height: 444 }
+      : { width: 528, height: 297 };
 
   return (
     <div className="flex min-w-0 items-center justify-center bg-muted/40 px-6">
