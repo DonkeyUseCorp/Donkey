@@ -1,16 +1,26 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { allowedOrigin, corsHeaders, preflightHeaders } from "@/cut/server/cors";
-import { isCutHost } from "@/cut/lib/hosts";
+import {
+  DONKEYCUT_CANONICAL,
+  isCutHost,
+  isDonkeycutHost,
+} from "@/cut/lib/hosts";
 
-// Cut (the video editor, publicly "Donkey Cut") is served on the
-// cut.donkeyuse.com subdomain, but its routes live under /cut in this single
-// site app. For requests on the Cut host we rewrite page paths to /cut/* so
-// Cut's root-relative links (/, /library, /p/[id]) resolve to its routes, while
-// the apex host keeps serving Donkey.
+// Cut (the video editor, publicly "Donkey Cut") lives under /cut in this single
+// site app: the marketing landing at /cut and the app under /cut/app. The proxy
+// maps its two production hosts onto that tree while the apex host keeps
+// serving Donkey:
 //
-// Local dev is not a Cut host: the editor is opened at localhost:3000/cut/… so
-// its session cookie is same-origin, and its links carry the "/cut" base
+//   donkeycut.com       "/" → landing, "/app/…" → editor app (generic
+//                       "/…" → "/cut/…" rewrite). "/app/settings", "/install",
+//                       and the legal pages pass through so the shared apex
+//                       routes serve them same-host. www. 308s to the apex.
+//   cut.donkeyuse.com   legacy host, unchanged URLs: "/…" → "/cut/app/…" so
+//                       "/", "/library", "/p/[id]" keep working.
+//
+// Local dev is neither host: the editor is opened at localhost:3000/cut/… so
+// its session cookie is same-origin, and its links carry the "/cut/app" base
 // directly (see src/cut/lib/nav.tsx), needing no rewrite.
 //
 // This file must live in src/ (next to app/) and use the Next 16 `proxy` name;
@@ -49,26 +59,63 @@ function cutApi(req: NextRequest): NextResponse {
   return res;
 }
 
+// Paths served by shared apex routes that must not be captured by the generic
+// "/…" → "/cut/…" rewrite on donkeycut.com. "/app/settings" is the shared
+// account surface (the rest of "/app" is the Cut projects home), "/install"
+// carries the Mac download, and the legal pages are shared verbatim.
+const DONKEYCUT_PASSTHROUGH = ["/app/settings", "/install", "/privacy", "/terms"];
+
+// Whole-segment prefix match, so "/cut" covers "/cut/…" but not "/cut-auth".
+const underPath = (pathname: string, prefix: string) =>
+  pathname === prefix || pathname.startsWith(`${prefix}/`);
+
+const passesThrough = (pathname: string) =>
+  DONKEYCUT_PASSTHROUGH.some((p) => underPath(pathname, p));
+
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (isCutApi(pathname)) return cutApi(req);
 
-  if (!isCutHost(req.headers.get("host"))) return NextResponse.next();
+  const host = req.headers.get("host");
 
-  if (pathname.startsWith("/cut") || pathname.startsWith("/api")) {
+  if (isDonkeycutHost(host)) {
+    if (host?.split(":")[0] !== "donkeycut.com") {
+      const url = req.nextUrl.clone();
+      return NextResponse.redirect(
+        `${DONKEYCUT_CANONICAL}${pathname}${url.search}`,
+        308,
+      );
+    }
+    if (underPath(pathname, "/cut") || underPath(pathname, "/api")) {
+      return NextResponse.next();
+    }
+    if (passesThrough(pathname)) return NextResponse.next();
+    const url = req.nextUrl.clone();
+    url.pathname =
+      pathname === "/sitemap.xml"
+        ? "/cut/sitemap.xml"
+        : `/cut${pathname === "/" ? "" : pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  if (!isCutHost(host)) return NextResponse.next();
+
+  if (underPath(pathname, "/cut") || underPath(pathname, "/api")) {
     return NextResponse.next();
   }
   const url = req.nextUrl.clone();
-  url.pathname = `/cut${pathname === "/" ? "" : pathname}`;
+  url.pathname = `/cut/app${pathname === "/" ? "" : pathname}`;
   return NextResponse.rewrite(url);
 }
 
 export const config = {
   // Page routes (skip Next internals and files with an extension) plus every
   // Cut API path — including media/export files with extensions — so the
-  // hosted 404 and local CORS above cover all of them.
+  // hosted 404 and local CORS above cover all of them. "/sitemap.xml" is
+  // matched explicitly so donkeycut.com can serve its own sitemap.
   matcher: [
     "/((?!_next/|.*\\..*).*)",
     "/api/cut/:path*",
+    "/sitemap.xml",
   ],
 };

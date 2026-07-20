@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { headers } from "next/headers";
 
-import { AppSurfaceBackground } from "@/app/app/_components/AppSurfaceBackground";
-import { isCutHost } from "@/cut/lib/hosts";
+import { cutAppBase } from "@/cut/lib/hosts";
 import { CutBaseProvider } from "@/cut/lib/nav";
 
 export const metadata: Metadata = {
@@ -11,20 +10,15 @@ export const metadata: Metadata = {
   description: "A video editor that does all its work on your Mac.",
 };
 
-// Cut (the video editor) renders on the same white product surface as Donkey's
-// /app, not the cream marketing background. AppSurfaceBackground paints the root
-// html white so the cream landing background does not show through the overscroll
-// area, and font-system matches the /app system font stack.
+// This layout only resolves the app link base; surface styling belongs to the
+// children. The landing page at /cut renders on the cream marketing background,
+// while the app subtree under /cut/app paints its own white product surface.
+//
+// The app's routes live under /cut/app/*. Per host they are served as:
+//   cut.donkeyuse.com  → proxy rewrites "/…" → "/cut/app/…"   (base "")
+//   donkeycut.com      → proxy rewrites "/app/…" → "/cut/app/…" (base "/app")
+//   local dev (apex)   → no rewrite, opened at /cut/app directly (base "/cut/app")
 export default async function CutLayout({ children }: { children: ReactNode }) {
-  // The app's routes live under /cut/*. On the cut.* production host a proxy
-  // rewrite serves them at the root, so links are root-relative (base ""). In
-  // local dev the app is opened at /cut on the apex — same origin as the session
-  // cookie — so links carry the "/cut" base. Resolve it once from the host.
-  const base = isCutHost((await headers()).get("host")) ? "" : "/cut";
-  return (
-    <div className="min-h-screen bg-white font-system text-foreground antialiased">
-      <AppSurfaceBackground />
-      <CutBaseProvider base={base}>{children}</CutBaseProvider>
-    </div>
-  );
+  const base = cutAppBase((await headers()).get("host"));
+  return <CutBaseProvider base={base}>{children}</CutBaseProvider>;
 }
