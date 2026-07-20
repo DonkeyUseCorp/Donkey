@@ -4,7 +4,7 @@
 
 <h1 align="center">Donkey</h1>
 
-<p align="center"><i>An open-source desktop agent for macOS that sees your screen and runs your apps for you.</i></p>
+<p align="center"><i>The video editor iMovie should have been — free, open source, and local-first, with AI generation when you want it.</i></p>
 
 <p align="center">
   <a href="https://github.com/DonkeyUseCorp/Donkey/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/DonkeyUseCorp/Donkey?label=release&color=EC7868" /></a>
@@ -15,79 +15,66 @@
 
 Donkey is two things in one repository:
 
-- **The Donkey app** — a low-latency Mac agent you hand a task to, then watch it work across your real apps, files, and accounts.
-- **Donkey Vision** — the screen-understanding API behind the app, available on its own so you can build computer-use tools of your own.
+- **Donkey Cut** — a free browser video editor at [donkeycut.com](https://donkeycut.com), powered by a local engine that ships inside the companion Mac app.
+- **Donkey Vision** — a screen-understanding API that turns any screenshot into structured, clickable UI, so you can build computer-use tools of your own.
 
 ---
 
-## The app
+## Donkey Cut
 
-Summon Donkey with a double-tap of **Command**, then type or speak what you want done. It plans the task, drives your apps to do it, and streams every step in the menu-bar notch so you can follow along or step in. When it has a result — a merged PDF, a transcript, a drafted message — it pauses for your approval.
-
-Donkey runs **on your machine**. Screen capture, local context, and app control stay on-device; only model decisions go to the backend. It's open source, so you can read exactly what it does and where your data goes.
+Open [donkeycut.com](https://donkeycut.com) and you're in a full editor: multi-track timeline, captions, music and effects tracks, and an AI assistant that edits alongside you. The page is only the client — every real operation runs on a local engine the Donkey Mac app ships and supervises, so your footage stays on your Mac. No uploads, no cloud storage fees.
 
 <p align="center">
-  <img src="vision/bench/results/spotify/spotify.content.png" alt="Donkey parsing a Spotify window into labeled, clickable UI elements" width="720" />
+  <img src="site/public/cut/landing/og.png" alt="A frame from The Railway Mystery, generated and cut in Donkey Cut" width="720" />
   <br />
-  <sub><i>What Donkey sees: any screen becomes structured, clickable UI — boxes, labels, and center points.</i></sub>
+  <sub><i>A frame from "The Railway Mystery" — storyboarded, generated, and cut in Donkey Cut.</i></sub>
 </p>
 
-### What you can ask it for
+### Free and local
 
-Tell it what you want in plain language. A few things people hand it:
+Editing needs no account. Projects and media live on your own disk, transcription and subtitles run on-device, and exports render through the bundled ffmpeg. The assistant uses the Claude or Codex app already signed in on your Mac — if you have a subscription, you're done. No setup, no API keys.
 
-**Files and documents**
+The one hosted piece is AI generation: images, video, voiceovers, and music are rendered through your Donkey account and credits, then land back in your project like any other file.
 
-- `merge invoice-jan.pdf, invoice-feb.pdf and invoice-mar.pdf into one file and add page numbers`
-- `redact every Social Security number from contract.pdf and flatten the result`
-- `fill out f1120.pdf using 1120data.txt`
-- `extract the table from q3-figures.pdf into a CSV`
-- `find every file over 1GB I haven't opened in 6 months and move them into ~/Archive`
+### Generate what you can't shoot
 
-**Media**
+Describe a shot in chat and iterate until it's right. These are the two example projects from the [donkeycut.com](https://donkeycut.com) landing page, prompts included.
 
-- `download the audio from <youtube url> as an mp3`
-- `extract the audio from meeting.mov as an mp3 and give me a transcript with the action items pulled out`
-- `create a 1-minute clip of this video and overlay the Korean translation, starting at the 15-minute mark`
+**The Railway Mystery** — a 1920s comic-style chase, three generated shots cut together with a brass-and-strings score:
 
-**Apps and system**
+> Franco-Belgian comic style, early-1900s animation with film grain: a steam train races a cliffside railway through a mountain canyon; a cloaked figure rides the carriage roof; a boy on a bicycle gives chase
 
-- `text my wife I'm running 20 minutes late`
-- `create a playlist with the top 10 songs from 2021`
-- `in the open Keynote deck, make every slide title bold`
-- `turn on dark mode and enable Night Shift`
+| Canyon run | On the roof | Bicycle chase |
+| --- | --- | --- |
+| ![Steam train threading a mountain canyon](site/public/cut/landing/chase-1.jpg) | ![Cloaked figure on the carriage roof](site/public/cut/landing/chase-2.jpg) | ![Boy on a bicycle chasing the train](site/public/cut/landing/chase-3.jpg) |
 
-**Web and research**
+**City poster series** — matched hand-painted travel posters, animated into 4-second clips and cut with captions and a waltz:
 
-- `compare the pricing of the top 3 note-taking apps and write me a summary doc on my Desktop`
-- `give me a markdown of donkeyuse.com`
-- `if it's going to rain tomorrow, remind me to grab an umbrella`
+> Hand-painted travel poster, PARIS — woman in a trench coat crossing the street, Eiffel Tower behind, café awnings, 'Live the romance' in red script
 
-### It knows when not to act
-
-The same loop decides when *not* to run something:
-
-- Ask `what can you do?` and it answers in a sentence; it doesn't open a shell or touch your files.
-- Say `send it to her` with no context and it asks who and what, instead of guessing.
-- When a download comes back with a 403, it tells you it failed instead of reporting success.
+| Paris — Live the romance | New York — Rise above the city |
+| --- | --- |
+| ![Paris travel poster](site/public/cut/landing/poster-paris.jpg) | ![New York travel poster](site/public/cut/landing/poster-newyork.jpg) |
 
 ### How it works
 
-A task isn't one big model call. It's a loop of small, checked steps:
+The hosted page and the local engine split the work: the page comes from wherever is convenient, the work always happens on your Mac.
 
 ```text
-understand the turn  →  decide the next single tool call  →  validate it
-        ↑                                                        ↓
-   record what happened  ←  execute through the guarded executor
+browser (donkeycut.com or localhost)
+        │  API calls
+        ▼
+Cut engine on 127.0.0.1 — shipped and supervised by the Donkey Mac app
+        │
+        ▼
+local disk · bundled ffmpeg · on-device speech · your claude/codex logins
 ```
 
-The model decides *what* to do next; the Swift runtime decides *whether and how* it actually happens — owning permissions, focus checks, execution, and verification. The harness is app-agnostic: it knows how to plan, act, verify, and recover, but nothing about specific apps. App knowledge lives in skills, catalog data, and memory.
+On a hosted deploy every Cut API answers 404 before any handler runs — the server side of Cut exists only on your machine. The full architecture lives in [`docs/guides/cut/README.md`](docs/guides/cut/README.md).
 
-For the full picture, start with [`docs/guides/agent-harness.md`](docs/guides/agent-harness.md).
+### Pricing
 
-### Why hosted models
-
-Capture, context, and local app control run on-device for speed and privacy. Model-backed decisions go to the Donkey backend, which owns provider credentials and model selection. Local model weights are currently too large to ship in a practical install and too slow for the desktop loop, so the supported path uses hosted routes. It stays yours: bring your own keys, or fork and self-host the whole thing.
+The editor is free. Pay only for AI-generated media: the Pro plan ($20/month) adds monthly credits for image, video, voiceover, and music generation.
 
 ---
 
@@ -139,13 +126,24 @@ A warm parse takes about **0.7s** server-side. See [donkeyuse.com/donkeyvision](
 
 | Path | What's there |
 | --- | --- |
-| [`apps/Donkey`](apps/Donkey) | The macOS app and the agent harness. |
-| [`site`](site) | The Next.js site, dashboard, and hosted API routes (including Vision). |
+| [`apps/Donkey`](apps/Donkey) | The macOS companion app; it ships and supervises the Cut engine. |
+| [`site`](site) | The Next.js site, the Cut editor and engine, and hosted API routes (including Vision). |
 | [`vision`](vision) | The screenshot-parsing worker and its benchmarks. |
 | [`docs`](docs/README.md) | Supported product behavior and engineering guides. |
 | [`plans`](plans) | Active and historical implementation planning. |
 
 ## Build and run
+
+Run the editor locally:
+
+```sh
+cd site
+npm install
+npm run db:generate
+npm run dev
+```
+
+The editor is at `http://localhost:3000/cut`.
 
 Run the macOS app in development:
 
@@ -161,22 +159,13 @@ Build the packaged app and installer disk image:
 open dist/Donkey.app
 ```
 
-Run the site:
-
-```sh
-cd site
-npm install
-npm run db:generate
-npm run dev
-```
-
 The site uses Supabase Postgres through Prisma. Keep local credentials in `.env` and never commit them.
 
 ## Documentation
 
 [`docs/README.md`](docs/README.md) is the source of truth for supported behavior. Good starting points:
 
-- [Agent Harness](docs/guides/agent-harness.md) — how a request becomes completed work.
+- [Cut](docs/guides/cut/README.md) — the editor, its local engine, and the boundary between them.
 - [Donkey Vision](docs/guides/donkey-vision.md) — the screen-understanding layer.
 - [Install Donkey Locally](docs/guides/install-donkey.md) — building the app bundle.
 
