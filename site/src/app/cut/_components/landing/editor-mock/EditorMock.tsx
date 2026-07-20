@@ -74,7 +74,7 @@ export function EditorMock() {
         the side panel, clips and music on the timeline, and the AI chat that
         assembled them.
       </figcaption>
-      <div className="mt-6 flex justify-center gap-2">
+      <div className="mt-6 flex justify-center gap-1.5">
         {MOCK_PROJECTS.map((project, i) => (
           <button
             key={project.id}
@@ -82,13 +82,13 @@ export function EditorMock() {
             onClick={() => setActive(i)}
             aria-pressed={i === active}
             className={cn(
-              "flex items-center gap-2 rounded-full border-2 border-ink px-4 py-1.5 text-sm font-semibold transition-colors",
+              "flex items-center gap-1.5 rounded-full border border-ink px-2.5 py-0.5 text-xs font-medium transition-colors",
               i === active ? "bg-ink text-white" : "bg-white text-ink hover:bg-ink/5",
             )}
           >
             <span
               className={cn(
-                "size-2 rounded-full",
+                "size-1.5 rounded-full",
                 i === active ? "bg-coral" : "bg-ink/25",
               )}
             />
