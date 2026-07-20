@@ -43,7 +43,13 @@ import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
-import { beginChatTurn, deleteChatAssets, endChatTurn, setActiveChatThread, threadOwnsAssets } from "@/cut/lib/chatAssets";
+import {
+  beginChatTurn,
+  deleteChatAssets,
+  endChatTurn,
+  setActiveChatThread,
+  threadOwnsAssets,
+} from "@/cut/lib/chatAssets";
 import { threadHasLiveRun } from "@/cut/lib/genScene";
 import {
   addRefOnce,
@@ -56,7 +62,12 @@ import {
   useAssetDrop,
   type AssetRef,
 } from "@/cut/lib/assetRef";
-import { creditsUrl, signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
+import {
+  creditsUrl,
+  signInUrl,
+  useGenerate,
+  useSignedIn,
+} from "@/cut/lib/generate";
 import { useCreditsRecheck, useOutOfCredits } from "@/cut/lib/hosted";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { AI_MODELS } from "@/cut/lib/aiModels";
@@ -103,7 +114,9 @@ const activeChatKey = (projectId: string) => `cut-ai-active-${projectId}`;
 
 function readThreads(projectId: string): ChatThread[] {
   try {
-    const v = JSON.parse(localStorage.getItem(threadsKey(projectId)) ?? "[]") as unknown;
+    const v = JSON.parse(
+      localStorage.getItem(threadsKey(projectId)) ?? "[]",
+    ) as unknown;
     return Array.isArray(v) ? (v as ChatThread[]) : [];
   } catch {
     return [];
@@ -115,7 +128,8 @@ function readThreads(projectId: string): ChatThread[] {
  * few MB per origin. The live thread keeps its images; replayed turns only
  * ever reuse text parts, so nothing downstream misses them. */
 function slimForStorage(list: ChatThread[]): ChatThread[] {
-  const bulky = (v: unknown) => typeof v === "string" && v.startsWith("data:image/");
+  const bulky = (v: unknown) =>
+    typeof v === "string" && v.startsWith("data:image/");
   return list.map((t) => ({
     ...t,
     messages: t.messages.map((m) => ({
@@ -124,10 +138,19 @@ function slimForStorage(list: ChatThread[]): ChatThread[] {
         const out = (p as { output?: unknown }).output;
         if (!out || typeof out !== "object") return p;
         const o = out as Record<string, unknown>;
-        if (!bulky(o.image) && !(Array.isArray(o.images) && o.images.some(bulky))) return p;
+        if (
+          !bulky(o.image) &&
+          !(Array.isArray(o.images) && o.images.some(bulky))
+        )
+          return p;
         return {
           ...p,
-          output: { ...o, image: undefined, images: undefined, imagesOmitted: true },
+          output: {
+            ...o,
+            image: undefined,
+            images: undefined,
+            imagesOmitted: true,
+          },
         } as typeof p;
       }),
     })),
@@ -140,7 +163,9 @@ function writeThreads(projectId: string, list: ChatThread[]) {
   // its thread), never a side effect of the history cap.
   const kept = [
     ...list.slice(0, THREAD_LIMIT),
-    ...list.slice(THREAD_LIMIT).filter((t) => threadOwnsAssets(t.id) || threadHasLiveRun(t.id)),
+    ...list
+      .slice(THREAD_LIMIT)
+      .filter((t) => threadOwnsAssets(t.id) || threadHasLiveRun(t.id)),
   ];
   // A pruned thread is gone the way a deleted one is — anything it still
   // owned (by construction nothing live) dies with it.
@@ -149,7 +174,10 @@ function writeThreads(projectId: string, list: ChatThread[]) {
     if (!keptIds.has(t.id)) useGenScene.getState().killThread(t.id);
   }
   try {
-    localStorage.setItem(threadsKey(projectId), JSON.stringify(slimForStorage(kept)));
+    localStorage.setItem(
+      threadsKey(projectId),
+      JSON.stringify(slimForStorage(kept)),
+    );
   } catch {
     // Storage full/blocked — history just won't persist.
   }
@@ -183,18 +211,26 @@ const provider = (id: string): string =>
         ? "test"
         : "codex";
 
-export function AiPanel({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+export function AiPanel({
+  projectId,
+  onClose,
+}: {
+  projectId: string;
+  onClose: () => void;
+}) {
   const [info, setInfo] = useState<ModelsInfo | null>(null);
   const signedIn = useSignedIn();
   const [model, setModel] = useState<string>(() =>
-    typeof window === "undefined" ? "claude-fable-5" : localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"
+    typeof window === "undefined"
+      ? "claude-fable-5"
+      : (localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"),
   );
   // One chat is active at a time; every past chat lives in the Threads panel.
   // The id persists so closing and reopening the panel resumes the same chat.
   const [activeChat, setActiveChat] = useState<string>(() =>
     typeof window === "undefined"
       ? crypto.randomUUID()
-      : localStorage.getItem(activeChatKey(projectId)) ?? crypto.randomUUID()
+      : (localStorage.getItem(activeChatKey(projectId)) ?? crypto.randomUUID()),
   );
   useEffect(() => {
     localStorage.setItem(activeChatKey(projectId), activeChat);
@@ -229,7 +265,10 @@ export function AiPanel({ projectId, onClose }: { projectId: string; onClose: ()
   };
 
   const deleteThread = (id: string) => {
-    writeThreads(projectId, readThreads(projectId).filter((t) => t.id !== id));
+    writeThreads(
+      projectId,
+      readThreads(projectId).filter((t) => t.id !== id),
+    );
     setThreads((p) => p.filter((t) => t.id !== id));
     // The thread's chat-only assets go with it; anything placed or filed
     // into Media/Library stays.
@@ -294,11 +333,21 @@ export function AiPanel({ projectId, onClose }: { projectId: string; onClose: ()
 
       {historyOpen && (
         <>
-          <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setHistoryOpen(false)}
+          />
           <div className="ai-thread-list absolute top-0 right-full bottom-0 z-40 flex w-[280px] animate-in flex-col border-x border-border bg-card shadow-[-16px_0_40px_rgba(0,0,0,0.14)] duration-200 ease-out fade-in-0 slide-in-from-right-6">
             <div className="flex h-[46px] shrink-0 items-center justify-between border-b border-border pr-2 pl-3.5">
-              <span className="text-sm font-semibold tracking-tight">Threads</span>
-              <Button variant="ghost" size="sm" title="Close" onClick={() => setHistoryOpen(false)}>
+              <span className="text-sm font-semibold tracking-tight">
+                Threads
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Close"
+                onClick={() => setHistoryOpen(false)}
+              >
                 <X />
               </Button>
             </div>
@@ -314,7 +363,9 @@ export function AiPanel({ projectId, onClose }: { projectId: string; onClose: ()
                     className="group relative flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted"
                     onClick={() => openThread(t)}
                   >
-                    <span className="w-full truncate pr-6 text-[12px] font-medium">{t.title}</span>
+                    <span className="w-full truncate pr-6 text-[12px] font-medium">
+                      {t.title}
+                    </span>
                     <span className="text-[10.5px] text-muted-foreground">
                       {new Date(t.updatedAt).toLocaleString([], {
                         month: "short",
@@ -375,7 +426,7 @@ function ChatSession({
   // Live dictation → drops the finished transcript into the composer, appended
   // after whatever the user had already typed.
   const mic = useMicTranscription((text) =>
-    setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
+    setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text)),
   );
   // When dictation ends the composer remounts; put the caret back at the end
   // so Enter (confirm) → Enter (send) chains without a click.
@@ -403,25 +454,33 @@ function ChatSession({
     (s) =>
       !!s.run &&
       s.run.projectId === projectId &&
-      (!s.run.chatId || s.run.chatId === threadId)
+      (!s.run.chatId || s.run.chatId === threadId),
   );
-  const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
+  const {
+    active: dropActive,
+    attachTarget,
+    targetProps,
+  } = useAssetDrop(
     (ref) => setAttachments((prev) => addRefOnce(prev, ref)),
     // OS files dropped on the chat attach as references (media files import
     // into the project on the way, chat-owned so they stay off the Media
     // panel; text files ride as-is).
     (files) => {
-      void refsFromDroppedFiles(projectId, files, { chatId: threadId }).then((refs) =>
-        setAttachments((prev) => refs.reduce(addRefOnce, prev))
+      void refsFromDroppedFiles(projectId, files, { chatId: threadId }).then(
+        (refs) => setAttachments((prev) => refs.reduce(addRefOnce, prev)),
       );
-    }
+    },
   );
   const sessionKeyRef = useRef<string | null>(null);
   // Resume from the saved thread when this id exists in history.
   const [initialThread] = useState<ChatThread | undefined>(() =>
-    typeof window === "undefined" ? undefined : readThreads(projectId).find((t) => t.id === threadId)
+    typeof window === "undefined"
+      ? undefined
+      : readThreads(projectId).find((t) => t.id === threadId),
   );
-  const providerSessions = useRef<Record<string, string>>({ ...(initialThread?.sessions ?? {}) });
+  const providerSessions = useRef<Record<string, string>>({
+    ...(initialThread?.sessions ?? {}),
+  });
   const modelRef = useRef(model);
   modelRef.current = model;
 
@@ -469,9 +528,14 @@ function ChatSession({
     transport,
     onData: (part) => {
       if (part.type === "data-session") {
-        const d = part.data as { sessionKey?: string; providerSession?: string };
+        const d = part.data as {
+          sessionKey?: string;
+          providerSession?: string;
+        };
         if (d.sessionKey) sessionKeyRef.current = d.sessionKey;
-        if (d.providerSession) providerSessions.current[provider(modelRef.current)] = d.providerSession;
+        if (d.providerSession)
+          providerSessions.current[provider(modelRef.current)] =
+            d.providerSession;
       }
     },
     onToolCall: ({ toolCall }) => {
@@ -494,11 +558,13 @@ function ChatSession({
         try {
           const output = await runAiTool(
             toolCall.toolName,
-            (toolCall.input ?? {}) as Record<string, unknown>
+            (toolCall.input ?? {}) as Record<string, unknown>,
           );
           await post({ output });
         } catch (err) {
-          await post({ errorText: err instanceof Error ? err.message : String(err) });
+          await post({
+            errorText: err instanceof Error ? err.message : String(err),
+          });
         }
       })();
     },
@@ -520,9 +586,9 @@ function ChatSession({
                 ? part.type.slice(5)
                 : undefined;
           return name === "generate_scene";
-        })
+        }),
       )?.id,
-    [messages]
+    [messages],
   );
 
   const busy = status === "submitted" || status === "streaming";
@@ -574,10 +640,31 @@ function ChatSession({
     ]);
   }, [messages, threadId, projectId]);
 
+  // Stay glued to the newest message while the user sits at the bottom;
+  // scrolling up releases the glue until they return. The ResizeObserver
+  // catches growth the messages effect misses — streamed text reflowing and
+  // media cards getting their height after load — so answers never end up
+  // clipped at the bottom.
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+  const onMessagesScroll = () => {
+    const el = scrollRef.current;
+    if (el)
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+  useEffect(() => {
+    const content = scrollRef.current?.firstElementChild;
+    if (!content) return;
+    const ro = new ResizeObserver(() => {
+      const el = scrollRef.current;
+      if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, busy]);
 
   const send = (text: string) => {
@@ -588,6 +675,7 @@ function ChatSession({
     const { refs: all } = collectRefs(body, attachments, candidates);
     if ((!body && all.length === 0) || busy || !currentAvailable) return;
     clearError();
+    pinnedRef.current = true;
     void sendMessage({
       text: body,
       ...(all.length > 0 && { metadata: { attachments: all } }),
@@ -596,7 +684,9 @@ function ChatSession({
     setAttachments([]);
   };
 
-  const currentAvailable = info ? info.providers[provider(model)]?.available !== false : true;
+  const currentAvailable = info
+    ? info.providers[provider(model)]?.available !== false
+    : true;
   const outOfCredits = useOutOfCredits((s) => s.out);
   useCreditsRecheck();
 
@@ -608,64 +698,69 @@ function ChatSession({
     >
       <div
         ref={scrollRef}
+        onScroll={onMessagesScroll}
         className={cn(
           "ai-messages min-h-0 flex-1 overflow-y-auto px-3.5 py-3",
           // The credits tab floats over the bottom of this area; the extra
           // padding lets the last message scroll out from behind it.
-          outOfCredits && "pb-9"
+          outOfCredits && "pb-9",
         )}
       >
-        {messages.length === 0 && !hasSceneRun && (
-          <div className="flex flex-col gap-3 pt-6">
-            <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-              I can see your whole project — clips, titles, subtitles, publish
-              metadata — and edit it for you. Select something and tell me what
-              to change, or ask anything about the cut.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {SUGGESTIONS.map((sug) => (
-                <button
-                  key={sug}
-                  className="ai-suggestion rounded-full border border-border px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-input hover:text-foreground"
-                  onClick={() => send(sug)}
-                >
-                  {sug}
-                </button>
-              ))}
+        {/* Single wrapper so the ResizeObserver sees all content growth. */}
+        <div>
+          {messages.length === 0 && !hasSceneRun && (
+            <div className="flex flex-col gap-3 pt-6">
+              <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+                I can see your whole project — clips, titles, subtitles, publish
+                metadata — and edit it for you. Select something and tell me
+                what to change, or ask anything about the cut.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {SUGGESTIONS.map((sug) => (
+                  <button
+                    key={sug}
+                    className="ai-suggestion rounded-full border border-border px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-input hover:text-foreground"
+                    onClick={() => send(sug)}
+                  >
+                    {sug}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-        {messages.map((m) => (
-          <Fragment key={m.id}>
-            <MessageView message={m} />
-            {m.id === sceneAnchorId && (
-              <>
-                <SceneCard threadId={threadId} />
-                <SceneActivity threadId={threadId} />
-              </>
-            )}
-          </Fragment>
-        ))}
-        {sceneAnchorId === undefined && (
-          <>
-            <SceneCard threadId={threadId} />
-            <SceneActivity threadId={threadId} />
-          </>
-        )}
-        <ThreadRenders threadId={threadId} />
-        {busy && (
-          <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-            <CircleDashed className="size-3 animate-spin" /> Working… <LiveElapsed />
-          </div>
-        )}
-        {error && (
-          <div className="ai-error mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11.5px] leading-relaxed text-red-700">
-            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              <HostedErrorText error={error.message} link={false} />
-            </span>
-          </div>
-        )}
+          )}
+          {messages.map((m) => (
+            <Fragment key={m.id}>
+              <MessageView message={m} />
+              {m.id === sceneAnchorId && (
+                <>
+                  <SceneCard threadId={threadId} />
+                  <SceneActivity threadId={threadId} />
+                </>
+              )}
+            </Fragment>
+          ))}
+          {sceneAnchorId === undefined && (
+            <>
+              <SceneCard threadId={threadId} />
+              <SceneActivity threadId={threadId} />
+            </>
+          )}
+          <ThreadRenders threadId={threadId} />
+          {busy && (
+            <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+              <CircleDashed className="size-3 animate-spin" /> Working…{" "}
+              <LiveElapsed />
+            </div>
+          )}
+          {error && (
+            <div className="ai-error mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11.5px] leading-relaxed text-red-700">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                <HostedErrorText error={error.message} link={false} />
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="shrink-0 px-2.5 pb-2.5">
@@ -684,7 +779,8 @@ function ChatSession({
             >
               <TriangleAlert className="size-3 shrink-0" />
               <span>
-                No credits left — <span className="font-medium underline">reload credits</span>
+                No credits left —{" "}
+                <span className="font-medium underline">reload credits</span>
               </span>
             </a>
           )}
@@ -695,7 +791,7 @@ function ChatSession({
                 ? "border-[#0a84ff] ring-2 ring-[#0a84ff]/30"
                 : fileDropHint
                   ? "border-[#0a84ff]/45 ring-2 ring-[#0a84ff]/15"
-                  : "border-input focus-within:border-ring"
+                  : "border-input focus-within:border-ring",
             )}
           >
             {dropActive && (
@@ -707,7 +803,9 @@ function ChatSession({
               <>
                 <RefChips
                   refs={attachments}
-                  onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}
+                  onRemove={(ref) =>
+                    setAttachments((p) => p.filter((x) => !sameRef(x, ref)))
+                  }
                   className="px-2.5 pt-2.5"
                 />
                 <MentionTextarea
@@ -724,7 +822,11 @@ function ChatSession({
                   onSubmit={() => send(input)}
                 />
                 <div className="flex items-center gap-1 px-1.5 pb-1.5">
-                  <ModelSelector info={info} model={model} onSelect={onModelChange} />
+                  <ModelSelector
+                    info={info}
+                    model={model}
+                    onSelect={onModelChange}
+                  />
                   <div className="flex-1" />
                   <Button
                     type="button"
@@ -738,7 +840,13 @@ function ChatSession({
                     <Mic className="size-3.5" />
                   </Button>
                   {busy ? (
-                    <Button variant="outline" size="sm" className="ai-stop" title="Stop" onClick={() => void stop()}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="ai-stop"
+                      title="Stop"
+                      onClick={() => void stop()}
+                    >
                       <Square className="size-3" />
                     </Button>
                   ) : (
@@ -746,7 +854,10 @@ function ChatSession({
                       size="sm"
                       className="ai-send"
                       title="Send (Enter)"
-                      disabled={(!input.trim() && attachments.length === 0) || !currentAvailable}
+                      disabled={
+                        (!input.trim() && attachments.length === 0) ||
+                        !currentAvailable
+                      }
                       onClick={() => send(input)}
                     >
                       <ArrowUp className="size-3.5" />
@@ -760,10 +871,13 @@ function ChatSession({
           </div>
         </div>
         {mic.error && (
-          <p className="mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">{mic.error}</p>
+          <p className="mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">
+            {mic.error}
+          </p>
         )}
-        {info && !currentAvailable && (
-          provider(model) === "gemini" ? (
+        {info &&
+          !currentAvailable &&
+          (provider(model) === "gemini" ? (
             <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-muted-foreground">
               Gemini chats on your Donkey account.{" "}
               <a
@@ -776,10 +890,10 @@ function ChatSession({
             </p>
           ) : (
             <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">
-              {PROVIDER_LABEL[provider(model)]}: {info.providers[provider(model)]?.note}
+              {PROVIDER_LABEL[provider(model)]}:{" "}
+              {info.providers[provider(model)]?.note}
             </p>
-          )
-        )}
+          ))}
       </div>
     </div>
   );
@@ -799,7 +913,7 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
         "ai-msg-asset group relative",
         // Audio gets the wide timeline-pill treatment; the row still wraps
         // inside the message's max width.
-        asset.kind === "audio" ? "w-44 max-w-full" : "w-16"
+        asset.kind === "audio" ? "w-44 max-w-full" : "w-16",
       )}
     >
       <button
@@ -826,10 +940,12 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
           item={asset}
           className={cn(
             asset.kind === "audio" ? "h-12 w-full" : "size-16",
-            "transition-colors group-hover:border-input"
+            "transition-colors group-hover:border-input",
           )}
         />
-        <span className="w-full truncate text-[10px] text-muted-foreground">{asset.name}</span>
+        <span className="w-full truncate text-[10px] text-muted-foreground">
+          {asset.name}
+        </span>
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -844,11 +960,15 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-40">
           <DropdownMenuItem
-            onClick={() => useLightbox.getState().open(lightboxItemFromRef(asset))}
+            onClick={() =>
+              useLightbox.getState().open(lightboxItemFromRef(asset))
+            }
           >
             <Maximize2 /> Expand
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => window.open(asset.url, "_blank", "noopener")}>
+          <DropdownMenuItem
+            onClick={() => window.open(asset.url, "_blank", "noopener")}
+          >
             <ExternalLink /> Open file
           </DropdownMenuItem>
           {asset.scope === "project" && (
@@ -874,11 +994,17 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
 /** User-message text with resolved `@` mentions rendered as interactive token
  * chips. Tokens resolve against the message's own attachments first (they hold
  * what was meant at send time), then the live candidates. */
-function MentionedText({ text, attachments }: { text: string; attachments: AssetRef[] }) {
+function MentionedText({
+  text,
+  attachments,
+}: {
+  text: string;
+  attachments: AssetRef[];
+}) {
   const candidates = useRefCandidates();
   const parts = useMemo(
     () => splitMentions(text, [...attachments, ...candidates]),
-    [text, attachments, candidates]
+    [text, attachments, candidates],
   );
   return (
     <>
@@ -887,7 +1013,7 @@ function MentionedText({ text, attachments }: { text: string; attachments: Asset
           <span key={i}>{p}</span>
         ) : (
           <RefTokenChip key={i} item={p} onDark />
-        )
+        ),
       )}
     </>
   );
@@ -901,7 +1027,11 @@ function MessageCopy({ text }: { text: string }) {
     <button
       aria-label="Copy message"
       title="Copy"
-      className={cn("ai-msg-copy", cardIconButton, "opacity-0 group-hover:opacity-100")}
+      className={cn(
+        "ai-msg-copy",
+        cardIconButton,
+        "opacity-0 group-hover:opacity-100",
+      )}
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setCopied(true);
@@ -909,7 +1039,11 @@ function MessageCopy({ text }: { text: string }) {
         });
       }}
     >
-      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
+      {copied ? (
+        <Check className="size-3.5 text-emerald-600" />
+      ) : (
+        <Copy className="size-3.5" />
+      )}
     </button>
   );
 }
@@ -920,7 +1054,10 @@ function MessageCopy({ text }: { text: string }) {
 // How long each tool call ran, tracked across this session's renders (keyed by
 // tool-call id). We stamp the start the first time a call renders while still
 // running and the end when it settles, so the chip can show its duration.
-const toolTimes = new Map<string, { start: number; end?: number; sawRunning: boolean }>();
+const toolTimes = new Map<
+  string,
+  { start: number; end?: number; sawRunning: boolean }
+>();
 // The map lives for the page; long sessions evict the oldest settled entries
 // (their chips have already captured the duration they show).
 const TOOL_TIMES_CAP = 500;
@@ -940,7 +1077,9 @@ function toolDuration(id: string | undefined, settled: boolean): string | null {
   if (settled && t.end === undefined) t.end = Date.now();
   // Null for a call first seen already-done (e.g. loaded on reload): its real
   // start is unknown, so a "0:00" would lie.
-  return t.sawRunning && t.end !== undefined ? formatDuration(t.end - t.start) : null;
+  return t.sawRunning && t.end !== undefined
+    ? formatDuration(t.end - t.start)
+    : null;
 }
 
 /** Live clock on a still-running tool chip. Its own component so the ticking
@@ -948,15 +1087,25 @@ function toolDuration(id: string | undefined, settled: boolean): string | null {
  * re-renders on stream chunks, which stop arriving while a tool runs. */
 function RunningToolClock({ start }: { start: number }) {
   const elapsed = useElapsed(start);
-  return elapsed ? <span className="ml-auto tabular-nums text-[10px]">{elapsed}</span> : null;
+  return elapsed ? (
+    <span className="ml-auto tabular-nums text-[10px]">{elapsed}</span>
+  ) : null;
 }
 
-const MessageView = memo(function MessageView({ message }: { message: UIMessage }) {
+const MessageView = memo(function MessageView({
+  message,
+}: {
+  message: UIMessage;
+}) {
   if (message.role === "user") {
-    const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+    const text = message.parts
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("");
     // normalizeRef also reads attachments saved by older threads (pre-ref shape).
-    const attachments = ((message.metadata as { attachments?: unknown[] } | undefined)
-      ?.attachments ?? [])
+    const attachments = (
+      (message.metadata as { attachments?: unknown[] } | undefined)
+        ?.attachments ?? []
+    )
       .map(normalizeRef)
       .filter((r): r is AssetRef => r !== null);
     return (
@@ -977,18 +1126,26 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
       </div>
     );
   }
-  const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+  const text = message.parts
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .join("");
   return (
     <div className="ai-msg-assistant group mb-3 flex flex-col gap-1.5">
       {message.parts.map((part, i) => {
         if (part.type === "text") {
           return (
-            <div key={i} className="ai-md max-w-full text-[12.5px] leading-relaxed">
+            <div
+              key={i}
+              className="ai-md max-w-full text-[12.5px] leading-relaxed"
+            >
               <Markdown
                 components={{
                   ...baseMarkdownComponents,
                   code: (p) => (
-                    <code className="rounded bg-muted px-1 py-px font-mono text-[11px]" {...p} />
+                    <code
+                      className="rounded bg-muted px-1 py-px font-mono text-[11px]"
+                      {...p}
+                    />
                   ),
                 }}
               >
@@ -1015,26 +1172,40 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
           // (settled chips show `took`; a call first seen already-done shows
           // neither — its real start is unknown).
           const runningSince =
-            !done && !failed && p.toolCallId ? toolTimes.get(p.toolCallId)?.start ?? null : null;
+            !done && !failed && p.toolCallId
+              ? (toolTimes.get(p.toolCallId)?.start ?? null)
+              : null;
           return (
             <Fragment key={i}>
               <details className="ai-tool group max-w-full">
                 <summary
                   className={cn(
                     "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden",
-                    failed && "border-red-200 text-red-700"
+                    failed && "border-red-200 text-red-700",
                   )}
                 >
                   <Wrench className="size-3 shrink-0" />
                   <span className="font-mono">{name}</span>
                   {done && <Check className="size-3 text-emerald-600" />}
                   {failed && <TriangleAlert className="size-3" />}
-                  {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
-                  {took && <span className="ml-auto tabular-nums text-[10px]">{took}</span>}
-                  {runningSince != null && <RunningToolClock start={runningSince} />}
+                  {!done && !failed && (
+                    <CircleDashed className="size-3 animate-spin" />
+                  )}
+                  {took && (
+                    <span className="ml-auto tabular-nums text-[10px]">
+                      {took}
+                    </span>
+                  )}
+                  {runningSince != null && (
+                    <RunningToolClock start={runningSince} />
+                  )}
                 </summary>
                 <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
-                  {JSON.stringify({ input: p.input, output: p.output, error: p.errorText }, null, 2)}
+                  {JSON.stringify(
+                    { input: p.input, output: p.output, error: p.errorText },
+                    null,
+                    2,
+                  )}
                 </pre>
               </details>
               {/* Media the tool made previews right under its chip — it stays
@@ -1058,15 +1229,20 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
 function ThreadRenders({ threadId }: { threadId: string }) {
   const jobs = useGenerate((s) => s.jobs);
   const running = jobs.filter(
-    (j) => j.kind === "video" && j.status === "running" && j.chatId === threadId
+    (j) =>
+      j.kind === "video" && j.status === "running" && j.chatId === threadId,
   );
-  const oldest = running.length ? Math.min(...running.map((j) => j.startedAt)) : null;
+  const oldest = running.length
+    ? Math.min(...running.map((j) => j.startedAt))
+    : null;
   const elapsed = useElapsed(oldest);
   if (running.length === 0) return null;
   return (
     <div className="ai-renders mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
       <CircleDashed className="size-3 animate-spin" />
-      Rendering {running.length === 1 ? "a video" : `${running.length} videos`}…{" "}
+      Rendering {running.length === 1
+        ? "a video"
+        : `${running.length} videos`}…{" "}
       {elapsed && <span className="tabular-nums">{elapsed}</span>}
     </div>
   );
@@ -1089,9 +1265,16 @@ function ModelSelector({
       return [];
     }
   });
-  const showTest = typeof window !== "undefined" && localStorage.getItem("cut-ai-test") === "1";
+  const showTest =
+    typeof window !== "undefined" &&
+    localStorage.getItem("cut-ai-test") === "1";
   const models = AI_MODELS.filter((m) => !m.hidden || showTest);
-  const groups = ["claude", "codex", "gemini", ...(showTest ? ["test"] : [])].map((p) => ({
+  const groups = [
+    "claude",
+    "codex",
+    "gemini",
+    ...(showTest ? ["test"] : []),
+  ].map((p) => ({
     provider: p,
     models: models.filter((m) => m.provider === p),
     available: info?.providers[p]?.available ?? true,
@@ -1101,16 +1284,16 @@ function ModelSelector({
   const currentLabel = models.find((m) => m.id === model)?.label ?? model;
 
   const toggleFav = (id: string) => {
-    const next = favs.includes(id) ? favs.filter((f) => f !== id) : [...favs, id];
+    const next = favs.includes(id)
+      ? favs.filter((f) => f !== id)
+      : [...favs, id];
     setFavs(next);
     localStorage.setItem(FAVS_KEY, JSON.stringify(next));
   };
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        className="ai-model-trigger flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
+      <DropdownMenuTrigger className="ai-model-trigger flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
         <Sparkles className="size-3" />
         {currentLabel}
         <ChevronDown className="size-3" />
@@ -1130,7 +1313,9 @@ function ModelSelector({
               <DropdownMenuLabel className="flex items-center gap-1.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
                 <Sparkles className="size-3" /> {PROVIDER_LABEL[group.provider]}
                 {!group.available && (
-                  <span className="ml-1 font-normal normal-case text-amber-700">· {group.note}</span>
+                  <span className="ml-1 font-normal normal-case text-amber-700">
+                    · {group.note}
+                  </span>
                 )}
               </DropdownMenuLabel>
               {group.models.map((m) => (
@@ -1141,7 +1326,9 @@ function ModelSelector({
                   onClick={() => onSelect(m.id)}
                 >
                   <span className="flex-1 text-[12px]">{m.label}</span>
-                  {model === m.id && <Check className="size-3.5 text-[#0a84ff]" />}
+                  {model === m.id && (
+                    <Check className="size-3.5 text-[#0a84ff]" />
+                  )}
                   <button
                     className="rounded p-0.5 hover:bg-muted"
                     title={favs.includes(m.id) ? "Unfavorite" : "Favorite"}
@@ -1154,7 +1341,9 @@ function ModelSelector({
                     <Star
                       className={cn(
                         "size-3",
-                        favs.includes(m.id) ? "fill-amber-400 text-amber-400" : "text-muted-foreground/50"
+                        favs.includes(m.id)
+                          ? "fill-amber-400 text-amber-400"
+                          : "text-muted-foreground/50",
                       )}
                     />
                   </button>
@@ -1164,7 +1353,7 @@ function ModelSelector({
                 </DropdownMenuItem>
               ))}
             </DropdownMenuGroup>
-          )
+          ),
         )}
       </DropdownMenuContent>
     </DropdownMenu>
