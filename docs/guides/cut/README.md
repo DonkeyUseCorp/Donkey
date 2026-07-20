@@ -20,7 +20,7 @@ browser ── API calls ──▶ Cut engine on 127.0.0.1 (spawned by the Donke
              · the user's own claude/codex CLI logins
 ```
 
-The client probes the engine's health endpoint (dedicated port first, dev server second) and remembers the winner. The engine grants the hosted origins cross-origin access, and only those origins. Without a running engine the page shows a "get Donkey / open Donkey" state that connects by itself as soon as the engine appears. Engine updates ride the Donkey app's own auto-updater, so the client never prompts to update.
+The client probes the engine's health endpoint (dedicated port first, dev server second) and remembers the winner. Browsers permission-gate a hosted page's calls to the local machine, so the first hosted visit holds on a connect screen and fires the browser's permission prompt from the user's own click; a denied permission gets its own recovery screen. The engine grants the hosted origins cross-origin access, and only those origins. Without a running engine the page shows a "get Donkey / open Donkey" state that connects by itself as soon as the engine appears. Engine updates ride the Donkey app's own auto-updater, so the client never prompts to update.
 
 ## One API surface, one router
 

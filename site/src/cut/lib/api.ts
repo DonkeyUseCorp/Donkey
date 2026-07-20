@@ -13,9 +13,18 @@ import { DEFAULT_ENGINE_PORT } from "./ports";
 
 const ENGINE_PORTS = [DEFAULT_ENGINE_PORT, 3000];
 const PROBE_TIMEOUT_MS = 1200;
+// A first-ever loopback fetch from the hosted page hangs on the browser's
+// local-network permission prompt until the user answers it; the connect
+// probe waits that decision out instead of racing the health timeout.
+const CONNECT_TIMEOUT_MS = 30_000;
 
 const isLocalHost = (hostname: string) =>
   hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".localhost");
+
+/** Whether the page is served by the engine itself (same origin, so loopback
+ * API calls need no browser permission). */
+export const servedFromEngine = () =>
+  typeof window !== "undefined" && isLocalHost(window.location.hostname);
 
 let resolvedOrigin: string | null = null; // "" = same origin
 let resolving: Promise<string> | null = null;
@@ -26,15 +35,34 @@ function candidates(): string[] {
   return [...(saved ? [saved] : []), ...ENGINE_PORTS.map((p) => `http://127.0.0.1:${p}`)];
 }
 
-async function probe(origin: string): Promise<boolean> {
+async function probe(origin: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   try {
     const res = await fetch(`${origin}/api/cut/engine/health`, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return res.ok;
   } catch {
     return false;
   }
+}
+
+/** The hosted page's first connection to this Mac, run from the connect
+ * screen's button so the browser's permission prompt lands in context. Probes
+ * like engineReady but gives the user time to answer the prompt. Resolves
+ * false when no engine answered; the app then shows its get-Donkey state. */
+export async function engineConnect(): Promise<boolean> {
+  if (resolvedOrigin !== null) return true;
+  if (servedFromEngine()) {
+    resolvedOrigin = "";
+    return true;
+  }
+  for (const c of candidates()) {
+    if (await probe(c, CONNECT_TIMEOUT_MS)) {
+      resolvedOrigin = c;
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Resolve (and memoize) the engine origin; throws when no engine answers so
