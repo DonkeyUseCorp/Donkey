@@ -4,8 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
-import { Footer } from "@/app/_components/landing/Footer";
 import { TopNav } from "@/app/_components/landing/TopNav";
+import { CutFooter } from "@/app/cut/_components/landing/CutFooter";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 
@@ -137,7 +137,9 @@ export function AuthScreen({ mode }: Props) {
 
   return (
     <main className="min-h-screen w-full bg-background font-system text-ink antialiased">
+      {/* Auth serves same-host on donkeycut.com, so the chrome is Cut's. */}
       <TopNav
+        wordmark="Donkey Cut"
         authToggle={{
           href: screenCopy.alternateHref,
           label: copy[otherMode].title,
@@ -154,7 +156,7 @@ export function AuthScreen({ mode }: Props) {
           {formContent}
         </div>
       </section>
-      <Footer />
+      <CutFooter />
     </main>
   );
 }
