@@ -113,14 +113,14 @@ export function MockTimeline({ project }: { project: MockProject }) {
             {project.sfx.map((fx) => (
               <div
                 key={fx.text}
-                className="absolute top-0 flex items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]"
+                className="absolute top-0 flex items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]"
                 style={{
                   left: fx.at * pxPerSec,
                   width: Math.max(8, fx.seconds * pxPerSec - CLIP_GAP),
                   height: SFX_H - 2,
                 }}
               >
-                <span className="truncate px-1.5 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+                <span className="truncate px-1.5 text-[9.5px] font-medium whitespace-nowrap text-amber-950/90">
                   {fx.text}
                 </span>
               </div>
