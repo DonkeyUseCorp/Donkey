@@ -10,6 +10,7 @@ import { GITHUB_REPO_URL } from "@/app/_components/landing/data";
 export function CutFooter() {
   const links = [
     { href: GITHUB_REPO_URL, label: "GitHub" },
+    { href: "https://discord.gg/CPQu5XXmw", label: "Discord" },
     { href: "https://donkeyuse.com", label: "Donkey" },
     { href: "/privacy", label: "Privacy Policy" },
     { href: "/terms", label: "Terms of Use" },
