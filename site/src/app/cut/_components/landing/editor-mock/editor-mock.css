@@ -29,27 +29,9 @@
   animation: mock-msg-in 420ms both;
 }
 
-@keyframes mock-typing {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-    transform: none;
-  }
-  30% {
-    opacity: 1;
-    transform: translateY(-2px);
-  }
-}
-
-.mock-typing-dot {
-  animation: mock-typing 1.2s infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .mock-playhead,
-  .mock-chat-msg,
-  .mock-typing-dot {
+  .mock-chat-msg {
     animation: none;
   }
 }

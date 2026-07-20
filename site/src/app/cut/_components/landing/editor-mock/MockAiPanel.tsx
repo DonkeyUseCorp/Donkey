@@ -1,6 +1,15 @@
 "use client";
 
-import { ArrowUp, ChevronDown, Mic, Sparkles, X } from "lucide-react";
+import {
+  ArrowUp,
+  ChevronDown,
+  CircleDashed,
+  History,
+  Mic,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
   MockChatMessage,
@@ -13,10 +22,14 @@ export function MockAiPanel({ project }: { project: MockProject }) {
   return (
     <aside className="relative flex h-full w-[340px] shrink-0 flex-col overflow-hidden border-l border-border bg-card">
       <div className="flex h-[46px] shrink-0 items-center gap-1.5 border-b border-border pr-2 pl-3.5">
-        <Sparkles className="size-3.5 text-muted-foreground" />
-        <span className="text-sm font-semibold tracking-tight">Chat</span>
         <div className="flex-1" />
-        <span className="grid size-7 place-items-center rounded-md text-muted-foreground">
+        <span className="grid size-8 place-items-center rounded-md text-muted-foreground">
+          <History className="size-4" />
+        </span>
+        <span className="grid size-8 place-items-center rounded-md text-muted-foreground">
+          <Plus className="size-4" />
+        </span>
+        <span className="grid size-8 place-items-center rounded-md text-muted-foreground">
           <X className="size-4" />
         </span>
       </div>
@@ -26,16 +39,10 @@ export function MockAiPanel({ project }: { project: MockProject }) {
           <MockMessage key={index} message={message} index={index} />
         ))}
         <div
-          className="mock-chat-msg mb-1 flex items-center gap-1 py-1"
+          className="mock-chat-msg mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground"
           style={{ animationDelay: `${project.chat.length * 120}ms` }}
         >
-          {[0, 150, 300].map((delay) => (
-            <span
-              key={delay}
-              className="mock-typing-dot size-1.5 rounded-full bg-muted-foreground/60"
-              style={{ animationDelay: `${delay}ms` }}
-            />
-          ))}
+          <CircleDashed className="size-3 animate-spin" /> Working… 3s
         </div>
       </div>
 
@@ -47,14 +54,14 @@ export function MockAiPanel({ project }: { project: MockProject }) {
           <div className="flex items-center gap-1 px-1.5 pb-1.5">
             <span className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground">
               <Sparkles className="size-3" />
-              Fable
+              Fable 5
               <ChevronDown className="size-3" />
             </span>
             <div className="flex-1" />
-            <span className="grid size-7 place-items-center rounded-md text-muted-foreground">
+            <span className="grid h-8 place-items-center rounded-md px-2.5 text-muted-foreground">
               <Mic className="size-3.5" />
             </span>
-            <span className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
+            <span className="grid h-8 place-items-center rounded-md bg-primary px-3 text-primary-foreground shadow-xs">
               <ArrowUp className="size-3.5" />
             </span>
           </div>
