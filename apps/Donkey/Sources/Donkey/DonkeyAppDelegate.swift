@@ -82,11 +82,8 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.applySessionState(isSignedIn: phase.isSignedIn)
             }
 
-        // First install (never signed in) opens the onboarding card on its sign-in landing. A
-        // returning user signs in from the status menu instead.
-        if !authCoordinator.isAuthenticated && !authCoordinator.hasEverSignedIn {
-            presentOnboardingCard()
-        }
+        // The sign-in onboarding card belongs to Donkey Use, which is deprecated. The app is the
+        // Donkey Cut distribution now — free and standalone — so no launch presents it.
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -109,9 +106,8 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        if authCoordinator?.isAuthenticated != true {
-            presentOnboardingCard()
-        }
+        // Reopening no longer surfaces the deprecated Donkey Use sign-in card; Cut lives in the
+        // browser reached from the status menu.
         return true
     }
 
