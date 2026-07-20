@@ -228,7 +228,16 @@ function CallDetail({ call }: { call: RecentCall }) {
   );
 }
 
-export function UsageHistoryCard() {
+// showVision=false (Cut's usage page) drops the Vision API tab and shows only
+// app calls. plain=true drops the card chrome entirely — the table renders
+// directly on the page and stretches to the space its parent gives it.
+export function UsageHistoryCard({
+  showVision = true,
+  plain = false,
+}: {
+  showVision?: boolean;
+  plain?: boolean;
+}) {
   const usage = useUsage();
   const [tab, setTab] = useState<TabKey>("app");
   const [page, setPage] = useState(1);
@@ -239,6 +248,9 @@ export function UsageHistoryCard() {
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   if (usage.isLoading) {
+    if (plain) {
+      return <Skeleton className="h-64 w-full" />;
+    }
     return (
       <Card>
         <CardHeader>
@@ -302,12 +314,13 @@ export function UsageHistoryCard() {
     }
   };
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Usage history</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+  // In a height-constrained flex column (Cut's usage page) the wrapper fills
+  // the remaining space, the table body scrolls on its own with the column
+  // header row pinned, and the pagination stays visible below. In normal flow
+  // (the apex settings) these classes are inert and the card grows as before.
+  const body = (
+    <>
+        {showVision ? (
         <div className="inline-flex rounded-md border p-0.5">
           {tabs.map((item) => (
             <button
@@ -325,14 +338,29 @@ export function UsageHistoryCard() {
             </button>
           ))}
         </div>
+        ) : null}
 
+        {/* The table's own container must stay overflow-visible so the sticky
+            header row pins against the real scroll ancestor: this wrapper in
+            card mode, the surrounding pane in plain mode. */}
+        <div
+          className={cn(
+            "[&_[data-slot=table-container]]:overflow-visible",
+            !plain && "min-h-0 flex-1 overflow-y-auto",
+          )}
+        >
         {tabRows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No {tab === "app" ? "app" : "Vision API"} calls yet.
           </p>
         ) : (
           <Table>
-            <TableHeader>
+            <TableHeader
+              className={cn(
+                "sticky top-0 z-10",
+                plain ? "bg-background" : "bg-card",
+              )}
+            >
               <TableRow>
                 <TableHead>Date</TableHead>
                 <TableHead>Kind</TableHead>
@@ -430,8 +458,10 @@ export function UsageHistoryCard() {
             </TableBody>
           </Table>
         )}
+        </div>
 
         {totalPages > 1 ? (
+        <div className={cn(plain && "sticky bottom-0 z-10 bg-background py-3")}>
           <Pagination>
             <PaginationContent>
               <PaginationItem>
@@ -468,7 +498,21 @@ export function UsageHistoryCard() {
               </PaginationItem>
             </PaginationContent>
           </Pagination>
+        </div>
         ) : null}
+    </>
+  );
+
+  if (plain) {
+    return <div className="space-y-4">{body}</div>;
+  }
+  return (
+    <Card className="min-h-0 flex-1">
+      <CardHeader>
+        <CardTitle>Usage history</CardTitle>
+      </CardHeader>
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
+        {body}
       </CardContent>
     </Card>
   );

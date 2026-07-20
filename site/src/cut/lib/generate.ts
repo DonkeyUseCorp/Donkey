@@ -7,7 +7,7 @@ import type { AssetRef } from "./assetRef";
 import { bytesFromBase64 } from "./bytes";
 import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { stockAssetInDoc } from "./genvideo/docWriter";
-import { DONKEY_APEX_ORIGIN, isDonkeycutHost } from "./hosts";
+import { DONKEY_APEX_ORIGIN, cutAppBase, isDonkeycutHost } from "./hosts";
 import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
 import { refsToInlineImages, videoSafeInline, visualRefs, type InlineImage } from "./refMedia";
@@ -198,15 +198,12 @@ export function signInUrl(): string {
  * credits link, so keep it and those call sites in sync. */
 export const NO_CREDITS_MESSAGE = "No credits left";
 
-/** The Donkey settings page where credits are bought (cut.* → apex). Linked
- * from any generation error caused by an empty balance. */
+/** Cut's billing page, where credits are bought — same-host on every host via
+ * the app link base. Linked from any generation error caused by an empty
+ * balance. */
 export function creditsUrl(): string {
-  if (typeof window === "undefined") return "/app/settings";
-  const { protocol, host } = window.location;
-  // On donkeycut.com the settings routes are served same-host (see src/proxy.ts).
-  if (isDonkeycutHost(host)) return "/app/settings";
-  const apex = `${protocol}//${host.replace(/^cut\./, "")}`;
-  return `${apex}/app/settings`;
+  if (typeof window === "undefined") return "/cut/app/settings";
+  return `${cutAppBase(window.location.host)}/settings`;
 }
 
 /** Creation-time ownership for generated media, in one place so the rule can't

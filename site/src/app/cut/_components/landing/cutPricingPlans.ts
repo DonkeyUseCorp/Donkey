@@ -25,7 +25,7 @@ export function cutPricingPlans(root: string): PricingPlan[] {
     },
     {
       action: {
-        href: "/app/settings",
+        href: `${root}/app/settings`,
         kind: "link",
         label: "Get Pro",
       },

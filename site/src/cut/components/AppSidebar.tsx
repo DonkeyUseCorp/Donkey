@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/cut/lib/api";
+import { NavUser } from "@/cut/components/NavUser";
 import { homeHref, projectHref, tabForPath, useCutBase, type CutTab } from "@/cut/lib/nav";
 import type { ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -90,6 +91,7 @@ export function AppSidebar() {
           );
         })}
       </nav>
+      <NavUser />
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
