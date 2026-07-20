@@ -9,10 +9,9 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
+final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var onboardingWindowController: OnboardingWindowController?
-    private var permissionSetupController: MacPermissionSetupWindowController?
     /// The menu bar surface: the status item whose menu carries Go to App / Log in / Log out.
     private var statusItemController: DonkeyStatusItemController?
     /// Sparkle, running windowless. A background check that finds an update surfaces the status
@@ -86,7 +85,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         // First install (never signed in) opens the onboarding card on its sign-in landing. A
         // returning user signs in from the status menu instead.
         if !authCoordinator.isAuthenticated && !authCoordinator.hasEverSignedIn {
-            presentOnboardingCard(entry: .signIn)
+            presentOnboardingCard()
         }
     }
 
@@ -111,7 +110,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         hasVisibleWindows flag: Bool
     ) -> Bool {
         if authCoordinator?.isAuthenticated != true {
-            presentOnboardingCard(entry: .signIn)
+            presentOnboardingCard()
         }
         return true
     }
@@ -129,19 +128,11 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         cutEngineSupervisor?.stop()
     }
 
-    /// Where to open the onboarding card.
-    private enum OnboardingEntry {
-        /// Land on the sign-in slide: signed-out app-open, reopen, or post-sign-out.
-        case signIn
-        /// Open on the feature tour: the "Show Onboarding" menu replay.
-        case tour
-    }
-
     /// Presents the onboarding card — the single surface for both the walkthrough and login. When signed
     /// out, slide 0 is the Google sign-in landing with an Explore link into the feature tour, and the card
     /// stays up until sign-in completes (the `authenticationCompleted` handler closes it). When signed in,
-    /// it's the feature tour ending in Done. `entry` chooses the opening slide.
-    private func presentOnboardingCard(entry: OnboardingEntry) {
+    /// it's the feature tour ending in Done.
+    private func presentOnboardingCard() {
         guard let authCoordinator else { return }
         NSApp.setActivationPolicy(.regular)
 
@@ -163,21 +154,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         }
         let pages = OnboardingTour.pages(isSignedIn: isSignedIn)
 
-        // Signed-out pages are [sign-in, features...]. `.signIn` opens on the landing (0); `.tour` skips
-        // to the first feature (1). Signed-in pages are features only, always opened at 0.
-        let initialPageIndex: Int
-        if isSignedIn {
-            initialPageIndex = 0
-        } else {
-            switch entry {
-            case .signIn: initialPageIndex = 0
-            case .tour: initialPageIndex = min(1, pages.count - 1)
-            }
-        }
-
         controller.present(
             pages: pages,
-            initialPageIndex: initialPageIndex,
+            initialPageIndex: 0,
             continueButtonTitle: "Continue",
             finishButtonTitle: "Done",
             onDismiss: { [weak self] in self?.onboardingWindowController = nil },
@@ -301,26 +280,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Sign out
 
-    @objc private func signOutMenuAction(_ sender: Any?) {
-        signOut()
-    }
-
-    @objc private func showOnboardingMenuAction(_ sender: Any?) {
-        presentOnboardingCard(entry: .tour)
-    }
-
-    // MARK: - Permissions setup
-
-    /// Opens the Accessibility / screenshot / microphone permission walkthrough on demand.
-    @objc private func permissionsSetupMenuAction(_ sender: Any?) {
-        let controller = MacPermissionSetupWindowController()
-        permissionSetupController = controller
-        controller.completed = { [weak self] in
-            self?.permissionSetupController = nil
-        }
-        controller.showSetup()
-    }
-
     private func signOut() {
         // User-initiated: revoke every session for this user so the website (and any other device) signs
         // out too. The phase observer tears down the session-bound machinery, and the status menu flips
@@ -328,60 +287,30 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         authCoordinator?.signOut(revokingRemoteSessions: true)
     }
 
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(signOutMenuAction) {
-            return authCoordinator?.isAuthenticated == true
-        }
-        return true
-    }
-
     // MARK: - Menu
+
+    /// The app main menu, mirroring the status-item menu with About on top.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        menu.addItem(
+            withTitle: "About \(Self.appDisplayName)",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        menu.addItem(.separator())
+        statusItemController?.populateSessionItems(in: menu)
+    }
 
     private func installMainMenu() {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
+        // Rebuilt on every open (and on key-equivalent lookup) by `menuNeedsUpdate`, so it tracks
+        // the session and update state the same way the status-item menu does.
         let appMenu = NSMenu()
+        appMenu.delegate = self
         appMenuItem.submenu = appMenu
-
-        appMenu.addItem(
-            withTitle: "About \(Self.appDisplayName)",
-            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-            keyEquivalent: ""
-        )
-        appMenu.addItem(.separator())
-
-        let showOnboardingItem = NSMenuItem(
-            title: "Show Onboarding",
-            action: #selector(showOnboardingMenuAction(_:)),
-            keyEquivalent: ""
-        )
-        showOnboardingItem.target = self
-        appMenu.addItem(showOnboardingItem)
-
-        let permissionsSetupItem = NSMenuItem(
-            title: "Permissions Setup",
-            action: #selector(permissionsSetupMenuAction(_:)),
-            keyEquivalent: ""
-        )
-        permissionsSetupItem.target = self
-        appMenu.addItem(permissionsSetupItem)
-
-        let signOutItem = NSMenuItem(
-            title: "Sign Out",
-            action: #selector(signOutMenuAction(_:)),
-            keyEquivalent: ""
-        )
-        signOutItem.target = self
-        appMenu.addItem(signOutItem)
-
-        appMenu.addItem(.separator())
-        appMenu.addItem(
-            withTitle: "Quit \(Self.appDisplayName)",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
 
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)

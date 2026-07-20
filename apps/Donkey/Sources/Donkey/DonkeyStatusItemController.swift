@@ -51,7 +51,12 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        populateSessionItems(in: menu)
+    }
 
+    /// The session-following item set — Go to App / Log in / Log out, the update section, and
+    /// Quit. The status-item menu is exactly this; the app main menu appends it after About.
+    func populateSessionItems(in menu: NSMenu) {
         if isSignedIn() {
             menu.addItem(makeItem(title: "Go to App", action: #selector(goToAppAction)))
             menu.addItem(makeItem(title: "Log out", action: #selector(logOutAction)))
