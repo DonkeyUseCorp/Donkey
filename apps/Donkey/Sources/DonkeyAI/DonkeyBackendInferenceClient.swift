@@ -61,7 +61,7 @@ extension DonkeyBackendInferenceClientError {
 /// the same billing destination rather than leaking a raw `httpStatus(402, …)` dump to the user.
 public enum DonkeyCreditExhaustion {
     /// Where users top up. Shown in the message and used by any UI that opens the billing page.
-    public static let billingURLString = "https://donkeyuse.com/app/settings"
+    public static let billingURLString = "https://donkeycut.com/app/settings"
 
     /// Whether a failure is the credit-exhausted state. A 402 reaches us two ways: the typed
     /// `.insufficientCredits` from the normal request path, and a raw `.httpStatus(402, …)` when the
