@@ -12,41 +12,20 @@ import { prisma } from "@/lib/prisma";
 // once at creation; only a hash is stored (handled by the apiKey plugin).
 export const visionApiKeyPrefix = "dk_live_";
 
-// Both donkeycut.com and www.donkeycut.com serve the site, but the Google OAuth
-// redirect_uri is pinned to BETTER_AUTH_URL's host. A sign-in started on one
-// host would set a host-only state cookie there while the callback lands on the
-// other, so better-auth can't find the cookie and rejects it as state_mismatch.
-// Scoping the auth cookies to the registrable host lets them ride across both.
-//
-// Local dev needs none of this: everything is served from the one localhost
-// origin, so the session cookie is already same-origin. (A Domain=localhost
-// cookie doesn't reach a subdomain in Chrome anyway.)
-function crossSubDomainCookieDomain() {
-  const baseURL = process.env.BETTER_AUTH_URL;
-  if (!baseURL) return undefined;
-
-  let host: string;
-  try {
-    host = new URL(baseURL).hostname;
-  } catch {
-    return undefined;
-  }
-
-  if (/^[0-9.]+$/.test(host)) return undefined;
-  if (host === "localhost" || host.endsWith(".localhost")) return undefined;
-
-  return host;
-}
-
-const cookieDomain = crossSubDomainCookieDomain();
+// donkeycut.com is the single production host: the sign-in pages, the auth
+// API, the Google OAuth callback, and the session all live on that one origin
+// (the proxy 308s www. to the apex before anything serves), so auth cookies
+// stay plain host-only cookies. Hosted deploys pin baseURL there — it decides
+// the OAuth redirect_uri — while local dev leaves it unset and better-auth
+// derives it from the localhost request.
+const baseURL = process.env.VERCEL ? DONKEYCUT_CANONICAL : undefined;
 
 export const auth = betterAuth({
-  baseURL: process.env.BETTER_AUTH_URL,
+  baseURL,
   secret: process.env.BETTER_AUTH_SECRET,
-  // donkeycut.com is the canonical host and its www. mirror POSTs to the auth
-  // API cross-origin (sign-out, session refresh), so better-auth's Origin check
-  // trusts it alongside the Mac-app handoff scheme.
-  trustedOrigins: [...macAuthRedirectOrigins(), DONKEYCUT_CANONICAL],
+  // The Mac-app handoff redirects to a custom URL scheme, which better-auth's
+  // callback-origin check must trust.
+  trustedOrigins: macAuthRedirectOrigins(),
   // Sessions last a year, and the rolling expiry is refreshed daily on use, so an active user effectively
   // never has to sign in again. The Mac app's native session cookie rides this same lifetime, keeping the
   // desktop signed in long after the handoff.
@@ -54,9 +33,6 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 365,
     updateAge: 60 * 60 * 24,
   },
-  advanced: cookieDomain
-    ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
-    : undefined,
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
