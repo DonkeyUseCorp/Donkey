@@ -27,7 +27,7 @@ export function CutLanding({ root }: { root: string }) {
     >
       <TopNav homeHref={root || "/"} wordmark="Donkey Cut" showAuthLinks={false} />
       <CutHero root={root} />
-      <CutPricing />
+      <CutPricing root={root} />
       <CutOpenSource />
       <CutFinalCTA root={root} />
       <CutFooter />

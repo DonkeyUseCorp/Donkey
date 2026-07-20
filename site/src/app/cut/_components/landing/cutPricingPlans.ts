@@ -1,44 +1,46 @@
 import type { PricingPlan } from "@/app/_components/landing/pricingPlans";
 
-// Cut's pricing preview: editing is free and local; the paid plan covers the
-// hosted AI generation that runs on Donkey credits. Actions avoid /sign-up —
-// that route does not exist on donkeycut.com; the download carries onboarding.
-export const cutPricingPlans = [
-  {
-    action: {
-      href: "/install",
-      kind: "link",
-      label: "Download for Mac",
+// Cut's two tiers: the editor itself is free and local; Pro adds monthly AI
+// generation credits. `root` prefixes in-app links ("" on donkeycut.com,
+// "/cut" in dev) so the cards work on either host.
+export function cutPricingPlans(root: string): PricingPlan[] {
+  return [
+    {
+      action: {
+        href: `${root}/app`,
+        kind: "link",
+        label: "Start a new project",
+      },
+      body: "The whole editor, running on your own hardware.",
+      color: "cream",
+      detail: "No account needed",
+      features: [
+        "Full access to the video editor",
+        "Import, export, and local transcription",
+        "Connect your Claude or Codex subscription",
+      ],
+      name: "Free",
+      price: "$0",
+      tapeColor: "coral",
     },
-    body: "Editing, timeline, and export are free and run entirely on your Mac. Pro covers the AI: image, video, voiceover, and music generation in the editor.",
-    color: "cream",
-    detail: "For individuals",
-    features: [
-      "Unlimited local editing and export",
-      "AI generation credits every month",
-      "Prioritized support and feature requests",
-    ],
-    name: "Pro",
-    price: "$20/month",
-    tapeColor: "coral",
-  },
-  {
-    action: {
-      href: "mailto:david@donkeyuse.com",
-      kind: "contact",
-      label: "Contact us",
+    {
+      action: {
+        href: "/app/settings",
+        kind: "link",
+        label: "Get Pro",
+      },
+      body: "For editors who want AI generation in the timeline.",
+      color: "coral",
+      detail: "For individuals",
+      features: [
+        "Everything in Free",
+        "Generous AI credits every month",
+        "Image, video, voiceover, and music generation",
+      ],
+      name: "Pro",
+      price: "$20/month",
+      tapeColor: "yellow",
+      tapePosition: "right",
     },
-    body: "Cutting video across a team? Reach out and we will figure out what makes sense.",
-    color: "coral",
-    detail: "built around your team",
-    features: [
-      "Team rollout planning",
-      "Security and deployment review",
-      "Custom support around your stack",
-    ],
-    name: "Enterprise",
-    price: "Let's talk",
-    tapeColor: "yellow",
-    tapePosition: "right",
-  },
-] satisfies PricingPlan[];
+  ];
+}

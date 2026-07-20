@@ -5,7 +5,7 @@ import { PricingPlanCard } from "@/app/_components/landing/PricingPlanCard";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { cutPricingPlans } from "@/app/cut/_components/landing/cutPricingPlans";
 
-export function CutPricing() {
+export function CutPricing({ root }: { root: string }) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
 
   return (
@@ -35,7 +35,7 @@ export function CutPricing() {
           gap: 24,
         }}
       >
-        {cutPricingPlans.map((plan) => (
+        {cutPricingPlans(root).map((plan) => (
           <PricingPlanCard key={plan.name} plan={plan} />
         ))}
       </div>
