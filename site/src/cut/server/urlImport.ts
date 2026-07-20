@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { addDownloaded, type LibraryAsset, type LibrarySource } from "./library";
@@ -9,6 +9,8 @@ import { uniqueName } from "./util";
 
 // Download a media URL (TikTok, YouTube, Instagram, …) with the bundled
 // yt-dlp, resolved from the widened PATH (tool-path.ts) exactly like ffmpeg.
+// yt-dlp only extracts video/audio, so a photo tweet falls back to fetching
+// the image through X's embed endpoint.
 
 const MEDIA_EXT = /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|aac|wav|ogg|flac)$/i;
 
@@ -23,15 +25,17 @@ interface YtMeta {
   webpage_url?: string;
 }
 
-/** What a finished download hands its consumer: the merged media file (inside
- * a temp dir the wrapper deletes afterwards) plus what yt-dlp knew about it. */
+/** What a finished download hands its consumer: the media files (inside a
+ * temp dir the wrapper deletes afterwards — one for yt-dlp's merged output,
+ * one per photo for a photo tweet) plus what the extractor knew about them.
+ * `text` is the full post text when the URL was a tweet. */
 interface Downloaded {
-  file: string;
-  title: string;
+  files: { file: string; title: string }[];
   source: LibrarySource;
+  text?: string;
 }
 
-/** Run one guarded download and hand the file to `consume` before the temp
+/** Run one guarded download and hand the files to `consume` before the temp
  * dir is deleted. The active slot spans the whole operation; mkdtemp runs
  * inside the try so a failure there still releases the slot (else a rejection
  * would leak it and, after MAX_ACTIVE failures, brick URL import until
@@ -46,24 +50,7 @@ async function withDownload<T>(url: string, consume: (dl: Downloaded) => Promise
   try {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "cut-dl-"));
     try {
-      const meta = await runYtDlp(url.trim(), tmp);
-      // Pick the largest media file left behind (the merged output).
-      const names = (await readdir(tmp)).filter((f) => MEDIA_EXT.test(f));
-      if (names.length === 0) throw new Error("Nothing downloadable was found at that URL.");
-      const sized = await Promise.all(
-        names.map(async (n) => ({ n, size: (await stat(path.join(tmp, n))).size }))
-      );
-      const file = sized.sort((a, b) => b.size - a.size)[0].n;
-      return await consume({
-        file: path.join(tmp, file),
-        title: (meta.title || "Imported clip").slice(0, 120),
-        source: {
-          url: meta.webpage_url || url.trim(),
-          title: meta.title,
-          uploader: meta.uploader,
-          uploadDate: meta.upload_date,
-        },
-      });
+      return await consume(await download(url.trim(), tmp));
     } finally {
       void rm(tmp, { recursive: true, force: true });
     }
@@ -72,25 +59,137 @@ async function withDownload<T>(url: string, consume: (dl: Downloaded) => Promise
   }
 }
 
-/** Download a URL into the shared Library (the Library panel's import box). */
-export async function importFromUrl(url: string): Promise<LibraryAsset> {
-  return withDownload(url, (dl) => addDownloaded(dl.file, dl.title, dl.source));
+/** Download a URL into the shared Library (the Library panel's import box).
+ * A multi-photo tweet lands as one asset per photo. */
+export async function importFromUrl(url: string): Promise<LibraryAsset[]> {
+  return withDownload(url, async (dl) => {
+    const assets: LibraryAsset[] = [];
+    for (const f of dl.files) assets.push(await addDownloaded(f.file, f.title, dl.source));
+    return assets;
+  });
 }
 
 /** Download a URL straight into a project's media folder (the chat's
- * import_url tool). Returns the project file name; the client builds and
- * registers the asset. */
+ * import_url tool). Returns the project file names; the client builds and
+ * registers the assets. */
 export async function importUrlToProject(
   projectId: string,
   url: string
-): Promise<{ fileName: string; title: string; source: LibrarySource }> {
+): Promise<{ files: { fileName: string; title: string }[]; source: LibrarySource; text?: string }> {
   if (!(await readProject(projectId))) throw new Error("Project not found.");
   return withDownload(url, async (dl) => {
     await mkdir(mediaDir(projectId), { recursive: true });
-    const dest = await uniqueName(path.basename(dl.file), (n) => projectMediaPath(projectId, n));
-    await copyFile(dl.file, projectMediaPath(projectId, dest));
-    return { fileName: dest, title: dl.title, source: dl.source };
+    const files: { fileName: string; title: string }[] = [];
+    for (const f of dl.files) {
+      const dest = await uniqueName(path.basename(f.file), (n) => projectMediaPath(projectId, n));
+      await copyFile(f.file, projectMediaPath(projectId, dest));
+      files.push({ fileName: dest, title: f.title });
+    }
+    return { files, source: dl.source, text: dl.text };
   });
+}
+
+/** yt-dlp handles anything with a video/audio stream. A direct image link
+ * skips it (yt-dlp rejects plain images), and a tweet it can't pull anything
+ * from may still carry photos, so those fall through to the photo fetch; its
+ * failure rethrows the yt-dlp error, which names the real cause. */
+async function download(url: string, tmp: string): Promise<Downloaded> {
+  if (IMAGE_URL_RE.test(url)) return downloadDirectImage(url, tmp);
+  try {
+    return await downloadMedia(url, tmp);
+  } catch (e) {
+    const tweetId = TWEET_RE.exec(url)?.[1];
+    if (!tweetId) throw e;
+    try {
+      return await downloadTweetPhotos(tweetId, url, tmp);
+    } catch {
+      throw e;
+    }
+  }
+}
+
+async function downloadMedia(url: string, tmp: string): Promise<Downloaded> {
+  const meta = await runYtDlp(url, tmp);
+  // Pick the largest media file left behind (the merged output).
+  const names = (await readdir(tmp)).filter((f) => MEDIA_EXT.test(f));
+  if (names.length === 0) throw new Error("Nothing downloadable was found at that URL.");
+  const sized = await Promise.all(
+    names.map(async (n) => ({ n, size: (await stat(path.join(tmp, n))).size }))
+  );
+  const file = sized.sort((a, b) => b.size - a.size)[0].n;
+  return {
+    files: [{ file: path.join(tmp, file), title: (meta.title || "Imported clip").slice(0, 120) }],
+    source: {
+      url: meta.webpage_url || url,
+      title: meta.title,
+      uploader: meta.uploader,
+      uploadDate: meta.upload_date,
+    },
+  };
+}
+
+const IMAGE_URL_RE = /\.(png|jpe?g|webp|gif|avif|bmp)(?:$|\?)/i;
+
+async function downloadDirectImage(url: string, dir: string): Promise<Downloaded> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Could not download that image.");
+  const name = path.basename(new URL(url).pathname) || "image.jpg";
+  const file = path.join(dir, name);
+  await writeFile(file, Buffer.from(await res.arrayBuffer()));
+  return { files: [{ file, title: name.slice(0, 120) }], source: { url } };
+}
+
+const TWEET_RE = /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/[^/]+\/status\/(\d+)/i;
+
+/** Fetch all of a tweet's photos through X's embed endpoint, plus the post
+ * text. The endpoint is auth-free but requires the token its embed script
+ * derives from the id — same float math here, precision loss included. */
+async function downloadTweetPhotos(id: string, url: string, dir: string): Promise<Downloaded> {
+  const token = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, "");
+  const res = await fetch(`https://cdn.syndication.twimg.com/tweet-result?id=${id}&token=${token}`);
+  if (!res.ok) throw new Error("Could not read the tweet.");
+  const tweet = (await res.json()) as {
+    text?: string;
+    user?: { name?: string; screen_name?: string };
+    photos?: { url?: string }[];
+  };
+  const photoUrls = (tweet.photos ?? []).map((p) => p.url).filter((u): u is string => !!u);
+  if (photoUrls.length === 0) throw new Error("No photo was found in this tweet.");
+  const handle = tweet.user?.screen_name;
+  // The endpoint HTML-escapes the post text; it becomes titles and chat text.
+  const text = (tweet.text || "")
+    .replace(/&(amp|lt|gt|quot|#39);/g, (_, e) =>
+      ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" })[e as string] ?? ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  const baseTitle = (text || `Photo from ${handle ? `@${handle}` : "X"}`).slice(0, 120);
+  const files: Downloaded["files"] = [];
+  for (const [i, photoUrl] of photoUrls.entries()) {
+    // pbs.twimg.com serves the original resolution behind name=orig.
+    let img = await fetch(`${photoUrl}${photoUrl.includes("?") ? "&" : "?"}name=orig`);
+    if (!img.ok) img = await fetch(photoUrl);
+    if (!img.ok) throw new Error("Could not download the tweet's photos.");
+    const ext = (
+      /\.(png|jpe?g|webp|gif)(?:$|\?)/i.exec(photoUrl)?.[1] ||
+      (img.headers.get("content-type")?.includes("png") ? "png" : "jpg")
+    ).toLowerCase();
+    const file = path.join(dir, `${id}-${i + 1}.${ext}`);
+    await writeFile(file, Buffer.from(await img.arrayBuffer()));
+    files.push({
+      file,
+      title: photoUrls.length > 1 ? `${baseTitle} (${i + 1}/${photoUrls.length})` : baseTitle,
+    });
+  }
+  return {
+    files,
+    source: {
+      url,
+      title: text || undefined,
+      uploader: handle ? `@${handle}` : tweet.user?.name,
+    },
+    text: text || undefined,
+  };
 }
 
 function runYtDlp(url: string, dir: string): Promise<YtMeta> {

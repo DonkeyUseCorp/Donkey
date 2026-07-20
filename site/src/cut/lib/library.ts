@@ -47,13 +47,13 @@ export async function fetchLibrary(): Promise<LibraryData> {
   return (await res.json()) as LibraryData;
 }
 
-export async function importUrlToLibrary(url: string): Promise<LibraryAsset> {
+export async function importUrlToLibrary(url: string): Promise<LibraryAsset[]> {
   const res = await apiFetch("/api/cut/library/import-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
   });
-  const body = await apiJson<LibraryAsset>(res);
+  const body = await apiJson<LibraryAsset[]>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not import that URL.");
   return body;
 }

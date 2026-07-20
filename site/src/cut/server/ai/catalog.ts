@@ -388,7 +388,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "import_url",
     description:
-      "Download a media URL — TikTok, YouTube, Instagram Reels, or a direct video/audio link — with the bundled downloader and import it into the project. Free and local. It lands on a card in this chat, and the user drags it from there to the timeline, Media, or the Library; place it yourself (add_clip) only when they asked for it in the cut. A short clip downloads in seconds; a long video can take a couple of minutes.",
+      "Download a media URL — TikTok, YouTube, Instagram Reels, an X/Twitter post, or a direct video/audio/image link — with the bundled downloader and import it into the project. An X post yields its video, or every photo plus the post text (postText). Free and local. Each asset lands on a card in this chat, and the user drags it from there to the timeline, Media, or the Library; place it yourself (add_clip) only when they asked for it in the cut. A short clip downloads in seconds; a long video can take a couple of minutes.",
     inputSchema: obj({ url: str("The page or media URL to download") }, ["url"]),
   },
   {

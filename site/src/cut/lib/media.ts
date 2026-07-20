@@ -208,40 +208,58 @@ export async function importStockVideo(
   return asset;
 }
 
-/** Download a media URL (TikTok, YouTube, …) into the project through the
- * engine's bundled downloader and register it, without placing it on the
- * timeline. Callers choose where it lands. */
-export async function importUrlMedia(projectId: string, url: string): Promise<MediaAsset> {
+/** Download a media URL (TikTok, YouTube, a tweet, …) into the project
+ * through the engine's bundled downloader and register what came back — one
+ * asset for a video, one per photo for a photo tweet — without placing
+ * anything on the timeline. Callers choose where assets land. `text` is the
+ * post text when the URL was a tweet. */
+export async function importUrlMedia(
+  projectId: string,
+  url: string
+): Promise<{ assets: MediaAsset[]; text?: string }> {
   const res = await apiFetch(`/api/cut/projects/${projectId}/import-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
   });
-  const body = await apiJson<{ fileName?: string; title?: string }>(res);
-  if (!res.ok || !body.fileName) throw new Error(body.error ?? "Could not import that URL.");
-  const asset = await assetFromProjectFile(projectId, body.fileName, body.title || "Imported clip");
-  useEditor.getState().addAsset(asset);
-  void enrichAsset(asset);
-  return asset;
+  const body = await apiJson<{ files?: { fileName: string; title: string }[]; text?: string }>(res);
+  if (!res.ok || !body.files?.length) throw new Error(body.error ?? "Could not import that URL.");
+  const assets: MediaAsset[] = [];
+  for (const f of body.files) {
+    const asset = await assetFromProjectFile(projectId, f.fileName, f.title || "Imported clip");
+    useEditor.getState().addAsset(asset);
+    void enrichAsset(asset);
+    assets.push(asset);
+  }
+  return { assets, text: body.text };
 }
 
 /** Build a runtime asset for a media file the engine already wrote into the
- * project folder (freeze frames, AI generations) — probe metadata, no upload. */
+ * project folder (freeze frames, AI generations, URL imports) — probe
+ * metadata, no upload. */
 export async function assetFromProjectFile(
   projectId: string,
   fileName: string,
   name: string
 ): Promise<MediaAsset> {
   const url = mediaUrl(projectId, fileName);
-  const v = await loadVideoMeta(url);
   const asset: MediaAsset = {
     id: uid(),
     fileName,
     name,
     type: "video",
-    duration: v.duration,
+    duration: 0,
     url,
   };
+  if (/\.(png|jpe?g|webp|gif|avif|bmp)$/i.test(fileName)) {
+    asset.type = "image";
+    const dims = await loadImageMeta(url);
+    asset.width = dims.width;
+    asset.height = dims.height;
+    return asset;
+  }
+  const v = await loadVideoMeta(url);
+  asset.duration = v.duration;
   if (v.videoWidth === 0) {
     asset.type = "audio";
   } else {

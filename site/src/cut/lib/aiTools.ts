@@ -949,13 +949,16 @@ export async function runAiTool(
       // Captured before the download: the media files under the chat that
       // asked, even if the user switches threads while it downloads.
       const chatId = chatOwner();
-      const asset = await importUrlMedia(projectId, url);
-      tagChatAsset(asset.id, chatId);
+      const { assets, text } = await importUrlMedia(projectId, url);
+      for (const asset of assets) tagChatAsset(asset.id, chatId);
       return {
-        assetId: asset.id,
-        name: asset.name,
-        kind: asset.type,
-        duration: round2(asset.duration),
+        assets: assets.map((asset) => ({
+          assetId: asset.id,
+          name: asset.name,
+          kind: asset.type,
+          duration: round2(asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration),
+        })),
+        ...(text ? { postText: text } : {}),
       };
     }
 

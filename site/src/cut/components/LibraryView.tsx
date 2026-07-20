@@ -127,12 +127,14 @@ export function LibraryView() {
     setImporting(true);
     setUrlError(null);
     try {
-      const asset = await importUrlToLibrary(value);
+      const imported = await importUrlToLibrary(value);
       if (openFolder) {
-        await moveLibraryAsset(asset.id, openFolder).catch(() => {});
-        asset.folderId = openFolder;
+        for (const asset of imported) {
+          await moveLibraryAsset(asset.id, openFolder).catch(() => {});
+          asset.folderId = openFolder;
+        }
       }
-      setAssets((prev) => [asset, ...(prev ?? [])]);
+      setAssets((prev) => [...imported, ...(prev ?? [])]);
       setUrl("");
       setAddOpen(false);
     } catch (e) {
