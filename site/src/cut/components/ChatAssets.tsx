@@ -95,31 +95,31 @@ export function ChatVideoJobCard({ jobId }: { jobId: string }) {
   if (!job) return null;
   if (job.status === "done") return job.assetId ? <ChatProjectAsset assetId={job.assetId} /> : null;
   return (
-    <div className="ai-chat-job flex w-full max-w-[280px] items-center gap-2.5 rounded-xl border border-border p-2">
-      <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-        {job.status === "running" ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : (
-          <Film className="size-4" />
-        )}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[11px] font-medium">{job.prompt}</div>
-        <div
-          className={cn(
-            "text-[10.5px] leading-snug break-words",
-            job.status === "error" ? "text-red-600" : "text-muted-foreground"
-          )}
-        >
+    <div className="ai-chat-job flex w-full max-w-[280px] flex-col gap-1.5 rounded-xl border border-border p-2.5">
+      <div className="flex items-center gap-2">
+        <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
           {job.status === "running" ? (
-            <>
-              Rendering…{" "}
-              {elapsed && <span className="tabular-nums text-muted-foreground/80">{elapsed}</span>}
-            </>
+            <Loader2 className="size-3.5 animate-spin" />
           ) : (
-            <HostedErrorText error={job.error} link={false} />
+            <Film className="size-3.5" />
           )}
-        </div>
+        </span>
+        <div className="min-w-0 flex-1 truncate text-[11px] font-medium">{job.prompt}</div>
+      </div>
+      <div
+        className={cn(
+          "text-[10.5px] leading-snug break-words",
+          job.status === "error" ? "text-red-600" : "text-muted-foreground"
+        )}
+      >
+        {job.status === "running" ? (
+          <>
+            Rendering…{" "}
+            {elapsed && <span className="tabular-nums text-muted-foreground/80">{elapsed}</span>}
+          </>
+        ) : (
+          <HostedErrorText error={job.error} link={false} />
+        )}
       </div>
     </div>
   );
