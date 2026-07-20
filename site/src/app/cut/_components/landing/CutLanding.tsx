@@ -11,10 +11,9 @@ import { CutWorksWith } from "@/app/cut/_components/landing/CutWorksWith";
 
 // The donkeycut.com marketing page: the Donkey landing's cream visual system
 // with Cut-only content. `root` is "" on donkeycut.com and "/cut" in dev, so
-// links into the app resolve on either host. Auth links are hidden: /sign-in
-// does not exist on donkeycut.com — sign-in happens through the app's own
-// entry points — while the signed-in "Go to App" pill points at the Cut
-// projects home on either host.
+// links into the app resolve on either host. The nav carries no auth entry
+// points — sign-in happens through the app's own surfaces (signInUrl) — while
+// the signed-in "Go to App" pill points at the Cut projects home on either host.
 export function CutLanding({ root }: { root: string }) {
   return (
     <main
@@ -29,7 +28,6 @@ export function CutLanding({ root }: { root: string }) {
       <TopNav
         homeHref={root || "/"}
         wordmark="Donkey Cut"
-        showAuthLinks={false}
         signedInPill={{ href: `${root}/app`, label: "Go to App" }}
       />
       <CutHero root={root} />

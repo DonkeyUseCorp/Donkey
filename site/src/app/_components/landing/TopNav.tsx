@@ -15,9 +15,8 @@ type Props = {
   // Wordmark next to the logo. Donkey Vision is its own B2B product, so that
   // page overrides the default "Donkey" with "Donkey Vision".
   wordmark?: string;
-  // Log in + Sign up cluster. Hidden when an authToggle is supplied.
-  showAuthLinks?: boolean;
-  // Sign-in/up pages swap the auth links for a single toggle to the other mode.
+  // Sign-in/up pages show a single toggle to the other mode. Auth otherwise
+  // lives on donkeycut.com, so the marketing nav carries no auth entry points.
   authToggle?: { href: string; label: string };
   // Signed-in pill into the product. The Cut landing points it at the Cut
   // projects home, which lives under a different base per host.
@@ -27,7 +26,6 @@ type Props = {
 export function TopNav({
   homeHref = "/",
   wordmark = "Donkey",
-  showAuthLinks = true,
   authToggle,
   signedInPill = { href: "/app", label: "Dashboard" },
 }: Props) {
@@ -88,20 +86,6 @@ export function TopNav({
             >
               {authToggle.label}
             </Link>
-          ) : showAuthLinks ? (
-            <>
-              <Link
-                href="/sign-in"
-                className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
-              >
-                Log in
-              </Link>
-              <span className="hidden md:inline-flex">
-                <PillButton href="/sign-up" variant="secondary" size="sm">
-                  Sign up
-                </PillButton>
-              </span>
-            </>
           ) : null}
         </div>
       </div>

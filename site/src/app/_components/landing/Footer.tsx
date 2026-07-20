@@ -31,13 +31,6 @@ export function Footer() {
       ],
     },
     {
-      title: "Account",
-      links: [
-        { href: "/sign-in", label: "Log in" },
-        { href: "/sign-up", label: "Sign up" },
-      ],
-    },
-    {
       title: "Legal",
       links: [
         { href: "/privacy", label: "Privacy Policy" },
