@@ -10,6 +10,12 @@ export function signInHrefFor(appTarget: string): string {
   return `/sign-in?callbackURL=${encodeURIComponent(appTarget)}`;
 }
 
+// Sign-up mirror of signInHrefFor; the auth screens read callbackURL from the
+// query string in either mode.
+export function signUpHrefFor(appTarget: string): string {
+  return `/sign-up?callbackURL=${encodeURIComponent(appTarget)}`;
+}
+
 // Where a landing CTA should actually go: straight into the app when signed in,
 // or to sign-in when signed out. During the initial (pending) client render the
 // session is unknown, matching the static server HTML, so CTAs render the app
