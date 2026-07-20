@@ -15,8 +15,9 @@
  *   multi-lane kinds a vertical drag retracks the item, one row past the end
  *   opens a new track, and lanes stay contiguous so empty ones collapse.
  * - Resize: edges snap; growing into a neighbor pushes its whole run along;
- *   the left edge rubber-bands past its floor (the timeline start, packed
- *   leaders, or a media item's first sample) and springs back on release.
+ *   each edge rubber-bands past its source bound and springs back on release —
+ *   the left past its floor (timeline start, packed leaders, or a media item's
+ *   first sample), the right past its ceiling (the last sample it can reveal).
  * - Placement collision: adding/pasting slides to the next free slot on the
  *   lane — the store's `nextFreeStart` is that one primitive.
  * - Cut: the store's `splitAtPlayhead` slices whichever kind is selected.
@@ -54,8 +55,8 @@ const laneSelectionKind = (kind: LaneKind): NonNullable<Selection>["kind"] =>
 export const CLIP_GAP = 4;
 /** Pull a dragged or resized edge to a logical time within this many px. */
 export const SNAP_PX = 6;
-/** How far (px) a left edge can rubber-band past its floor before springing back. */
-const LEFT_RUBBER_PX = 32;
+/** How far (px) an edge can rubber-band past its bound before springing back. */
+const RUBBER_PX = 32;
 
 /** Normalized geometry of one item on a lane track. */
 interface LaneItem {
@@ -569,7 +570,8 @@ export interface LaneTrimUI {
 }
 
 /** Resize an item from either edge, with snapping, neighbor pushing, source
- * bounds for media, and the rubber-band + spring-back left-edge floor. */
+ * bounds for media, and a rubber-band + spring-back at each edge's bound (the
+ * left edge's floor, the right edge's ceiling). */
 export function startLaneTrim(
   e: React.PointerEvent,
   kind: LaneKind,
@@ -642,7 +644,7 @@ export function startLaneTrim(
               ? desired
               : Math.max(
                   0,
-                  floor - rubberBand((floor - desired) * ui.pps, LEFT_RUBBER_PX) / ui.pps
+                  floor - rubberBand((floor - desired) * ui.pps, RUBBER_PX) / ui.pps
                 );
           ui.onSnap(null);
         }
@@ -691,7 +693,11 @@ export function startLaneTrim(
 
   const end0 = self.start + self.len;
   const minEnd = self.start + ad.minLen;
-  const maxEnd = self.start + ad.maxLen(s, raw0);
+  // The ceiling: the last sample a media item can reveal (Infinity for text
+  // and cues, which have no source to run out of). The edge grows freely up
+  // to it, then rubber-bands past with resistance and springs back on release
+  // — mirroring the left edge's floor.
+  const ceil = self.start + ad.maxLen(s, raw0);
   // Items after this one, at their original spots: extending the edge past
   // the first of them pushes the whole run right (their gaps preserved);
   // pulling back lets them return. A cross-dissolve into the first follower
@@ -706,13 +712,26 @@ export function startLaneTrim(
   let lastDelta = 0;
   startDrag(e, {
     onMove: (dx, _dy, ev) => {
-      let end = Math.max(minEnd, Math.min(maxEnd, end0 + dx / ui.pps));
-      const hit = ev.metaKey ? null : nearestSnap(end, targets, tol);
-      if (hit !== null && hit > minEnd && hit <= maxEnd) {
-        end = hit;
-        ui.onSnap(rightGuide(end, ui.pps));
-      } else ui.onSnap(null);
-      const delta = Math.max(0, end - nextAllow - nextStart);
+      settleSnapBack();
+      const desired = Math.max(minEnd, end0 + dx / ui.pps);
+      let end: number;
+      if (desired <= ceil) {
+        // Room to grow: snap to logical times within the ceiling.
+        end = desired;
+        const hit = ev.metaKey ? null : nearestSnap(end, targets, tol);
+        if (hit !== null && hit > minEnd && hit <= ceil) {
+          end = hit;
+          ui.onSnap(rightGuide(end, ui.pps));
+        } else ui.onSnap(null);
+      } else {
+        // Past the ceiling: drag with resistance and spring back on release.
+        end = ceil + rubberBand((desired - ceil) * ui.pps, RUBBER_PX) / ui.pps;
+        ui.onSnap(null);
+      }
+      // Followers respond only to growth up to the ceiling, so the overshoot
+      // gives visually without shoving the run — and springing back needs no
+      // re-lay, just as packed leaders hold at the floor on the left edge.
+      const delta = Math.max(0, Math.min(end, ceil) - nextAllow - nextStart);
       const run =
         delta === lastDelta
           ? []
@@ -720,6 +739,24 @@ export function startLaneTrim(
       lastDelta = delta;
       ad.apply([ad.trimRightPatch(raw0, end), ...run]);
     },
-    onUp: () => ui.onSnap(null),
+    onUp: () => {
+      ui.onSnap(null);
+      const cur = ad.raws(useEditor.getState()).find((r) => ad.view(r).id === id);
+      if (!cur) return;
+      const v = ad.view(cur);
+      const from = v.start + v.len;
+      if (from <= ceil + 1e-4) return; // settled within the room
+      // Elastic spring back to the ceiling. `finish` lands it exactly, so an
+      // interrupting gesture settles rather than strands an over-ceiling trim.
+      const t0 = performance.now();
+      const finish = () => ad.apply([ad.trimRightPatch(raw0, ceil)]);
+      const step = (now: number) => {
+        const p = Math.min(1, (now - t0) / 240);
+        const e2 = from + (ceil - from) * easeOutBack(p);
+        ad.apply([ad.trimRightPatch(raw0, p < 1 ? e2 : ceil)]);
+        snapBack = p < 1 ? { raf: requestAnimationFrame(step), finish } : null;
+      };
+      snapBack = { raf: requestAnimationFrame(step), finish };
+    },
   });
 }
