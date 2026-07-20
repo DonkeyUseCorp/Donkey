@@ -1,0 +1,55 @@
+/* Animations for the landing page's static editor replica. Decorative only —
+   every one of them stops under prefers-reduced-motion. */
+
+@keyframes mock-sweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--track-w));
+  }
+}
+
+.mock-playhead {
+  animation: mock-sweep var(--sweep-s) linear infinite;
+}
+
+@keyframes mock-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.mock-chat-msg {
+  animation: mock-msg-in 420ms both;
+}
+
+@keyframes mock-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: none;
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.mock-typing-dot {
+  animation: mock-typing 1.2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mock-playhead,
+  .mock-chat-msg,
+  .mock-typing-dot {
+    animation: none;
+  }
+}

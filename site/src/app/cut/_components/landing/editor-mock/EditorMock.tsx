@@ -1,0 +1,97 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+import "./editor-mock.css";
+
+import { MockAiPanel } from "@/app/cut/_components/landing/editor-mock/MockAiPanel";
+import { MockPreview } from "@/app/cut/_components/landing/editor-mock/MockPreview";
+import { MockSidePanel } from "@/app/cut/_components/landing/editor-mock/MockSidePanel";
+import { MockTimeline } from "@/app/cut/_components/landing/editor-mock/MockTimeline";
+import { MockTopBar } from "@/app/cut/_components/landing/editor-mock/MockTopBar";
+import { MOCK_PROJECTS } from "@/app/cut/_components/landing/editor-mock/mockData";
+import { cn } from "@/lib/utils";
+
+// The mock is authored at a fixed design size and scaled to the hero's width,
+// so its internals never reflow — it behaves like a live screenshot.
+const DESIGN_W = 1200;
+const DESIGN_H = 660;
+
+// A hand-built, display-only replica of the Cut editor showing two finished
+// projects. The panels copy the real components' chrome (see the Mock*
+// siblings) over hardcoded data — no stores, no engine. The dots below switch
+// projects; nothing auto-advances.
+export function EditorMock() {
+  const [active, setActive] = useState(0);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setScale(Math.min(1, entry.contentRect.width / DESIGN_W));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <figure className="m-0">
+      <div ref={frameRef} className="w-full">
+        <div style={{ height: Math.round(DESIGN_H * scale) }}>
+          <div
+            aria-hidden
+            className="pointer-events-none relative origin-top-left overflow-hidden rounded-2xl bg-card font-system text-foreground antialiased shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_24px_64px_rgba(15,14,13,0.25)] select-none"
+            style={{ width: DESIGN_W, height: DESIGN_H, transform: `scale(${scale})` }}
+          >
+            {MOCK_PROJECTS.map((project, i) => (
+              <div
+                key={project.id}
+                className={cn(
+                  "absolute inset-0 grid grid-rows-[46px_minmax(0,1fr)_auto] bg-card transition-opacity duration-300",
+                  i === active ? "opacity-100" : "opacity-0",
+                )}
+              >
+                <MockTopBar project={project} />
+                <div className="grid min-h-0 grid-cols-[auto_minmax(0,1fr)_340px]">
+                  <MockSidePanel project={project} />
+                  <MockPreview project={project} active={i === active} />
+                  <MockAiPanel project={project} />
+                </div>
+                <MockTimeline project={project} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <figcaption className="sr-only">
+        The Donkey Cut editor with a finished project open: generated media in
+        the side panel, clips and music on the timeline, and the AI chat that
+        assembled them.
+      </figcaption>
+      <div className="mt-6 flex justify-center gap-2">
+        {MOCK_PROJECTS.map((project, i) => (
+          <button
+            key={project.id}
+            type="button"
+            onClick={() => setActive(i)}
+            aria-pressed={i === active}
+            className={cn(
+              "flex items-center gap-2 rounded-full border-2 border-ink px-4 py-1.5 text-sm font-semibold transition-colors",
+              i === active ? "bg-ink text-white" : "bg-white text-ink hover:bg-ink/5",
+            )}
+          >
+            <span
+              className={cn(
+                "size-2 rounded-full",
+                i === active ? "bg-coral" : "bg-ink/25",
+              )}
+            />
+            {project.switcherLabel}
+          </button>
+        ))}
+      </div>
+    </figure>
+  );
+}
