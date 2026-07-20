@@ -17,7 +17,8 @@ export const metadata: Metadata = {
 // The app's routes live under /cut/app/*. Per host they are served as:
 //   cut.donkeyuse.com  → proxy rewrites "/…" → "/cut/app/…"   (base "")
 //   donkeycut.com      → proxy rewrites "/app/…" → "/cut/app/…" (base "/app")
-//   local dev (apex)   → no rewrite, opened at /cut/app directly (base "/cut/app")
+//   local dev          → same mapping as donkeycut.com (base "/app")
+//   hosted apex        → no rewrite, served at /cut/app directly (base "/cut/app")
 export default async function CutLayout({ children }: { children: ReactNode }) {
   const base = cutAppBase((await headers()).get("host"));
   return <CutBaseProvider base={base}>{children}</CutBaseProvider>;

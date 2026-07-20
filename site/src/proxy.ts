@@ -5,6 +5,7 @@ import {
   DONKEYCUT_CANONICAL,
   isCutHost,
   isDonkeycutHost,
+  isLocalHost,
 } from "@/cut/lib/hosts";
 
 // Cut (the video editor, publicly "Donkey Cut") lives under /cut in this single
@@ -13,15 +14,16 @@ import {
 // serving Donkey:
 //
 //   donkeycut.com       "/" → landing, "/app/…" → editor app (generic
-//                       "/…" → "/cut/…" rewrite). "/app/settings", "/install",
-//                       and the legal pages pass through so the shared apex
-//                       routes serve them same-host. www. 308s to the apex.
+//                       "/…" → "/cut/…" rewrite). "/install" and the legal
+//                       pages pass through so the shared apex routes serve
+//                       them same-host. www. 308s to the apex.
 //   cut.donkeyuse.com   legacy host, unchanged URLs: "/…" → "/cut/app/…" so
 //                       "/", "/library", "/p/[id]" keep working.
 //
-// Local dev is neither host: the editor is opened at localhost:3000/cut/… so
-// its session cookie is same-origin, and its links carry the "/cut/app" base
-// directly (see src/cut/lib/nav.tsx), needing no rewrite.
+// Local dev (localhost) mirrors donkeycut.com — Cut is the default product, so
+// "/" is the Cut landing and "/app/…" the editor — while Donkey Use stays
+// reachable under "/use/…" (stripped to the apex routes). The session cookie
+// stays same-origin because everything is served from the one dev origin.
 //
 // This file must live in src/ (next to app/) and use the Next 16 `proxy` name;
 // a root-level middleware.ts is not loaded when the app is under src/.
@@ -60,10 +62,23 @@ function cutApi(req: NextRequest): NextResponse {
 }
 
 // Paths served by shared apex routes that must not be captured by the generic
-// "/…" → "/cut/…" rewrite on donkeycut.com. "/app/settings" is the shared
-// account surface (the rest of "/app" is the Cut projects home), "/install"
-// carries the Mac download, and the legal pages are shared verbatim.
-const DONKEYCUT_PASSTHROUGH = ["/app/settings", "/install", "/privacy", "/terms"];
+// "/…" → "/cut/…" rewrite on donkeycut.com. "/install" carries the Mac
+// download, and the legal pages are shared verbatim. "/app/settings" is not
+// among them: Cut ships its own billing and usage pages under /cut/app/settings,
+// which the generic rewrite serves at /app/settings on this host.
+const DONKEYCUT_PASSTHROUGH = ["/install", "/privacy", "/terms"];
+
+// Local dev mirrors donkeycut.com (Cut at "/", the editor at "/app/…"), so it
+// additionally passes through the auth flows and the notch prototype, which
+// only exist on the apex and are exercised from localhost during development.
+const LOCAL_PASSTHROUGH = [
+  ...DONKEYCUT_PASSTHROUGH,
+  "/sign-in",
+  "/sign-up",
+  "/mac-auth",
+  "/cut-auth",
+  "/prototype",
+];
 
 // Whole-segment prefix match, so "/cut" covers "/cut/…" but not "/cut-auth".
 const underPath = (pathname: string, prefix: string) =>
@@ -77,6 +92,25 @@ export function proxy(req: NextRequest) {
   if (isCutApi(pathname)) return cutApi(req);
 
   const host = req.headers.get("host");
+
+  // Local dev serves Donkey Cut by default, like donkeycut.com; Donkey Use
+  // stays reachable under /use ("/use/…" → apex "/…").
+  if (isLocalHost(host)) {
+    if (underPath(pathname, "/use")) {
+      const url = req.nextUrl.clone();
+      url.pathname = pathname === "/use" ? "/" : pathname.slice("/use".length);
+      return NextResponse.rewrite(url);
+    }
+    if (underPath(pathname, "/cut") || underPath(pathname, "/api")) {
+      return NextResponse.next();
+    }
+    if (LOCAL_PASSTHROUGH.some((p) => underPath(pathname, p))) {
+      return NextResponse.next();
+    }
+    const url = req.nextUrl.clone();
+    url.pathname = `/cut${pathname === "/" ? "" : pathname}`;
+    return NextResponse.rewrite(url);
+  }
 
   if (isDonkeycutHost(host)) {
     if (host?.split(":")[0] !== "donkeycut.com") {
