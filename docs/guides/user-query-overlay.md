@@ -1,5 +1,10 @@
 # User Query Overlay
 
+> **Disabled.** The Mac app now runs as a menu bar app; the app delegate no
+> longer builds the overlay. The subsystem below stays in the codebase but is
+> not shown in any build. This guide describes the surface as it behaves when
+> wired in.
+
 The user query overlay is Donkey's floating macOS surface: a top-center notch
 status area, a centered prompt composer, and spawned agent cursors that show
 what each task is doing. It is how every typed, voice, and follow-up turn

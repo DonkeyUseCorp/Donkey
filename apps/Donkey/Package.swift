@@ -81,6 +81,8 @@ let package = Package(
             resources: [
                 .copy("Resources/donkey-app-icon.png"),
                 .copy("Resources/google-continue-dark-rounded.png"),
+                .copy("Resources/menu-bar-icon.png"),
+                .copy("Resources/menu-bar-icon@2x.png"),
                 .copy("Resources/theme.json")
             ],
             swiftSettings: [

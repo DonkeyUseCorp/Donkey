@@ -13,16 +13,15 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var onboardingWindowController: OnboardingWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
-    private var overlayController: UserQueryOverlayController?
+    /// The menu bar surface: the status item whose menu carries Go to App / Log in / Log out.
+    private var statusItemController: DonkeyStatusItemController?
+    /// Sparkle, running windowless. A background check that finds an update surfaces the status
+    /// menu's "Install Update" item; choosing it downloads, installs, and relaunches silently.
+    private var updateChecker: (any DonkeyUpdateChecking)?
     private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
-    /// Mirrors the auth coordinator's session phase into the overlay's `needsLogin`, so the notch
-    /// flips to/from the login call-to-action as the session is established or expires.
+    /// Mirrors the auth coordinator's session phase into the process-wide session gate and the
+    /// session heartbeat for the whole run; the status menu reads the phase directly when it opens.
     private var authStateCancellable: AnyCancellable?
-    /// Periodically reconciles the out-of-credits reload CTA against the real balance, so it clears once the
-    /// user tops up rather than lingering until relaunch. Paired with an app-reactivation observer for the
-    /// common "topped up in the browser, came back" path. Both are torn down on sign-out.
-    private var creditReloadPollTimer: Timer?
-    private var creditReloadActiveObserver: NSObjectProtocol?
     /// Periodically reconciles the app's session against the server, so a sign-out performed on the website
     /// (or another device) takes effect here without a relaunch. A periodic tick plus an app-reactivation
     /// observer fire a cheap auth-gated probe; a 401 routes through the usual session-expiry handling. Both
@@ -47,30 +46,46 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
         let authCoordinator = DonkeyAuthCoordinator()
         self.authCoordinator = authCoordinator
-        // Seed the process-wide session gate before any surface is built, so the warm cache, Live
-        // session, and auto-resume all see the real auth state on their first tick instead of the
-        // optimistic default. The phase observer keeps it current from here on.
+        // Seed the process-wide session gate before any surface is built, so every backend consumer
+        // sees the real auth state on its first tick instead of the optimistic default. The phase
+        // observer keeps it current from here on.
         BackendSessionGate.shared.update(isAuthenticated: authCoordinator.isAuthenticated)
         authCoordinator.authenticationCompleted = { [weak self] _ in
-            // Sign-in may have happened on the onboarding card's sign-in slide; close it before bringing
-            // up the authenticated surfaces. `close()` clears the retain via onDismiss, and this is a
-            // no-op when the card isn't showing (e.g. notch re-auth).
+            // Sign-in may have happened on the onboarding card's sign-in slide; close it. `close()`
+            // clears the retain via onDismiss, and this is a no-op when the card isn't showing
+            // (e.g. sign-in from the status menu).
             self?.onboardingWindowController?.close()
-            self?.startAuthenticatedAppSurfaces()
         }
         registerAuthCallbackHandler()
         installMainMenu()
+        installStatusItem(authCoordinator: authCoordinator)
+        startUpdateChecker()
 
         let cutEngineSupervisor = DonkeyCutEngineSupervisor()
         self.cutEngineSupervisor = cutEngineSupervisor
         cutEngineSupervisor.start()
 
-        // First install (never signed in) opens the onboarding card on its sign-in landing. A returning
-        // user whose session has expired skips it: the notch comes up in login mode (driven by the auth
-        // phase observer) and carries them back through sign-in inline.
-        if authCoordinator.isAuthenticated || authCoordinator.hasEverSignedIn {
-            startAuthenticatedAppSurfaces()
-        } else {
+        // The UI-understanding engine exists only to draw the developer debug overlay; the agent does
+        // not read from it. It parses the screen solely to render that overlay, so it is built only in
+        // debug-overlay builds and never in production.
+        #if DONKEY_DEBUG_OVERLAY
+        uiUnderstandingCoordinator = UIUnderstandingCoordinator(
+            overlayController: DebugUIInspectionOverlayController(),
+            rendersOverlay: true
+        )
+        #endif
+
+        // Drive the session gate, heartbeat, and debug overlay engine from the auth phase for the
+        // whole run. `$phase` replays the current value on subscription, so this also applies the
+        // launch state.
+        authStateCancellable = authCoordinator.$phase
+            .sink { [weak self] phase in
+                self?.applySessionState(isSignedIn: phase.isSignedIn)
+            }
+
+        // First install (never signed in) opens the onboarding card on its sign-in landing. A
+        // returning user signs in from the status menu instead.
+        if !authCoordinator.isAuthenticated && !authCoordinator.hasEverSignedIn {
             presentOnboardingCard(entry: .signIn)
         }
     }
@@ -82,12 +97,12 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        // The donkey:// sign-in callback can be serviced by a different app instance than the one rendering
-        // the notch (LaunchServices cold-launching a second copy of this bundle id, which shares this
-        // UserDefaults domain). That copy persists the session and exits, leaving this instance's in-memory
-        // phase signed-out and the notch stuck on the login CTA. Clicking "Open Donkey" activates us, so
-        // reconciling from the durable session here flips the phase — and the $phase observer flips the
-        // notch — without a relaunch. A no-op when already signed in or when no session is on disk.
+        // The donkey:// sign-in callback can be serviced by a different app instance than this one
+        // (LaunchServices cold-launching a second copy of this bundle id, which shares this
+        // UserDefaults domain). That copy persists the session and exits, leaving this instance's
+        // in-memory phase signed-out and the status menu stuck on "Log in". Clicking "Open Donkey"
+        // activates us, so reconciling from the durable session here flips the phase — and the menu —
+        // without a relaunch. A no-op when already signed in or when no session is on disk.
         authCoordinator?.reconcileWithPersistedSession()
     }
 
@@ -97,8 +112,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         if authCoordinator?.isAuthenticated != true {
             presentOnboardingCard(entry: .signIn)
-        } else if overlayController == nil {
-            startAuthenticatedAppSurfaces()
         }
         return true
     }
@@ -112,7 +125,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
-        overlayController?.stop()
         uiUnderstandingCoordinator?.stop()
         cutEngineSupervisor?.stop()
     }
@@ -178,106 +190,52 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func startAuthenticatedAppSurfaces() {
-        guard overlayController == nil else { return }
+    // MARK: - Status item
 
-        onboardingWindowController?.close()
-        NSApp.setActivationPolicy(.regular)
-
-        // Launch never opens the permission setup window: many users install Donkey only for Cut and
-        // need none of these grants. A task that needs a permission asks in the notch mid-conversation
-        // (the harness permission gate), and the window stays reachable via the Permissions Setup menu.
-        startOverlaySurfaces()
+    private func installStatusItem(authCoordinator: DonkeyAuthCoordinator) {
+        statusItemController = DonkeyStatusItemController(
+            isSignedIn: { [weak authCoordinator] in
+                authCoordinator?.isAuthenticated == true
+            },
+            logIn: { [weak authCoordinator] in
+                authCoordinator?.beginGoogleSignIn()
+            },
+            logOut: { [weak self] in
+                self?.signOut()
+            },
+            checkForUpdates: { [weak self] in
+                self?.updateChecker?.checkForUpdatesInBackground()
+            },
+            installUpdate: { [weak self] in
+                self?.updateChecker?.installAvailableUpdate()
+            }
+        )
     }
 
-    private func startOverlaySurfaces() {
-        guard overlayController == nil else { return }
+    // MARK: - Updates
 
-        // Voice button transcription: Apple's on-device speech is preferred; Gemini is
-        // the automatic fallback when the local path is unavailable or fails.
-        let voiceTranscriber = LocalVoiceTranscriptionAdapter(
-            runtime: FallbackVoiceTranscriptionRuntime(runtimes: [
-                AppleSpeechVoiceTranscriptionRuntime(),
-                GeminiVoiceTranscriptionRuntime()
-            ])
-        )
-        let model = UserQueryOverlayModel(voiceTranscriber: voiceTranscriber)
-
-        // The notch Login button starts the real Google sign-in; the auth phase drives whether the
-        // notch shows the login call-to-action, so an expired session surfaces here without a window.
-        model.loginActionRequested = { [weak self] in
-            self?.authCoordinator?.beginGoogleSignIn()
+    private func startUpdateChecker() {
+        let updateChecker = SparkleUpdateController()
+        self.updateChecker = updateChecker
+        updateChecker.updateStateChanged = { [weak self] state in
+            self?.statusItemController?.updateState = state
         }
-        // A mid-run 401 expired the session: sign out (clears the dead cookie, flips phase to signedOut)
-        // so the $phase observer below sets needsLogin — surfacing the notch login WITHOUT tearing down
-        // the overlay or opening the window, so running tasks stay put and re-auth happens inline. The
-        // server already revoked this session (that's what the 401 means), so this is local cleanup only.
-        model.sessionExpired = { [weak self] in
-            self?.authCoordinator?.signOut(revokingRemoteSessions: false)
-        }
-        if let authCoordinator {
-            model.updateNeedsLogin(!authCoordinator.isAuthenticated)
-            authStateCancellable = authCoordinator.$phase
-                .sink { [weak self, weak model] phase in
-                    model?.updateNeedsLogin(!phase.isSignedIn)
-                    self?.applySessionState(isSignedIn: phase.isSignedIn, model: model)
-                }
-        }
-
-        // Keep the out-of-credits CTA honest: poll the balance while any task is credit-blocked and clear
-        // the CTA the moment a top-up lands, so it doesn't linger until the next relaunch.
-        startCreditReloadReconciler(model: model)
-
-        // Warm the on-device speech model in the background so the first voice command
-        // isn't blocked behind a model download.
-        AppleSpeechVoiceTranscriptionRuntime.prewarm()
-        let controller = UserQueryOverlayController(model: model)
-        overlayController = controller
-        controller.show()
-
-        // Now that the notch surface is live, kick off the first-run download of the bundled CLI tools
-        // (ffmpeg/yt-dlp/...). It surfaces as a system-driven conversation the user can watch but not stop,
-        // and no-ops once the current version is installed or when nothing is published — so this is cheap
-        // to call on every launch and re-sign-in. Tools are only used by agent tasks (which need sign-in),
-        // so downloading once the authenticated notch is up — rather than before login — is the right time.
-        model.startSystemToolsSetupIfNeeded()
-
-        // Run as a regular app so Donkey keeps a Dock icon and its menu bar (including Sign Out)
-        // while the overlay surfaces are live, instead of receding into an accessory agent.
-        NSApp.setActivationPolicy(.regular)
-
-        // The UI-understanding engine exists only to draw the developer debug overlay; the agent does
-        // not read from it. It parses the screen solely to render that overlay, so it is built only in
-        // debug-overlay builds and never in production. The agent's only vision source is the on-demand
-        // `vision.capture` tool inside a live run.
-        #if DONKEY_DEBUG_OVERLAY
-        let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
-            overlayController: DebugUIInspectionOverlayController(),
-            rendersOverlay: true
-        )
-        self.uiUnderstandingCoordinator = uiUnderstandingCoordinator
-        #endif
-
-        // Start the debug overlay engine (if any) only while signed in; the phase observer above stops
-        // and restarts it as the session changes (its parse pass would otherwise 401 while signed out).
-        applySessionState(isSignedIn: authCoordinator?.isAuthenticated == true, model: model)
+        updateChecker.start()
     }
 
-    /// Drive the process-wide session gate, the debug overlay engine, and the Live session from the auth
-    /// phase. Signed out: close the gate (every backend call short-circuits to `.authenticationRequired`
-    /// with no network round trip) and suspend the overlay engine and Live session, so a logged-out app
-    /// stops issuing guaranteed-401 requests. Signed in: reopen the gate and restart them. Idempotent —
-    /// `start()`/`stop()` are safe to call repeatedly, and the coordinator is nil outside debug-overlay
-    /// builds.
-    private func applySessionState(isSignedIn: Bool, model: UserQueryOverlayModel?) {
+    /// Drive the process-wide session gate, the debug overlay engine, and the session heartbeat from
+    /// the auth phase. Signed out: close the gate (every backend call short-circuits to
+    /// `.authenticationRequired` with no network round trip) and suspend the overlay engine, so a
+    /// logged-out app stops issuing guaranteed-401 requests. Signed in: reopen the gate and restart
+    /// them. Idempotent — `start()`/`stop()` are safe to call repeatedly, and the coordinator is nil
+    /// outside debug-overlay builds.
+    private func applySessionState(isSignedIn: Bool) {
         BackendSessionGate.shared.update(isAuthenticated: isSignedIn)
         if isSignedIn {
             uiUnderstandingCoordinator?.start()
-            model?.resumeLiveSession()
-            if let model { startSessionHeartbeat(model: model) }
+            startSessionHeartbeat()
         } else {
             uiUnderstandingCoordinator?.stop()
-            model?.suspendLiveSession()
             stopSessionHeartbeat()
         }
     }
@@ -287,29 +245,27 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// Starts the session heartbeat: a periodic tick plus an app-reactivation observer, each firing a cheap
     /// session-validity probe, plus one immediate probe. Idempotent — a no-op while already running, so the
     /// auth-phase observer can call it freely. Torn down by `stopSessionHeartbeat` on sign-out.
-    private func startSessionHeartbeat(model: UserQueryOverlayModel) {
+    private func startSessionHeartbeat() {
         guard sessionHeartbeatTimer == nil else { return }
 
-        sessionHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self, weak model] _ in
+        sessionHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let model else { return }
-                self.probeSessionValidity(model: model)
+                self?.probeSessionValidity()
             }
         }
         sessionHeartbeatActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
-        ) { [weak self, weak model] _ in
+        ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let model else { return }
-                self.probeSessionValidity(model: model)
+                self?.probeSessionValidity()
             }
         }
 
-        // A locally-stored session can already be dead server-side; probe right away so the notch shows
-        // login immediately instead of only on the first real query's 401.
-        probeSessionValidity(model: model)
+        // A locally-stored session can already be dead server-side; probe right away so the status menu
+        // shows "Log in" immediately instead of only on the first real query's 401.
+        probeSessionValidity()
     }
 
     private func stopSessionHeartbeat() {
@@ -322,83 +278,24 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Confirms the session is still valid server-side. Fires one cheap, auth-gated GET
-    /// (`/api/inference/models/`); a 401 routes through the model's session-expiry handling (sign out →
-    /// notch login) via the inference client's auth-expiry callback. Network or other errors are ignored
-    /// so a transient hiccup never signs the user out.
-    private func probeSessionValidity(model: UserQueryOverlayModel) {
+    /// (`/api/inference/models/`); a 401 clears the dead local session — the server already revoked it,
+    /// so this is local cleanup only — which flips the status menu to "Log in" via the phase observer.
+    /// Network or other errors are ignored so a transient hiccup never signs the user out.
+    private func probeSessionValidity() {
         guard authCoordinator?.isAuthenticated == true,
               let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment()
         else { return }
 
         let backend = DonkeyBackendInferenceClient(
             configuration: configuration,
-            onAuthenticationRequired: { [weak model] in
-                Task { @MainActor in model?.handleSessionExpired() }
+            onAuthenticationRequired: { [weak self] in
+                Task { @MainActor in
+                    self?.authCoordinator?.signOut(revokingRemoteSessions: false)
+                }
             }
         )
         Task {
             _ = try? await backend.listModels()
-        }
-    }
-
-    // MARK: - Credit reload reconciliation
-
-    /// Once a task is flagged out-of-credits, nothing in-app retries after the user tops up, so the notch's
-    /// reload CTA would linger until relaunch. Reconcile it against the real balance: a periodic tick while any
-    /// task carries the flag (and only then — the tick is a free no-op otherwise), plus an app-reactivation
-    /// trigger so returning from the billing page in the browser clears the CTA right away.
-    private func startCreditReloadReconciler(model: UserQueryOverlayModel) {
-        creditReloadPollTimer?.invalidate()
-        creditReloadPollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self, weak model] _ in
-            Task { @MainActor in
-                guard let self, let model else { return }
-                self.reconcileCreditReload(model: model)
-            }
-        }
-        if let creditReloadActiveObserver {
-            NotificationCenter.default.removeObserver(creditReloadActiveObserver)
-        }
-        creditReloadActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self, weak model] _ in
-            Task { @MainActor in
-                guard let self, let model else { return }
-                self.reconcileCreditReload(model: model)
-            }
-        }
-    }
-
-    private func stopCreditReloadReconciler() {
-        creditReloadPollTimer?.invalidate()
-        creditReloadPollTimer = nil
-        if let creditReloadActiveObserver {
-            NotificationCenter.default.removeObserver(creditReloadActiveObserver)
-            self.creditReloadActiveObserver = nil
-        }
-    }
-
-    /// One reconciliation pass: skip entirely unless a task is credit-blocked and the session is usable, then
-    /// fetch the balance and clear the CTA across every flagged task once it goes positive. A 401 routes
-    /// through the same session-expiry handling as every other backend call; any other error is ignored so a
-    /// transient hiccup leaves the CTA in place for the next pass.
-    private func reconcileCreditReload(model: UserQueryOverlayModel) {
-        guard model.hasPendingCreditReload,
-              BackendSessionGate.shared.isAuthenticated,
-              let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment()
-        else { return }
-
-        let backend = DonkeyBackendInferenceClient(
-            configuration: configuration,
-            onAuthenticationRequired: { [weak model] in
-                Task { @MainActor in model?.handleSessionExpired() }
-            }
-        )
-        Task { @MainActor [weak model] in
-            guard let balanceMicros = try? await backend.fetchCreditBalanceMicros(),
-                  balanceMicros > 0 else { return }
-            model?.clearPendingCreditReload()
         }
     }
 
@@ -414,8 +311,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permissions setup
 
-    /// Opens the Accessibility / screenshot / microphone permission walkthrough on demand — the only
-    /// way this window appears besides a task's in-notch permission request.
+    /// Opens the Accessibility / screenshot / microphone permission walkthrough on demand.
     @objc private func permissionsSetupMenuAction(_ sender: Any?) {
         let controller = MacPermissionSetupWindowController()
         permissionSetupController = controller
@@ -427,22 +323,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
     private func signOut() {
         // User-initiated: revoke every session for this user so the website (and any other device) signs
-        // out too, then tear down local surfaces and surface the onboarding card on its sign-in landing.
+        // out too. The phase observer tears down the session-bound machinery, and the status menu flips
+        // to "Log in" the next time it opens.
         authCoordinator?.signOut(revokingRemoteSessions: true)
-        teardownAuthenticatedSurfaces()
-        presentOnboardingCard(entry: .signIn)
-    }
-
-    /// Tears down the live overlay/runtime surfaces so a later sign-in can rebuild them cleanly.
-    /// `startAuthenticatedAppSurfaces()` guards on these being nil, so they must be reset here.
-    private func teardownAuthenticatedSurfaces() {
-        authStateCancellable = nil
-        stopCreditReloadReconciler()
-        stopSessionHeartbeat()
-        uiUnderstandingCoordinator?.stop()
-        uiUnderstandingCoordinator = nil
-        overlayController?.stop()
-        overlayController = nil
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

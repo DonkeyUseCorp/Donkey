@@ -1,5 +1,10 @@
 # Notch
 
+> **Disabled.** The Mac app now runs as a menu bar app: a status item with
+> Go to App / Log in / Log out. The app delegate no longer builds the notch
+> overlay; the subsystem below stays in the codebase but is not shown in any
+> build. This guide describes the surface as it behaves when wired in.
+
 The notch is Donkey's always-on surface at the top center of the screen. It
 works at two scales: a small bar you glance at, and a panel you open to see
 every task and type a new one. This guide is the anatomy and behavior contract

@@ -26,8 +26,8 @@ Supported product and engineering guides live in `docs/guides/`. This list is th
 
 **Mac app surfaces**
 
-- [Notch](guides/notch.md) — the always-on top-center surface: task states, controls, and streaming narration.
-- [User Query Overlay](guides/user-query-overlay.md) — the floating prompt composer and agent cursors, and their grounded-only, cosmetic contract.
+- [Notch](guides/notch.md) — the top-center surface: task states, controls, and streaming narration. Currently disabled; the app runs as a menu bar app.
+- [User Query Overlay](guides/user-query-overlay.md) — the floating prompt composer and agent cursors, and their grounded-only, cosmetic contract. Currently disabled with the notch.
 - [Permission Pre-Gate](guides/permission-gate.md) — how macOS permissions are approved in the notch before the system dialog appears.
 
 **Extending the agent**
