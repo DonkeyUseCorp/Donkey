@@ -29,7 +29,7 @@ export function cutPricingPlans(root: string): PricingPlan[] {
         kind: "link",
         label: "Get Pro",
       },
-      body: "For editors who want AI generation in the timeline.",
+      body: "Generate rich media with AI.",
       color: "coral",
       detail: "For individuals",
       features: [
