@@ -7,6 +7,7 @@ import { CutFooter } from "@/app/cut/_components/landing/CutFooter";
 import { CutHero } from "@/app/cut/_components/landing/CutHero";
 import { CutOpenSource } from "@/app/cut/_components/landing/CutOpenSource";
 import { CutPricing } from "@/app/cut/_components/landing/CutPricing";
+import { CutWorksWith } from "@/app/cut/_components/landing/CutWorksWith";
 
 // The donkeycut.com marketing page: the Donkey landing's cream visual system
 // with Cut-only content. `root` is "" on donkeycut.com and "/cut" in dev, so
@@ -27,6 +28,7 @@ export function CutLanding({ root }: { root: string }) {
     >
       <TopNav homeHref={root || "/"} wordmark="Donkey Cut" showAuthLinks={false} />
       <CutHero root={root} />
+      <CutWorksWith />
       <CutPricing root={root} />
       <CutOpenSource />
       <CutFinalCTA root={root} />

@@ -30,7 +30,7 @@ export function EditorMock() {
     const el = frameRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      setScale(Math.min(1, entry.contentRect.width / DESIGN_W));
+      setScale(entry.contentRect.width / DESIGN_W);
     });
     ro.observe(el);
     return () => ro.disconnect();
