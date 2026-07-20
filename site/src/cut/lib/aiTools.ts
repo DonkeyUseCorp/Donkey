@@ -631,14 +631,17 @@ export async function runAiTool(
       // the render untouched — no image-model redesign in between, and no
       // text-only rung (a render without the image isn't what was asked).
       if (refs.length > 0 && input.animate_reference === true) {
-        return {
-          ...launchVideoJob(projectId, input, [
+        return launchVideoJob(
+          projectId,
+          input,
+          [
             { prompt, opts: { ...baseOpts, refs: [refs[0]], composeRefs: false } },
             asReference(refs[0]),
-          ]),
-          note:
-            "Animating the referenced image as the literal opening frame — the clip previews in this chat when it lands, in a minute or two.",
-        };
+          ],
+          {
+            note: "Animating the referenced image as the literal opening frame — the clip previews in this chat when it lands, in a minute or two.",
+          }
+        );
       }
       // Staged, like the scene pipeline: reference work happens in the image
       // model first — it holds identity far better than any video model — and
@@ -660,16 +663,19 @@ export async function runAiTool(
             ? useEditor.getState().assets.find((a) => a.id === still.assetId)
             : undefined;
         if (stillAsset) {
-          return {
-            ...launchVideoJob(projectId, input, [
+          return launchVideoJob(
+            projectId,
+            input,
+            [
               { prompt, opts: { ...baseOpts, refs: [refFromAsset(stillAsset)], composeRefs: false } },
               asReference(refs[0]),
               textOnly,
-            ]),
-            stillAssetId: stillAsset.id,
-            note:
-              "Designed the opening frame from the reference first (the image card above the render), then started the video from that exact frame — it previews in this chat when it lands, in a minute or two.",
-          };
+            ],
+            {
+              extra: { stillAssetId: stillAsset.id },
+              note: "Designed the opening frame from the reference first (the image card above the render), then started the video from that exact frame — it previews in this chat when it lands, in a minute or two.",
+            }
+          );
         }
         return launchVideoJob(projectId, input, [
           { prompt, opts: { ...baseOpts, refs } },
@@ -736,8 +742,10 @@ export async function runAiTool(
       const gen = useGenerate.getState();
       const signedIn = gen.signedIn ?? (await gen.probeNow());
       if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
-      return {
-        ...launchVideoJob(projectId, input, [
+      return launchVideoJob(
+        projectId,
+        input,
+        [
           {
             prompt: characterPrompt(character.persona!, line),
             opts: {
@@ -749,9 +757,9 @@ export async function runAiTool(
               composeRefs: false,
             },
           },
-        ]),
-        character: character.id,
-      };
+        ],
+        { extra: { character: character.id } }
+      );
     }
 
     case "generate_scene": {
@@ -1700,11 +1708,20 @@ function addVideoTrackClip(
 /** Start a video render — the shared shape of generate_video and
  * generate_character_video: one job (and one chat card) spans the ladder's
  * fallback rungs, the landed asset files under the asking chat, and it goes
- * onto the timeline only when the model asked. Returns the tool output. */
-function launchVideoJob(
+ * onto the timeline only when the model asked.
+ *
+ * Awaits the submission, not the render: it returns started:true only once the
+ * backend actually accepted the render, so the model can say it is underway. An
+ * instant reject — bad credentials, no credits, a bad request — settles the
+ * submit in well under a second and comes back started:false with the reason,
+ * so the model reports the failure instead of narrating a clip that never
+ * started. `success.note` overrides the default "rendering" line; `success.extra`
+ * merges caller facts (the designed still, the character) into either outcome. */
+async function launchVideoJob(
   projectId: string,
   input: Record<string, unknown>,
-  attempts: VideoAttempt[]
+  attempts: VideoAttempt[],
+  success?: { note?: string; extra?: Record<string, unknown> }
 ) {
   const addToTimeline = wantsTimeline(input, "index");
   const index = promptedIndex(input);
@@ -1713,22 +1730,36 @@ function launchVideoJob(
   // creation, so neither the job row nor the landed asset ever touches the
   // Video panel — including a render that errors and lands no asset.
   const chatId = chatOwner();
-  const { jobId } = useGenerate.getState().generateVideoLadder(projectId, attempts, {
+  const { jobId, submitted } = useGenerate.getState().generateVideoLadder(projectId, attempts, {
     ...(chatId ? { chatId } : {}),
     onDone: (asset) => {
       if (addToTimeline) addVideoTrackClip(asset.id, index);
     },
   });
+  const extra = success?.extra ?? {};
+  const outcome = await submitted;
+  if (!outcome.ok) {
+    return {
+      kind: "video",
+      started: false,
+      jobId,
+      ...extra,
+      error: outcome.error,
+      note: `The render didn't start — ${outcome.error} Tell the user it failed; don't say it's rendering.`,
+    };
+  }
   return {
     kind: "video",
     started: true,
     jobId,
     addToTimeline,
+    ...extra,
     note:
-      "Rendering — it previews in this chat when it lands, in a minute or two" +
-      (addToTimeline
-        ? ", and goes onto the timeline."
-        : ". It stays in the chat until the user places it."),
+      success?.note ??
+      ("Rendering — it previews in this chat when it lands, in a minute or two" +
+        (addToTimeline
+          ? ", and goes onto the timeline."
+          : ". It stays in the chat until the user places it.")),
   };
 }
 

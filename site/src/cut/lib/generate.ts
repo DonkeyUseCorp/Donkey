@@ -62,6 +62,13 @@ export interface GenerateJob {
   };
 }
 
+/** A render's initial submission outcome, distinct from its settlement: `ok`
+ * once the backend accepts the render (it is genuinely in flight, still minutes
+ * from landing), or the reason when the submit is rejected outright — auth,
+ * credits, a bad request — before any render started. Lets a caller claim the
+ * render is underway only when it actually is, never on an instant reject. */
+export type VideoSubmitOutcome = { ok: true } | { ok: false; error: string };
+
 interface GenerateState {
   /** Whether a Donkey session exists; null = not probed yet. */
   signedIn: boolean | null;
@@ -97,7 +104,7 @@ interface GenerateState {
     projectId: string,
     prompt: string,
     opts?: VideoGenOptions
-  ) => { jobId: string; settled: Promise<GenerateJob> };
+  ) => { jobId: string; settled: Promise<GenerateJob>; submitted: Promise<VideoSubmitOutcome> };
   /** Kick off a video render that walks an identity ladder: ONE job spans the
    * attempts in order, and a failed rung submits the next instead of failing
    * the job — so a safety-blocked or rejected anchor degrades the render
@@ -114,7 +121,7 @@ interface GenerateState {
       /** Called as each rung starts (0-based) — progress narration. */
       onAttempt?: (rung: number) => void;
     }
-  ) => { jobId: string; settled: Promise<GenerateJob> };
+  ) => { jobId: string; settled: Promise<GenerateJob>; submitted: Promise<VideoSubmitOutcome> };
   dismiss: (id: string) => void;
   /** Re-attach the poll loop of every persisted running render (reload
    * recovery) — called once when the app boots. Idempotent. */
@@ -601,6 +608,22 @@ export const useGenerate = create<GenerateState>((set, get) => {
       set((s) => ({ jobs: [job, ...s.jobs] }));
       claimJobLease(job.id); // this tab started it, this tab polls it
 
+      // Resolves the moment the backend accepts a rung's submit (a real render
+      // is in flight) or, if every rung is rejected before acceptance, with the
+      // reason. A caller awaits this to distinguish "rendering" from a render
+      // that never started (auth, credits, a bad request reject in well under a
+      // second) instead of claiming success on a fire-and-forget kickoff.
+      let resolveSubmitted!: (outcome: VideoSubmitOutcome) => void;
+      const submitted = new Promise<VideoSubmitOutcome>((resolve) => {
+        resolveSubmitted = resolve;
+      });
+      let submitReported = false;
+      const reportSubmit = (outcome: VideoSubmitOutcome) => {
+        if (submitReported) return;
+        submitReported = true;
+        resolveSubmitted(outcome);
+      };
+
       /** Compose and submit one rung's render request; resolves the provider's
        * first response (usually in_progress) or throws the readable error. */
       const submitRung = async ({ prompt, opts }: VideoAttempt): Promise<GenerationResponse> => {
@@ -653,6 +676,10 @@ export const useGenerate = create<GenerateState>((set, get) => {
               // know which rung (anchored or not) produced the take.
               update(job.id, { rung });
               const gen = await submitRung(attempt);
+              // The backend took the submit — a render is genuinely in flight
+              // now (instant rejects throw above and never reach here). A later
+              // polling failure still fails the job, but it did start.
+              reportSubmit({ ok: true });
               await finishVideo(job.id, gen, jobOpts?.onDone, Date.now());
             },
             {
@@ -667,11 +694,16 @@ export const useGenerate = create<GenerateState>((set, get) => {
           if (!outcome.ok) fail(job.id, new Error(outcome.error));
         } finally {
           releaseJobLease(job.id);
+          // No rung was ever accepted: the render never started, so report the
+          // submit as failed with the job's recorded reason. A no-op once an
+          // accepted rung already reported success.
+          const errored = get().jobs.find((x) => x.id === job.id);
+          reportSubmit({ ok: false, error: errored?.error ?? "Video generation failed." });
         }
         return settled(job.id, job);
       })();
       settlements.set(job.id, settledRun);
-      return { jobId: job.id, settled: settledRun };
+      return { jobId: job.id, settled: settledRun, submitted };
     },
 
     resumeRunningJobs: () => {
