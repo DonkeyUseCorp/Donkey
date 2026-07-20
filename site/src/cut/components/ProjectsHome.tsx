@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
+import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
 import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
 import { homeHref, projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
@@ -428,12 +429,13 @@ export function ProjectsHome() {
               Donkey Cut works with the Donkey app
             </h1>
             <p className="text-sm text-muted-foreground">
-              Everything runs locally on your Mac. Install Donkey — or open it
-              if it&rsquo;s already installed — and this page connects
-              automatically.
+              Everything runs locally on your Mac.
+              <br />
+              Install Donkey, or open it if it&rsquo;s already installed, and
+              this page connects automatically.
             </p>
             <div className="flex items-center gap-2">
-              <Button onClick={() => window.open("https://donkeyuse.com", "_blank")}>
+              <Button onClick={() => window.open(`${DONKEYCUT_CANONICAL}/install`, "_blank")}>
                 Get Donkey for Mac
               </Button>
               <Button
