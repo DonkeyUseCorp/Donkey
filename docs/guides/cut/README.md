@@ -1,6 +1,6 @@
 # Cut
 
-Cut (publicly "Donkey Cut") is a standalone, free video editor. The hosted domain `cut.donkeyuse.com` serves only its client bundle — every page is client-rendered — and the page does all real work against the Cut engine: a local server the Donkey Mac app ships and supervises on the user's own Mac. The engine uses local disk, the app's bundled ffmpeg, on-device speech, and the user's own Claude/Codex CLI logins. Editing is account-free. The signed-in features are AI generation — images, video, and voiceovers — and the assistant's Gemini models: the page posts to Donkey's hosted inference routes with the user's Donkey session and credits (same-origin on the cut hosts — the auth cookie rides the registrable domain). Generated media lands back in the project through the engine like any other file; Gemini chat turns, including their editor tool calls, run entirely in the page.
+Cut (publicly "Donkey Cut") is a standalone, free video editor. Its product domain is `donkeycut.com` — a marketing landing at `/` and the editor at `/app/…` — while the legacy `cut.donkeyuse.com` keeps serving the editor at its root, unchanged. Both hosts serve only the client bundle — every page is client-rendered — and the page does all real work against the Cut engine: a local server the Donkey Mac app ships and supervises on the user's own Mac. The engine uses local disk, the app's bundled ffmpeg, on-device speech, and the user's own Claude/Codex CLI logins. Editing is account-free. The signed-in features are AI generation — images, video, and voiceovers — and the assistant's Gemini models: the page posts to Donkey's hosted inference routes with the user's Donkey session and credits. On `cut.donkeyuse.com` the auth cookie rides the registrable domain; `donkeycut.com` is a different registrable domain, so it signs in through an apex one-time-token handoff (`/cut-auth`) that sets a host-only cookie there. Generated media lands back in the project through the engine like any other file; Gemini chat turns, including their editor tool calls, run entirely in the page.
 
 **The one rule:** Cut's server side runs only on the user's Mac. On a hosted deploy every Cut API answers 404 before any handler runs, so the unauthenticated routes are unreachable there and nothing can execute off-Mac — the engine has no path to Donkey's production models; the page reaches them only through Donkey's own authenticated inference APIs. Don't wrap Cut's API routes in the Donkey auth helper, reach for Prisma, or bill against credits to "harden" them; local-only is the design for everything the engine does.
 
@@ -9,7 +9,7 @@ Cut (publicly "Donkey Cut") is a standalone, free video editor. The hosted domai
 The hosted domain and the local engine split the work: the page comes from wherever is convenient, the work always happens on the Mac.
 
 ```
-page from cut.donkeyuse.com (hosted)      page from cut.localhost (local dev)
+page from donkeycut.com (hosted)          page from localhost/cut (local dev)
   │  client bundle only;                    │  one local server:
   │  every Cut API 404s there               │  pages + APIs, same origin
   ▼                                         ▼
@@ -20,7 +20,7 @@ browser ── API calls ──▶ Cut engine on 127.0.0.1 (spawned by the Donke
              · the user's own claude/codex CLI logins
 ```
 
-The client probes the engine's health endpoint (dedicated port first, dev server second) and remembers the winner. The engine grants the hosted origin cross-origin access, and only that origin. Without a running engine the page shows a "get Donkey / open Donkey" state that connects by itself as soon as the engine appears. Engine updates ride the Donkey app's own auto-updater, so the client never prompts to update.
+The client probes the engine's health endpoint (dedicated port first, dev server second) and remembers the winner. The engine grants the hosted origins cross-origin access, and only those origins. Without a running engine the page shows a "get Donkey / open Donkey" state that connects by itself as soon as the engine appears. Engine updates ride the Donkey app's own auto-updater, so the client never prompts to update.
 
 ## One API surface, one router
 
