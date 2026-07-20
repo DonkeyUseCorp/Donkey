@@ -7,6 +7,8 @@ import { GITHUB_REPO_URL } from "@/app/_components/landing/data";
 type FooterLink = { href: string; label: string };
 type FooterColumn = { title: string; links: FooterLink[] };
 
+const DISCORD_URL = "https://discord.gg/CPQu5XXmw";
+
 // Cut's own footer, in the shared landing Footer's grouped-column design. The
 // shared Footer links routes that don't exist on donkeycut.com (/sign-in,
 // /use-cases, /donkeyvision), so this one carries only links that resolve on
@@ -16,9 +18,8 @@ export function CutFooter() {
     {
       title: "Product",
       links: [
-        { href: "https://donkeyuse.com", label: "Donkey" },
         { href: GITHUB_REPO_URL, label: "GitHub" },
-        { href: "https://discord.gg/CPQu5XXmw", label: "Discord" },
+        { href: DISCORD_URL, label: "Discord" },
       ],
     },
     {
@@ -42,12 +43,12 @@ export function CutFooter() {
             Donkey Cut
           </Link>
           <p className="mt-6 text-[15px] font-semibold text-ink">
-            Need help? Email us at{" "}
+            Need help? Join us on{" "}
             <a
-              href="mailto:david@donkeyuse.com"
+              href={DISCORD_URL}
               className="underline underline-offset-2"
             >
-              david@donkeyuse.com
+              Discord
             </a>
           </p>
           <p className="mt-6 text-[13px] text-[#666]">
