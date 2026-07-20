@@ -118,9 +118,6 @@ export default async function UseCasePage({ params }: PageProps) {
                 Try this with Donkey
                 <ArrowRight size={16} />
               </PillButton>
-              <PillButton href="/pricing" variant="secondary">
-                View pricing
-              </PillButton>
             </div>
           </div>
 

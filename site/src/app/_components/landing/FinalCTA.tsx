@@ -27,9 +27,6 @@ export function FinalCTA() {
             <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
               Download for Mac <ArrowRight size={18} />
             </PillButton>
-            <PillButton href="/pricing" variant="secondary" size="lg">
-              See pricing
-            </PillButton>
           </div>
         </div>
       </div>

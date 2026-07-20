@@ -26,7 +26,6 @@ export function Footer() {
     {
       title: "Product",
       links: [
-        { href: "/pricing", label: "Pricing" },
         { href: "/donkeyvision", label: "Donkey Vision API" },
         { href: GITHUB_REPO_URL, label: "GitHub" },
       ],

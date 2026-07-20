@@ -95,9 +95,6 @@ export default function UseCasesPage() {
             Try Donkey
             <ArrowRight size={16} />
           </PillButton>
-          <PillButton href="/pricing" variant="secondary">
-            View pricing
-          </PillButton>
         </div>
       </section>
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { useCallback, useState } from "react";
 
 import {
   PillButton,
@@ -9,9 +8,6 @@ import {
 } from "@/app/_components/landing/LandingPrimitives";
 import type { PricingPlan } from "@/app/_components/landing/pricingPlans";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
-import { authClient } from "@/lib/auth-client";
-import { ApiError } from "@/queries/apiClient";
-import { useStartCheckout } from "@/queries/billing";
 
 type Props = {
   plan: PricingPlan;
@@ -19,47 +15,13 @@ type Props = {
 
 export function PricingPlanCard({ plan }: Props) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const checkout = useStartCheckout();
   const action = plan.action;
 
-  const handleCheckout = useCallback(async () => {
-    if (action.kind !== "checkout") {
-      return;
-    }
-
-    setStatusMessage(null);
-
-    try {
-      const session = await checkout.mutateAsync(action.planKey);
-      window.location.assign(session.url);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        await authClient.signIn.social({
-          callbackURL: `/pricing?checkout=${action.planKey}`,
-          provider: "google",
-        });
-        return;
-      }
-
-      setStatusMessage("Checkout is not available yet. Please try again soon.");
-    }
-  }, [action, checkout]);
-
-  const button =
-    action.kind === "checkout" ? (
-      <PillButton
-        disabled={checkout.isPending}
-        onClick={handleCheckout}
-        variant="dark"
-      >
-        {checkout.isPending ? "Opening..." : action.label}
-      </PillButton>
-    ) : (
-      <PillButton href={action.href} variant="dark">
-        {action.label}
-      </PillButton>
-    );
+  const button = (
+    <PillButton href={action.href} variant="dark">
+      {action.label}
+    </PillButton>
+  );
 
   return (
     <TapedCard
@@ -148,23 +110,7 @@ export function PricingPlanCard({ plan }: Props) {
             </div>
           ))}
         </div>
-        <div style={{ marginTop: "auto" }}>
-          {button}
-          {statusMessage ? (
-            <div
-              role="status"
-              style={{
-                color: "#4a403d",
-                fontSize: 13,
-                fontWeight: 600,
-                lineHeight: 1.4,
-                marginTop: 14,
-              }}
-            >
-              {statusMessage}
-            </div>
-          ) : null}
-        </div>
+        <div style={{ marginTop: "auto" }}>{button}</div>
       </div>
     </TapedCard>
   );

@@ -7,7 +7,6 @@ import { Footer } from "@/app/_components/landing/Footer";
 import { Hero } from "@/app/_components/landing/Hero";
 import { MediaShowcase } from "@/app/_components/landing/media-showcase/MediaShowcase";
 import { OpenSource } from "@/app/_components/landing/OpenSource";
-import { Pricing } from "@/app/_components/landing/Pricing";
 import { Solutions } from "@/app/_components/landing/Solutions";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import { TrustedBy } from "@/app/_components/landing/TrustedBy";
@@ -34,7 +33,6 @@ export default function DonkeyLanding() {
       />
       <Demo />
       <OpenSource />
-      <Pricing />
       <DonkeyVisionCTA />
       <FinalCTA />
       <Footer />
