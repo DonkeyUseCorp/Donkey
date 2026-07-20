@@ -15,11 +15,11 @@ export function CutWorksWith() {
       <Headline size="lg">
         Works <span className="italic">with</span>
       </Headline>
-      <div className="mt-12 flex flex-wrap items-center justify-center gap-x-16 gap-y-8 md:gap-x-24">
+      <div className="mt-12 flex items-center justify-center gap-x-6 md:gap-x-24">
         {PROVIDERS.map((provider) => (
-          <div key={provider.name} className="flex items-center gap-4">
-            <img src={provider.logo} alt="" className="size-11 md:size-12" />
-            <span className="text-[clamp(28px,3.5vw,44px)] font-semibold tracking-tight">
+          <div key={provider.name} className="flex items-center gap-2 md:gap-4">
+            <img src={provider.logo} alt="" className="size-9 md:size-12" />
+            <span className="text-[clamp(20px,6vw,44px)] font-semibold tracking-tight">
               {provider.name}
             </span>
           </div>
