@@ -49,12 +49,12 @@ export function ProCard() {
           ) : null}
         </CardTitle>
         <CardDescription>
-          A monthly usage allowance for the Donkey app that resets each
-          month. You can still buy credits any time.
+          A monthly usage allowance that resets each month — you can still buy
+          credits any time.
         </CardDescription>
       </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        {isActive && data ? (
+      {isActive && data ? (
+        <CardContent className="text-sm text-muted-foreground">
           <div className="space-y-1">
             <div className="text-foreground">
               {formatUsd(data.allowanceRemaining)} of{" "}
@@ -72,13 +72,8 @@ export function ProCard() {
               </div>
             ) : null}
           </div>
-        ) : (
-          <p>
-            You&apos;re not subscribed. Subscribe to get a monthly included
-            allowance for the app; you can still buy credits any time.
-          </p>
-        )}
-      </CardContent>
+        </CardContent>
+      ) : null}
       <CardFooter className="gap-3">
         {isActive ? (
           <Button
