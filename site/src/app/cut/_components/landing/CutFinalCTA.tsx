@@ -1,7 +1,5 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
-
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 
@@ -25,7 +23,7 @@ export function CutFinalCTA({ root }: { root: string }) {
           </p>
           <div className="flex flex-wrap justify-center gap-3">
             <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
-              Download for Mac <ArrowRight size={18} />
+              Download for Mac
             </PillButton>
             <PillButton href={`${root}/app`} variant="secondary" size="lg">
               Open the editor
