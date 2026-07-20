@@ -3,6 +3,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { oneTimeToken } from "better-auth/plugins";
 
+import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
 import { macAuthRedirectOrigins } from "@/lib/mac-auth";
 import { provisionSignupGrants } from "@/lib/onboarding/signup-grants";
 import { prisma } from "@/lib/prisma";
@@ -61,7 +62,10 @@ const cookieDomain = crossSubDomainCookieDomain();
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
-  trustedOrigins: [...macAuthRedirectOrigins(), ...cutRedirectOrigins()],
+  // donkeycut.com POSTs to the auth API cross-origin (sign-out, session
+  // refresh), so better-auth's Origin check must trust it alongside the
+  // cut.donkeyuse.com sign-in redirects.
+  trustedOrigins: [...macAuthRedirectOrigins(), ...cutRedirectOrigins(), DONKEYCUT_CANONICAL],
   // Sessions last a year, and the rolling expiry is refreshed daily on use, so an active user effectively
   // never has to sign in again. The Mac app's native session cookie rides this same lifetime, keeping the
   // desktop signed in long after the handoff.

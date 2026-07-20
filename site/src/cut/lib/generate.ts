@@ -7,6 +7,7 @@ import type { AssetRef } from "./assetRef";
 import { bytesFromBase64 } from "./bytes";
 import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { stockAssetInDoc } from "./genvideo/docWriter";
+import { DONKEY_APEX_ORIGIN, isDonkeycutHost } from "./hosts";
 import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
 import { refsToInlineImages, videoSafeInline, visualRefs, type InlineImage } from "./refMedia";
@@ -180,9 +181,14 @@ const promptSlug = (prompt: string) =>
  * surface links here when signed out. */
 export function signInUrl(): string {
   if (typeof window === "undefined") return "/sign-in";
-  const { protocol, host, href } = window.location;
+  const { protocol, host, href, pathname, search } = window.location;
   // Sign-in runs on the apex (Google's redirect_uri is pinned there), but bring
   // the user back to the Cut page they started from once it completes.
+  // donkeycut.com is a different registrable domain the apex cookie can't
+  // reach, so it goes through the /cut-auth one-time-token handoff instead.
+  if (isDonkeycutHost(host)) {
+    return `${DONKEY_APEX_ORIGIN}/cut-auth?next=${encodeURIComponent(pathname + search)}`;
+  }
   const apex = `${protocol}//${host.replace(/^cut\./, "")}`;
   return `${apex}/sign-in?callbackURL=${encodeURIComponent(href)}`;
 }
@@ -197,6 +203,8 @@ export const NO_CREDITS_MESSAGE = "No credits left";
 export function creditsUrl(): string {
   if (typeof window === "undefined") return "/app/settings";
   const { protocol, host } = window.location;
+  // On donkeycut.com the settings routes are served same-host (see src/proxy.ts).
+  if (isDonkeycutHost(host)) return "/app/settings";
   const apex = `${protocol}//${host.replace(/^cut\./, "")}`;
   return `${apex}/app/settings`;
 }
