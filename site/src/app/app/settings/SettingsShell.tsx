@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { DONKEY_APEX_ORIGIN, isDonkeycutHost } from "@/cut/lib/hosts";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,6 +15,15 @@ const navItems = [
   { href: "/app/settings/api-keys", label: "API keys" },
 ];
 
+// On donkeycut.com the same routes serve as Donkey Cut's settings: the Vision
+// API keys tab is Donkey-only (its page also redirects there), and sign-in must
+// go through the apex one-time-token handoff because Google OAuth cannot
+// complete on that domain (see /cut-auth). Reading window.location is safe from
+// hydration mismatch: everything host-dependent renders only after the client
+// session resolves.
+const onDonkeycut = () =>
+  typeof window !== "undefined" && isDonkeycutHost(window.location.host);
+
 // The settings UI is fully client-rendered. We guard on the client session and,
 // if signed out, send the user to Google sign-in (API routes also enforce auth).
 export function SettingsShell({ children }: { children: ReactNode }) {
@@ -23,6 +33,12 @@ export function SettingsShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isPending && !session) {
+      if (onDonkeycut()) {
+        window.location.assign(
+          `${DONKEY_APEX_ORIGIN}/cut-auth?next=${encodeURIComponent("/app/settings")}`,
+        );
+        return;
+      }
       void authClient.signIn.social({
         callbackURL: "/app/settings",
         provider: "google",
@@ -53,10 +69,13 @@ export function SettingsShell({ children }: { children: ReactNode }) {
                 className="block h-full w-full object-contain"
               />
             </div>
-            <span>Donkey</span>
+            <span>{onDonkeycut() ? "Donkey Cut" : "Donkey"}</span>
           </Link>
           <nav className="flex items-center gap-1">
-            {navItems.map((item) => (
+            {(onDonkeycut()
+              ? navItems.filter((item) => item.label !== "API keys")
+              : navItems
+            ).map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
