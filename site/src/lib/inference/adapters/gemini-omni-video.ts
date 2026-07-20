@@ -4,6 +4,7 @@ import type { GoogleGenAIOptions, Interactions } from "@google/genai";
 type Interaction = Interactions.Interaction;
 
 import {
+  constructGeminiClient,
   geminiApiError,
   geminiClientConfig,
   stringValue,
@@ -40,7 +41,15 @@ export type GeminiOmniClient = Pick<GoogleGenAI, "interactions">;
 export type GeminiOmniClientFactory = (options: GoogleGenAIOptions) => GeminiOmniClient;
 
 const defaultOmniClientFactory: GeminiOmniClientFactory = (options) =>
-  new GoogleGenAI(options);
+  constructGeminiClient(
+    options,
+    (opts) => new GoogleGenAI(opts),
+    // Realize the interactions (NextGen) sub-client while the API-key env vars are
+    // scrubbed, so its auth binds to the Vertex JWT instead of a stray env key.
+    (client) => {
+      void client.interactions;
+    },
+  );
 
 export function createGeminiOmniVideoAssetProvider(
   environment: AdapterEnvironment = process.env,

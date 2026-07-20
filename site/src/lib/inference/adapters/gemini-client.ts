@@ -30,6 +30,45 @@ export function defaultGeminiClientFactory(options: GoogleGenAIOptions): GeminiC
   return new GoogleGenAI(options);
 }
 
+// Env vars @google/genai treats as an implicit API key.
+const geminiApiKeyEnvVars = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
+
+// Build a Gemini client with the implicit API-key env vars scrubbed for the span
+// of construction. In Vertex mode we authenticate as a service-account principal,
+// but the SDK's interactions (NextGen) sub-client re-reads GEMINI_API_KEY /
+// GOOGLE_API_KEY from the process environment as an auth fallback and sends it as
+// `x-goog-api-key` before ever trying the Vertex JWT — and Vertex rejects API keys
+// (401 CREDENTIALS_MISSING). Constructing with those vars absent bakes the
+// sub-client's key to null, so its auth falls through to the JWT. `realize` forces
+// the lazily-built sub-client into existence inside the window; the scrub and
+// restore are fully synchronous, so no concurrent request observes the gap.
+export function constructGeminiClient<T>(
+  options: GoogleGenAIOptions,
+  construct: (options: GoogleGenAIOptions) => T,
+  realize?: (client: T) => void,
+): T {
+  if (!options.vertexai) {
+    return construct(options);
+  }
+  const saved = geminiApiKeyEnvVars.map(
+    (name) => [name, process.env[name]] as const,
+  );
+  for (const [name] of saved) {
+    delete process.env[name];
+  }
+  try {
+    const client = construct(options);
+    realize?.(client);
+    return client;
+  } finally {
+    for (const [name, value] of saved) {
+      if (value !== undefined) {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
 export function geminiClientConfig(environment: AdapterEnvironment): {
   configured: boolean;
   options: GoogleGenAIOptions;
