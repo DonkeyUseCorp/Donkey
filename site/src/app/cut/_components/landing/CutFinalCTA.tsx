@@ -1,7 +1,6 @@
 "use client";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
-import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 
 export function CutFinalCTA({ root }: { root: string }) {
   return (
@@ -21,12 +20,9 @@ export function CutFinalCTA({ root }: { root: string }) {
           <p className="mx-auto mb-8 max-w-[480px] text-base text-[rgba(255,255,255,0.7)] md:text-lg">
             Installs in 90 seconds.
           </p>
-          <div className="flex flex-wrap justify-center gap-3">
-            <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
-              Download for Mac
-            </PillButton>
-            <PillButton href={`${root}/app`} variant="secondary" size="lg">
-              Open the editor
+          <div className="flex justify-center">
+            <PillButton href={`${root}/app`} variant="primary" size="lg">
+              Start a new project
             </PillButton>
           </div>
         </div>
