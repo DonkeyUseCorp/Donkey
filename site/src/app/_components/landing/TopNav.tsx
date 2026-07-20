@@ -19,6 +19,9 @@ type Props = {
   showAuthLinks?: boolean;
   // Sign-in/up pages swap the auth links for a single toggle to the other mode.
   authToggle?: { href: string; label: string };
+  // Signed-in pill into the product. The Cut landing points it at the Cut
+  // projects home, which lives under a different base per host.
+  signedInPill?: { href: string; label: string };
 };
 
 export function TopNav({
@@ -26,6 +29,7 @@ export function TopNav({
   wordmark = "Donkey",
   showAuthLinks = true,
   authToggle,
+  signedInPill = { href: "/app", label: "Dashboard" },
 }: Props) {
   // Signed-in visitors don't need the auth links or the download CTA; the whole
   // right cluster collapses to a single white button into the product. During the
@@ -74,8 +78,8 @@ export function TopNav({
         </Link>
         <div className="flex items-center gap-[10px] md:gap-4">
           {isSignedIn ? (
-            <PillButton href="/app" variant="secondary" size="sm">
-              Dashboard
+            <PillButton href={signedInPill.href} variant="secondary" size="sm">
+              {signedInPill.label}
             </PillButton>
           ) : authToggle ? (
             <Link
