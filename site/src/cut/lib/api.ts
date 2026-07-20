@@ -29,6 +29,38 @@ export const servedFromEngine = () =>
 let resolvedOrigin: string | null = null; // "" = same origin
 let resolving: Promise<string> | null = null;
 
+// The ConnectGate renders the app blurred behind its connect modal, so app
+// code mounts — and starts requesting — before the user has agreed to the
+// connection. This latch makes an early loopback touch impossible by
+// construction: engineReady (and with it every apiFetch) waits here until the
+// gate opens, and only the gate's own probes (engineProbe, engineConnect)
+// bypass it.
+let openGate: () => void = () => {};
+let gateOpened = new Promise<void>((resolve) => {
+  openGate = resolve;
+});
+
+/** Called by the ConnectGate once the engine answered; releases every waiting
+ * engineReady/apiFetch. */
+export function engineGateOpen() {
+  openGate();
+}
+
+/** Fired on window when the engine stops answering mid-session; the
+ * ConnectGate listens and puts its connect modal back up. */
+export const ENGINE_LOST_EVENT = "cut-engine-lost";
+
+/** Drop the resolved engine, close the gate latch, and notify the gate. Data
+ * layers call this when engine requests start failing after a successful
+ * connect. */
+export function engineLost() {
+  resolvedOrigin = null;
+  gateOpened = new Promise<void>((resolve) => {
+    openGate = resolve;
+  });
+  window.dispatchEvent(new Event(ENGINE_LOST_EVENT));
+}
+
 function candidates(): string[] {
   // Manual override for unusual setups, e.g. an engine on a custom port.
   const saved = localStorage.getItem("cut-engine-origin");
@@ -49,7 +81,7 @@ async function probe(origin: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<bool
 /** The hosted page's first connection to this Mac, run from the connect
  * screen's button so the browser's permission prompt lands in context. Probes
  * like engineReady but gives the user time to answer the prompt. Resolves
- * false when no engine answered; the app then shows its get-Donkey state. */
+ * false when no engine answered; the gate stays on its install screen. */
 export async function engineConnect(): Promise<boolean> {
   if (resolvedOrigin !== null) return true;
   if (servedFromEngine()) {
@@ -65,10 +97,10 @@ export async function engineConnect(): Promise<boolean> {
   return false;
 }
 
-/** Resolve (and memoize) the engine origin; throws when no engine answers so
- * callers surface the "start Donkey Cut on this Mac" state. A failed attempt
- * is not memoized — the next call probes again. */
-export function engineReady(): Promise<string> {
+/** Resolve (and memoize) the engine origin without waiting on the gate latch
+ * — the ConnectGate's own quiet probe. Throws when no engine answers; a
+ * failed attempt is not memoized, so the next call probes again. */
+export function engineProbe(): Promise<string> {
   if (resolvedOrigin !== null) return Promise.resolve(resolvedOrigin);
   resolving ??= (async () => {
     if (typeof window === "undefined" || isLocalHost(window.location.hostname)) {
@@ -86,6 +118,13 @@ export function engineReady(): Promise<string> {
     resolving = null;
   });
   return resolving;
+}
+
+/** Resolve the engine for app code: waits for the ConnectGate to open first,
+ * so nothing outside the gate can be the first to touch loopback. */
+export async function engineReady(): Promise<string> {
+  await gateOpened;
+  return engineProbe();
 }
 
 /** The engine origin as currently known ("" while same-origin or unresolved).

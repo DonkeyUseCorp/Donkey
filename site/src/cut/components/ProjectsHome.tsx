@@ -15,7 +15,6 @@ import {
   Pencil,
   Plus,
   Trash2,
-  Unplug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LiveElapsed } from "@/cut/components/Elapsed";
@@ -44,8 +43,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { apiFetch, apiUrl } from "@/cut/lib/api";
-import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
+import { apiFetch, apiUrl, engineLost } from "@/cut/lib/api";
 import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
 import { homeHref, projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
@@ -89,7 +87,6 @@ export function ProjectsHome() {
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [engineDown, setEngineDown] = useState(false);
   // A count of desktop files still uploading into fresh projects, plus whether an
   // OS-file drag is hovering the surface (a depth counter tames enter/leave noise
   // as the cursor crosses child tiles).
@@ -116,11 +113,10 @@ export function ProjectsHome() {
       if (!res.ok) throw new Error(String(res.status));
       setProjects((await res.json()) as ProjectSummary[]);
       setFolders(fres.ok ? ((await fres.json()) as ProjectFolder[]) : []);
-      setEngineDown(false);
     } catch {
-      // The engine on this Mac isn't reachable — not running, or the page was
-      // loaded from the hosted domain before starting it locally.
-      setEngineDown(true);
+      // The engine on this Mac stopped answering; the ConnectGate takes the
+      // screen back over until it returns.
+      engineLost();
     }
   }, []);
 
@@ -183,14 +179,6 @@ export function ProjectsHome() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  // While the engine is unreachable, keep probing so the page springs to life
-  // the moment it starts.
-  useEffect(() => {
-    if (!engineDown) return;
-    const t = setInterval(() => void refresh(), 3000);
-    return () => clearInterval(t);
-  }, [engineDown, refresh]);
 
   const create = async () => {
     setBusy(true);
@@ -316,13 +304,13 @@ export function ProjectsHome() {
           "rounded-3xl outline-2 outline-dashed outline-offset-[-10px] outline-[#0a84ff]/60"
       )}
       onDragEnter={(e) => {
-        if (engineDown || !isFileDrag(e)) return;
+        if (!isFileDrag(e)) return;
         e.preventDefault();
         dragDepth.current += 1;
         setFileOver(true);
       }}
       onDragOver={(e) => {
-        if (engineDown || !isFileDrag(e)) return;
+        if (!isFileDrag(e)) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
       }}
@@ -335,7 +323,7 @@ export function ProjectsHome() {
         }
       }}
       onDrop={(e) => {
-        if (engineDown || !isFileDrag(e)) return;
+        if (!isFileDrag(e)) return;
         e.preventDefault();
         dragDepth.current = 0;
         setFileOver(false);
@@ -350,7 +338,7 @@ export function ProjectsHome() {
           </span>
         </div>
       )}
-      {!engineDown && projects && hasContent && (
+      {projects && hasContent && (
         <div className="mb-5 flex items-center justify-between">
           {openFolder === null ? (
             <h1 className="text-lg font-semibold tracking-tight">Projects</h1>
@@ -400,7 +388,7 @@ export function ProjectsHome() {
         </div>
       )}
 
-      {!engineDown && projects && openFolder === null && (folders.length > 0 || folderCreating) && (
+      {projects && openFolder === null && (folders.length > 0 || folderCreating) && (
         <FolderShelf
           folders={folders}
           mime={PROJECT_MIME}
@@ -419,39 +407,7 @@ export function ProjectsHome() {
         />
       )}
 
-      {engineDown ? (
-        <div className="grid min-h-[60vh] place-items-center">
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="grid size-14 place-items-center rounded-2xl bg-muted">
-              <Unplug className="size-7 text-muted-foreground" />
-            </div>
-            <h1 className="text-lg font-semibold tracking-tight">
-              Donkey Cut works with the Donkey Mac app
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Everything runs locally on your Mac.
-              <br />
-              Install Donkey, or open it if it&rsquo;s already installed, and
-              this page connects automatically.
-            </p>
-            <div className="flex items-center gap-2">
-              <Button onClick={() => window.open(`${DONKEYCUT_CANONICAL}/install`, "_blank")}>
-                Get Donkey for Mac
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setEngineDown(false);
-                  setProjects(null);
-                  void refresh();
-                }}
-              >
-                Try again
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : projects === null ? (
+      {projects === null ? (
         <div className="grid place-items-center py-24 text-muted-foreground">
           <Loader2 className="size-5 animate-spin" />
         </div>
