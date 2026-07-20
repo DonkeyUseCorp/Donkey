@@ -1,3 +1,4 @@
+import { adoptLegacyData, isValidCutUser, runWithCutUser } from "../userScope";
 import { aiApi } from "./ai";
 import { engineApi } from "./engine";
 import { exportApi } from "./export";
@@ -11,6 +12,9 @@ interface CutRoute {
   method: "GET" | "POST" | "PUT" | "DELETE";
   path: string; // ":name" segments bind params
   handler: TableHandler;
+  /** Health is the one route outside a user scope: probes and the app's
+   * supervisor hit it with no session in hand. */
+  scoped?: false;
 }
 
 /**
@@ -19,7 +23,7 @@ interface CutRoute {
  * catch-all route and the packaged engine — so the two surfaces cannot drift.
  */
 export const CUT_ROUTES: CutRoute[] = [
-  { method: "GET", path: "/api/cut/engine/health", handler: () => engineApi.health() },
+  { method: "GET", path: "/api/cut/engine/health", handler: () => engineApi.health(), scoped: false },
 
   { method: "GET", path: "/api/cut/projects", handler: () => projectsApi.list() },
   { method: "POST", path: "/api/cut/projects", handler: (req) => projectsApi.create(req) },
@@ -87,8 +91,31 @@ export const CUT_ROUTES: CutRoute[] = [
 ];
 
 export type RouteMatch =
-  | { handler: TableHandler; params: Record<string, string>; head: boolean }
+  | { handler: TableHandler; params: Record<string, string>; head: boolean; scoped: boolean }
   | { methodNotAllowed: string[] };
+
+/**
+ * Run a matched route inside the requesting user's data scope. The page
+ * appends the signed-in account id to every engine URL (api.ts); binding it
+ * here — the one dispatch both mounts share — means every handler, and every
+ * path built during it, is per-user by construction. A request without a
+ * valid id never reaches a handler.
+ */
+export async function runCutRoute(
+  req: Request,
+  match: { handler: TableHandler; params: Record<string, string>; scoped: boolean }
+): Promise<Response> {
+  if (!match.scoped) return match.handler(req, match.params);
+  const user = new URL(req.url).searchParams.get("u");
+  if (!user || !isValidCutUser(user)) {
+    return new Response(
+      JSON.stringify({ error: "This page is out of date with the Donkey app — reload the tab." }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  await adoptLegacyData(user);
+  return runWithCutUser(user, () => match.handler(req, match.params));
+}
 
 /** Bind a pattern against path segments. Returns the bound params and a
  * specificity score (count of literal segment matches) so more-literal paths
@@ -132,7 +159,14 @@ export function matchCutRoute(method: string, pathname: string): RouteMatch | nu
   const chosen = matches.filter((m) => m.score === top);
 
   const hit = chosen.find((m) => m.route.method === wanted);
-  if (hit) return { handler: hit.route.handler, params: hit.params, head: method === "HEAD" };
+  if (hit) {
+    return {
+      handler: hit.route.handler,
+      params: hit.params,
+      head: method === "HEAD",
+      scoped: hit.route.scoped !== false,
+    };
+  }
 
   // Path matched but this method has no handler → 405, as Next returns.
   const allow = new Set<string>(chosen.map((m) => m.route.method));

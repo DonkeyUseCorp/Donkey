@@ -133,13 +133,30 @@ export function engineOrigin(): string {
   return resolvedOrigin ?? "";
 }
 
+// The signed-in Donkey account, set by RequireSession before the app renders.
+// Every engine URL carries it (the `u` param) — headers can't, because media
+// loads as plain <video>/<img> src — and the engine keeps each account's
+// projects and library in that user's own folder. The engine refuses data
+// requests without it, so a scope-less URL fails visibly instead of showing
+// another account's data.
+let engineUser: string | null = null;
+
+export function setEngineUser(id: string) {
+  engineUser = id;
+}
+
+const scopedPath = (path: string) =>
+  engineUser
+    ? `${path}${path.includes("?") ? "&" : "?"}u=${encodeURIComponent(engineUser)}`
+    : path;
+
 /** Absolute-or-relative URL for an engine API path. */
-export const apiUrl = (path: string) => `${engineOrigin()}${path}`;
+export const apiUrl = (path: string) => `${engineOrigin()}${scopedPath(path)}`;
 
 /** fetch() against the engine, resolving it first. */
 export async function apiFetch(path: string, init?: RequestInit) {
   const base = await engineReady();
-  return fetch(`${base}${path}`, init);
+  return fetch(`${base}${scopedPath(path)}`, init);
 }
 
 /** JSON body of an engine reply. A reply that never reached a handler is plain

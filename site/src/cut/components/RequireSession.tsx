@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 
 import { signInHrefFor } from "@/app/_components/landing/useAppEntryHref";
+import { setEngineUser } from "@/cut/lib/api";
 import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
 import { authClient } from "@/lib/auth-client";
 import { useCutBase } from "@/cut/lib/nav";
@@ -10,9 +11,14 @@ import { useCutBase } from "@/cut/lib/nav";
 // Session gate for the whole Cut app surface. The landing CTAs already route
 // signed-out clicks through /sign-in (useAppEntryHref); this covers direct
 // navigation to an app URL the same way, sending the visitor to sign-in with
-// the URL they wanted as the post-auth callback. While the session is still
-// resolving the app renders normally, so signed-in users (the common case) see
-// no gate at all.
+// the URL they wanted as the post-auth callback.
+//
+// The app renders only once the session is known: every engine URL carries
+// the account id (the engine keeps each account's data separate), so a
+// component rendered earlier would build unscoped media URLs. Holding
+// children until the id is bound makes that impossible; the session check is
+// a fast same-origin cookie read, and the ConnectGate's own connect flow
+// covers the moment visually.
 //
 // The legacy host (base "") has no /sign-in of its own — donkeycut.com owns
 // auth — so its URLs redirect to the canonical host, mapped onto the same app
@@ -34,6 +40,7 @@ export function RequireSession({ children }: { children: ReactNode }) {
     );
   }, [signedOut, base]);
 
-  if (signedOut) return null;
+  if (!session) return null;
+  setEngineUser(session.user.id);
   return <>{children}</>;
 }

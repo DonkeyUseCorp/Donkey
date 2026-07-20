@@ -1,6 +1,6 @@
 import { hostedApiBlock } from "../local-only";
 import { ensureToolPath } from "../tool-path";
-import { matchCutRoute } from "./routes";
+import { matchCutRoute, runCutRoute } from "./routes";
 
 /**
  * The Cut API surface as a Next route handler. A single optional-catch-all route
@@ -27,7 +27,7 @@ export async function cutCatchAll(req: Request): Promise<Response> {
     });
   }
 
-  const res = await match.handler(req, match.params);
+  const res = await runCutRoute(req, match);
   // A HEAD reply carries the GET headers but no body.
   if (match.head && res.body) {
     void res.body.cancel();

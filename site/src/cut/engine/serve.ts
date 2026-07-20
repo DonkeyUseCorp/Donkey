@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Readable } from "node:stream";
 
 import { allowedOrigin, corsHeaders, preflightHeaders } from "../server/cors";
-import { matchCutRoute } from "../server/http/routes";
+import { matchCutRoute, runCutRoute } from "../server/http/routes";
 import { ensureToolPath, resolveOnPath } from "../server/tool-path";
 import { enginePort } from "./config";
 
@@ -132,7 +132,7 @@ async function start() {
     void (async () => {
       try {
         const webReq = toWebRequest(req, aborter.signal);
-        const webRes = await match.handler(webReq, match.params);
+        const webRes = await runCutRoute(webReq, match);
         await writeResponse(webRes, res, cors, match.head);
       } catch (err) {
         if (!res.headersSent) {

@@ -1,23 +1,23 @@
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectDoc, ProjectFolder, ProjectSummary } from "@/cut/lib/types";
-import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
+import { cutUserRoot } from "./userScope";
 import { exists, uniqueName, writeJsonAtomic } from "./util";
 
-/** All projects live here; each project is one folder holding project.json,
- * its raw media files, and its exports. */
-export const PROJECTS_ROOT = path.join(cutDataRoot(), "projects");
+/** The requesting user's projects live here; each project is one folder
+ * holding project.json, its raw media files, and its exports. */
+const projectsRoot = () => path.join(cutUserRoot(), "projects");
 // Project folders are grouping metadata only; it lives beside the project dirs
 // as a plain file, so the project-dir scan (which requires ID_RE) skips it.
-const FOLDERS_INDEX = path.join(PROJECTS_ROOT, "folders.json");
+const foldersIndex = () => path.join(projectsRoot(), "folders.json");
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{2,40}$/;
 
 export function projectDir(id: string) {
   assertLocalRuntime();
   if (!ID_RE.test(id)) throw new Error("Invalid project id.");
-  return path.join(PROJECTS_ROOT, id);
+  return path.join(projectsRoot(), id);
 }
 
 export const mediaDir = (id: string) => path.join(projectDir(id), "media");
@@ -185,7 +185,7 @@ async function summarize(id: string, doc: ProjectDoc): Promise<ProjectSummary> {
 
 async function readFolders(): Promise<ProjectFolder[]> {
   try {
-    const raw = JSON.parse(await readFile(FOLDERS_INDEX, "utf8")) as { folders?: ProjectFolder[] };
+    const raw = JSON.parse(await readFile(foldersIndex(), "utf8")) as { folders?: ProjectFolder[] };
     return Array.isArray(raw.folders) ? raw.folders : [];
   } catch {
     return [];
@@ -193,8 +193,8 @@ async function readFolders(): Promise<ProjectFolder[]> {
 }
 
 async function writeFolders(folders: ProjectFolder[]) {
-  await mkdir(PROJECTS_ROOT, { recursive: true });
-  await writeJsonAtomic(FOLDERS_INDEX, { folders });
+  await mkdir(projectsRoot(), { recursive: true });
+  await writeJsonAtomic(foldersIndex(), { folders });
 }
 
 export async function listProjectFolders(): Promise<ProjectFolder[]> {
@@ -227,7 +227,7 @@ export async function renameProjectFolder(id: string, name: string): Promise<Pro
 export async function deleteProjectFolder(id: string) {
   await writeFolders((await readFolders()).filter((f) => f.id !== id));
   // Projects in the folder fall back to ungrouped rather than disappearing.
-  const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true }).catch(() => []);
+  const entries = await readdir(projectsRoot(), { withFileTypes: true }).catch(() => []);
   await Promise.all(
     entries
       .filter((e) => e.isDirectory() && ID_RE.test(e.name))
@@ -268,8 +268,8 @@ export async function duplicateProject(id: string): Promise<ProjectSummary> {
 
 export async function listProjects(): Promise<ProjectSummary[]> {
   assertLocalRuntime();
-  await mkdir(PROJECTS_ROOT, { recursive: true });
-  const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true });
+  await mkdir(projectsRoot(), { recursive: true });
+  const entries = await readdir(projectsRoot(), { withFileTypes: true });
   const names = entries
     .filter((e) => e.isDirectory() && ID_RE.test(e.name))
     .map((e) => e.name);

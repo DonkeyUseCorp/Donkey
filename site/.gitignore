@@ -43,7 +43,9 @@ next-env.d.ts
 
 /src/generated/prisma
 
-# Cut (video editor) local runtime data — per-project media/exports + shared library
+# Cut (video editor) local runtime data — per-user projects/library (plus
+# pre-scoping roots kept until a first sign-in adopts them)
+/users/
 /projects/
 /library/
 

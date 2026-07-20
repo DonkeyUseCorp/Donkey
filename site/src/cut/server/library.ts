@@ -1,15 +1,15 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
 import { mediaPath as projectMediaPath, readProject } from "./projects";
+import { cutUserRoot } from "./userScope";
 import { exists, uniqueName, writeJsonAtomic } from "./util";
 
-/** The shared library: reusable media that lives outside any project. */
-export const LIBRARY_ROOT = path.join(cutDataRoot(), "library");
-const LIB_MEDIA = path.join(LIBRARY_ROOT, "media");
-const INDEX = path.join(LIBRARY_ROOT, "library.json");
+/** The user's library: reusable media that lives outside any project. */
+const libraryRoot = () => path.join(cutUserRoot(), "library");
+const libMedia = () => path.join(libraryRoot(), "media");
+const indexPath = () => path.join(libraryRoot(), "library.json");
 
 /** Where a URL-imported asset came from, kept as notes on the asset. */
 export interface LibrarySource {
@@ -98,36 +98,36 @@ export function libMediaPath(fileName: string) {
   assertLocalRuntime();
   const safe = path.basename(fileName);
   if (!safe || safe.startsWith(".")) throw new Error("Invalid file name.");
-  return path.join(LIB_MEDIA, safe);
+  return path.join(libMedia(), safe);
 }
 
 async function readIndex(): Promise<LibraryIndex> {
   assertLocalRuntime();
   let raw: string;
   try {
-    raw = await readFile(INDEX, "utf8");
+    raw = await readFile(indexPath(), "utf8");
   } catch {
     return { assets: [] };
   }
   try {
     return JSON.parse(raw) as LibraryIndex;
   } catch (err) {
-    console.error(`Corrupt library index ${INDEX}:`, err);
+    console.error(`Corrupt library index ${indexPath()}:`, err);
   }
   try {
-    const idx = JSON.parse(await readFile(`${INDEX}.bak`, "utf8")) as LibraryIndex;
+    const idx = JSON.parse(await readFile(`${indexPath()}.bak`, "utf8")) as LibraryIndex;
     await writeIndex(idx);
     return idx;
   } catch (err) {
-    console.error(`Could not recover ${INDEX} from backup:`, err);
+    console.error(`Could not recover ${indexPath()} from backup:`, err);
     return { assets: [] };
   }
 }
 
 async function writeIndex(idx: LibraryIndex) {
   assertLocalRuntime();
-  await mkdir(LIB_MEDIA, { recursive: true });
-  await writeJsonAtomic(INDEX, idx);
+  await mkdir(libMedia(), { recursive: true });
+  await writeJsonAtomic(indexPath(), idx);
 }
 
 // Serialize read-modify-write cycles on the shared index. Without this, moving
@@ -239,7 +239,7 @@ export async function register(
 /** Upload a file straight into the library. */
 export async function addUpload(file: File): Promise<LibraryAsset> {
   if (!typeOf(file.name)) throw new Error("Unsupported file type.");
-  await mkdir(LIB_MEDIA, { recursive: true });
+  await mkdir(libMedia(), { recursive: true });
   const fileName = await freeName(file.name);
   await writeFile(libMediaPath(fileName), Buffer.from(await file.arrayBuffer()));
   return register(fileName, file.name);
@@ -253,7 +253,7 @@ export async function addFromProject(
 ): Promise<LibraryAsset> {
   const src = projectMediaPath(projectId, fileName);
   if (!(await exists(src))) throw new Error("Media file not found in project.");
-  await mkdir(LIB_MEDIA, { recursive: true });
+  await mkdir(libMedia(), { recursive: true });
   const dest = await freeName(fileName);
   await copyFile(src, libMediaPath(dest));
   return register(dest, name || fileName);
@@ -266,7 +266,7 @@ export async function addDownloaded(
   source?: LibrarySource
 ): Promise<LibraryAsset> {
   if (!typeOf(srcPath)) throw new Error("Unsupported file type.");
-  await mkdir(LIB_MEDIA, { recursive: true });
+  await mkdir(libMedia(), { recursive: true });
   const dest = await freeName(path.basename(srcPath));
   await copyFile(srcPath, libMediaPath(dest));
   return register(dest, name || path.basename(srcPath), source);
@@ -377,7 +377,7 @@ export async function saveTemplate(projectId: string, input: TemplateInput): Pro
   if (!input.media?.length && !input.texts?.length && !input.cues?.length) {
     throw new Error("Nothing to save.");
   }
-  await mkdir(LIB_MEDIA, { recursive: true });
+  await mkdir(libMedia(), { recursive: true });
   const media: TemplateMedia[] = [];
   for (const m of input.media) {
     const src = projectMediaPath(projectId, m.fileName);
@@ -435,7 +435,7 @@ export async function addMediaToTemplate(
 ): Promise<LibraryTemplate> {
   const src = projectMediaPath(projectId, input.media.fileName);
   if (!(await exists(src))) throw new Error("Media file not found in project.");
-  await mkdir(LIB_MEDIA, { recursive: true });
+  await mkdir(libMedia(), { recursive: true });
   const dest = await freeName(input.media.fileName);
   await copyFile(src, libMediaPath(dest));
   try {

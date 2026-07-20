@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 
   if (ACTION === "fresh") {
     const name = arg("--name") ?? `eval ${new Date().toISOString().slice(0, 16)}`;
-    const res = await fetch(`${BASE}/api/cut/projects`, {
+    const res = await fetch(`${BASE}/api/cut/projects?u=donkey-dev-auth-bypass`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
