@@ -39,7 +39,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { apiFetch, engineReady } from "@/cut/lib/api";
+import { apiFetch, apiUrl, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
@@ -486,16 +486,21 @@ function ChatSession({
       // The engine origin is discovered asynchronously; await it per request
       // (not at mount) so an early send still targets the local engine rather
       // than the hosted origin, where the Cut APIs 404. engineReady memoizes,
-      // so only the first request pays for discovery.
-      prepareSendMessagesRequest: async ({ messages }) => ({
-        api: `${await engineReady()}/api/cut/ai/chat`,
-        body: {
-          messages,
-          model: modelRef.current,
-          context: buildAiContext(),
-          providerSession: providerSessions.current[provider(modelRef.current)],
-        },
-      }),
+      // so only the first request pays for discovery. apiUrl (read after the
+      // origin resolves) carries the account scope the engine requires on every
+      // data route — building the URL by hand here would drop it.
+      prepareSendMessagesRequest: async ({ messages }) => {
+        await engineReady();
+        return {
+          api: apiUrl("/api/cut/ai/chat"),
+          body: {
+            messages,
+            model: modelRef.current,
+            context: buildAiContext(),
+            providerSession: providerSessions.current[provider(modelRef.current)],
+          },
+        };
+      },
     });
     return {
       // Claude/Codex chat through the local engine; Gemini goes straight from
