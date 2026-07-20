@@ -82,7 +82,7 @@ export function EditorMock() {
             onClick={() => setActive(i)}
             aria-pressed={i === active}
             className={cn(
-              "flex items-center gap-1.5 rounded-full border border-ink px-2.5 py-0.5 text-xs font-medium transition-colors",
+              "flex items-center gap-1.5 rounded-full border border-ink px-2.5 py-3 text-xs font-medium transition-colors",
               i === active ? "bg-ink text-white" : "bg-white text-ink hover:bg-ink/5",
             )}
           >
