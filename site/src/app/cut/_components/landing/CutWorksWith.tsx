@@ -11,15 +11,11 @@ const PROVIDERS = [
 
 export function CutWorksWith() {
   return (
-    <section className="mx-auto max-w-[1400px] px-6 py-20 md:px-12 md:py-24">
+    <section className="mx-auto max-w-[1400px] px-6 py-20 text-center md:px-12 md:py-24">
       <Headline size="lg">
-        Works with <span className="italic">Claude and Codex.</span>
+        Works <span className="italic">with</span>
       </Headline>
-      <p className="mt-6 max-w-[720px] text-[17px] leading-[1.55] text-[#454545]">
-        The assistant uses the Claude and Codex apps already signed in on your
-        Mac. If you have a subscription, you're done — no setup, no API keys.
-      </p>
-      <div className="mt-12 flex flex-wrap items-center gap-x-16 gap-y-8 md:gap-x-24">
+      <div className="mt-12 flex flex-wrap items-center justify-center gap-x-16 gap-y-8 md:gap-x-24">
         {PROVIDERS.map((provider) => (
           <div key={provider.name} className="flex items-center gap-4">
             <img src={provider.logo} alt="" className="size-11 md:size-12" />
@@ -29,6 +25,10 @@ export function CutWorksWith() {
           </div>
         ))}
       </div>
+      <p className="mx-auto mt-12 max-w-[720px] text-[17px] leading-[1.55] text-[#454545]">
+        The assistant uses the Claude and Codex apps already signed in on your
+        Mac. If you have a subscription, you're done — no setup, no API keys.
+      </p>
     </section>
   );
 }
