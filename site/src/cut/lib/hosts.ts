@@ -15,10 +15,6 @@ export const DONKEYCUT_HOSTS = new Set(["donkeycut.com", "www.donkeycut.com"]);
 
 export const DONKEYCUT_CANONICAL = "https://donkeycut.com";
 
-// The apex origin that owns auth (Google OAuth redirect_uri, session minting).
-// donkeycut.com signs in by bouncing through it — see /cut-auth.
-export const DONKEY_APEX_ORIGIN = "https://donkeyuse.com";
-
 function hostname(host: string | null | undefined): string {
   return host ? host.split(":")[0] : "";
 }

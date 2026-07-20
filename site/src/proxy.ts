@@ -14,9 +14,10 @@ import {
 // serving Donkey:
 //
 //   donkeycut.com       "/" → landing, "/app/…" → editor app (generic
-//                       "/…" → "/cut/…" rewrite). "/install" and the legal
-//                       pages pass through so the shared apex routes serve
-//                       them same-host. www. 308s to the apex.
+//                       "/…" → "/cut/…" rewrite). The auth pages (/sign-in,
+//                       /sign-up, /mac-auth), "/install", and the legal pages
+//                       pass through so the shared apex routes serve them
+//                       same-host. www. 308s to the apex.
 //   cut.donkeyuse.com   legacy host, unchanged URLs: "/…" → "/cut/app/…" so
 //                       "/", "/library", "/p/[id]" keep working.
 //
@@ -62,25 +63,27 @@ function cutApi(req: NextRequest): NextResponse {
 }
 
 // Paths served by shared apex routes that must not be captured by the generic
-// "/…" → "/cut/…" rewrite on donkeycut.com. "/install" carries the Mac
-// download, and the legal pages are shared verbatim. "/app/settings" is not
-// among them: Cut ships its own billing and usage pages under /cut/app/settings,
-// which the generic rewrite serves at /app/settings on this host.
-const DONKEYCUT_PASSTHROUGH = ["/install", "/privacy", "/terms"];
-
-// Local dev mirrors donkeycut.com (Cut at "/", the editor at "/app/…"), so it
-// additionally passes through the auth flows and the notch prototype, which
-// only exist on the apex and are exercised from localhost during development.
-const LOCAL_PASSTHROUGH = [
-  ...DONKEYCUT_PASSTHROUGH,
+// "/…" → "/cut/…" rewrite on donkeycut.com. donkeycut.com owns auth directly,
+// so the sign-in/sign-up pages and the Mac-app handoff serve same-host here;
+// "/install" carries the Mac download and the legal pages are shared verbatim.
+// "/app/settings" is not among them: Cut ships its own billing and usage pages
+// under /cut/app/settings, which the generic rewrite serves at /app/settings on
+// this host.
+const DONKEYCUT_PASSTHROUGH = [
+  "/install",
+  "/privacy",
+  "/terms",
   "/sign-in",
   "/sign-up",
   "/mac-auth",
-  "/cut-auth",
-  "/prototype",
 ];
 
-// Whole-segment prefix match, so "/cut" covers "/cut/…" but not "/cut-auth".
+// Local dev mirrors donkeycut.com (Cut at "/", the editor at "/app/…"). It adds
+// the notch prototype, which only exists on the apex and is exercised from
+// localhost during development.
+const LOCAL_PASSTHROUGH = [...DONKEYCUT_PASSTHROUGH, "/prototype"];
+
+// Whole-segment prefix match, so "/cut" covers "/cut/…" but not "/cut-app".
 const underPath = (pathname: string, prefix: string) =>
   pathname === prefix || pathname.startsWith(`${prefix}/`);
 

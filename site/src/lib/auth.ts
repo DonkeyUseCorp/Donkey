@@ -12,16 +12,15 @@ import { prisma } from "@/lib/prisma";
 // once at creation; only a hash is stored (handled by the apiKey plugin).
 export const visionApiKeyPrefix = "dk_live_";
 
-// Both donkeyuse.com and www.donkeyuse.com serve the app, but the Google OAuth
+// Both donkeycut.com and www.donkeycut.com serve the site, but the Google OAuth
 // redirect_uri is pinned to BETTER_AUTH_URL's host. A sign-in started on one
 // host would set a host-only state cookie there while the callback lands on the
 // other, so better-auth can't find the cookie and rejects it as state_mismatch.
-// Scoping the auth cookies to the registrable host lets them ride across both,
-// and across the cut.donkeyuse.com subdomain that serves the editor.
+// Scoping the auth cookies to the registrable host lets them ride across both.
 //
-// Local dev needs none of this: Cut is served from the apex under /cut, so its
-// session cookie is already same-origin. (A Domain=localhost cookie doesn't
-// reach a cut.localhost subdomain in Chrome anyway.)
+// Local dev needs none of this: everything is served from the one localhost
+// origin, so the session cookie is already same-origin. (A Domain=localhost
+// cookie doesn't reach a subdomain in Chrome anyway.)
 function crossSubDomainCookieDomain() {
   const baseURL = process.env.BETTER_AUTH_URL;
   if (!baseURL) return undefined;
@@ -39,33 +38,15 @@ function crossSubDomainCookieDomain() {
   return host;
 }
 
-// In production the editor is served from cut.donkeyuse.com, a different origin
-// from the apex where Google's redirect_uri is pinned, so a sign-in that starts
-// on Cut redirects back to that origin — it has to be trusted for the redirect
-// to be honored. Local dev serves Cut under /cut on the apex (same origin), so
-// nothing extra is needed there.
-function cutRedirectOrigins(): string[] {
-  const baseURL = process.env.BETTER_AUTH_URL;
-  if (!baseURL) return [];
-  try {
-    const url = new URL(baseURL);
-    if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) return [];
-    if (!url.hostname.startsWith("cut.")) url.hostname = `cut.${url.hostname}`;
-    return [url.origin];
-  } catch {
-    return [];
-  }
-}
-
 const cookieDomain = crossSubDomainCookieDomain();
 
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
-  // donkeycut.com POSTs to the auth API cross-origin (sign-out, session
-  // refresh), so better-auth's Origin check must trust it alongside the
-  // cut.donkeyuse.com sign-in redirects.
-  trustedOrigins: [...macAuthRedirectOrigins(), ...cutRedirectOrigins(), DONKEYCUT_CANONICAL],
+  // donkeycut.com is the canonical host and its www. mirror POSTs to the auth
+  // API cross-origin (sign-out, session refresh), so better-auth's Origin check
+  // trusts it alongside the Mac-app handoff scheme.
+  trustedOrigins: [...macAuthRedirectOrigins(), DONKEYCUT_CANONICAL],
   // Sessions last a year, and the rolling expiry is refreshed daily on use, so an active user effectively
   // never has to sign in again. The Mac app's native session cookie rides this same lifetime, keeping the
   // desktop signed in long after the handoff.

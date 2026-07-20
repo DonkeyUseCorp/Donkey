@@ -8,10 +8,9 @@ import { authClient } from "@/lib/auth-client";
 
 // Session guard for Cut's billing and usage pages. Signed-out visitors go
 // through the same host-aware sign-in flow as the editor's generation
-// surfaces (signInUrl): the apex sign-in page on donkeyuse.com hosts (Google's
-// redirect_uri is pinned there), the /cut-auth one-time-token handoff on
-// donkeycut.com. Reading window.location is safe from hydration mismatch: the
-// redirect runs only after the client session resolves.
+// surfaces (signInUrl): the same-host sign-in page (Google's redirect_uri is
+// pinned to the auth-owning host). Reading window.location is safe from
+// hydration mismatch: the redirect runs only after the client session resolves.
 export function SettingsGuard({ children }: { children: ReactNode }) {
   const { data: session, isPending } = authClient.useSession();
 
