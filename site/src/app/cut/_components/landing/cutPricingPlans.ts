@@ -13,7 +13,7 @@ export function cutPricingPlans(root: string): PricingPlan[] {
       },
       body: "The whole editor, running on your own hardware.",
       color: "cream",
-      detail: "No account needed",
+      detail: "For everyone",
       features: [
         "Full access to the video editor",
         "Import, export, and local transcription",
