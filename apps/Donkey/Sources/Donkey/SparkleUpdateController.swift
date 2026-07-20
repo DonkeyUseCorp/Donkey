@@ -8,7 +8,7 @@ protocol DonkeyUpdateChecking: AnyObject {
     var updateStateChanged: ((UserQueryUpdateState) -> Void)? { get set }
 
     func start()
-    func checkForUpdatesInBackground()
+    func checkForUpdates()
     func installAvailableUpdate()
 }
 
@@ -50,14 +50,20 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUserDriv
         }
     }
 
-    func checkForUpdatesInBackground() {
+    /// Runs a user-initiated check. Sparkle's background checks report to the user driver only
+    /// when they find an update, so a menu-triggered check must go through `checkForUpdates()` —
+    /// it always answers with found, not-found, or an error, letting the "Checking…" state resolve.
+    func checkForUpdates() {
         guard let updater else {
             emit(.unavailable, message: "Updater unavailable")
             return
         }
+        // Sparkle ignores the call while another update session is running (e.g. an automatic
+        // check in flight); emitting `.checking` then would stick, since no callback follows.
+        guard updater.canCheckForUpdates else { return }
 
         emit(.checking)
-        updater.checkForUpdatesInBackground()
+        updater.checkForUpdates()
     }
 
     /// The user tapped the notch button. Dismiss the "Update Available" badge immediately so the tap
@@ -65,7 +71,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUserDriv
     /// and relaunch silently. If nothing is pending, kick a fresh background check instead.
     func installAvailableUpdate() {
         guard let pendingInstall else {
-            checkForUpdatesInBackground()
+            checkForUpdates()
             return
         }
 

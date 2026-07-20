@@ -454,7 +454,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     func checkForUpdates() {
-        updateChecker.checkForUpdatesInBackground()
+        updateChecker.checkForUpdates()
     }
 
     func installAvailableUpdate() {
