@@ -21,6 +21,9 @@ type Props = {
   // Signed-in pill into the product. The Cut landing points it at the Cut
   // projects home, which lives under a different base per host.
   signedInPill?: { href: string; label: string };
+  // Signed-out pill into auth. The Cut landing shows a "Log in" pill here (the
+  // sign-in screen offers "Create account"), so the nav has a visible way in.
+  signedOutPill?: { href: string; label: string };
 };
 
 export function TopNav({
@@ -28,6 +31,7 @@ export function TopNav({
   wordmark = "Donkey",
   authToggle,
   signedInPill = { href: "/app", label: "Dashboard" },
+  signedOutPill,
 }: Props) {
   // Signed-in visitors don't need the auth links or the download CTA; the whole
   // right cluster collapses to a single white button into the product. During the
@@ -78,6 +82,10 @@ export function TopNav({
           {isSignedIn ? (
             <PillButton href={signedInPill.href} variant="secondary" size="sm">
               {signedInPill.label}
+            </PillButton>
+          ) : signedOutPill ? (
+            <PillButton href={signedOutPill.href} variant="secondary" size="sm">
+              {signedOutPill.label}
             </PillButton>
           ) : authToggle ? (
             <Link

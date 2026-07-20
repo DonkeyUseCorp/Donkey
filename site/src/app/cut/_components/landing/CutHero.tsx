@@ -1,9 +1,12 @@
 "use client";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
+import { useAppEntryHref } from "@/app/_components/landing/useAppEntryHref";
 import { EditorMock } from "@/app/cut/_components/landing/editor-mock/EditorMock";
 
 export function CutHero({ root }: { root: string }) {
+  const appHref = useAppEntryHref();
+
   return (
     <section
       id="top"
@@ -21,7 +24,7 @@ export function CutHero({ root }: { root: string }) {
           subscriptions.
         </p>
         <div className="mt-12">
-          <PillButton href={`${root}/app`} variant="primary" size="md">
+          <PillButton href={appHref(`${root}/app`)} variant="primary" size="md">
             Start a new project
           </PillButton>
         </div>

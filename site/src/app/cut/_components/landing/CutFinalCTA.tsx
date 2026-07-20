@@ -1,8 +1,11 @@
 "use client";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
+import { useAppEntryHref } from "@/app/_components/landing/useAppEntryHref";
 
 export function CutFinalCTA({ root }: { root: string }) {
+  const appHref = useAppEntryHref();
+
   return (
     <section
       id="download"
@@ -21,7 +24,7 @@ export function CutFinalCTA({ root }: { root: string }) {
             Installs in 90 seconds.
           </p>
           <div className="flex justify-center">
-            <PillButton href={`${root}/app`} variant="primary" size="lg">
+            <PillButton href={appHref(`${root}/app`)} variant="primary" size="lg">
               Start Today
             </PillButton>
           </div>

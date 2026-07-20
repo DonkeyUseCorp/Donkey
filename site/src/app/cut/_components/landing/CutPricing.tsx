@@ -2,11 +2,20 @@
 
 import { Headline } from "@/app/_components/landing/LandingPrimitives";
 import { PricingPlanCard } from "@/app/_components/landing/PricingPlanCard";
+import { useAppEntryHref } from "@/app/_components/landing/useAppEntryHref";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { cutPricingPlans } from "@/app/cut/_components/landing/cutPricingPlans";
 
 export function CutPricing({ root }: { root: string }) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
+  const appHref = useAppEntryHref();
+
+  // Both plan CTAs enter the app, so gate them the same way as the hero: a
+  // signed-out click lands on sign-in first, then returns to the app target.
+  const plans = cutPricingPlans(root).map((plan) => ({
+    ...plan,
+    action: { ...plan.action, href: appHref(plan.action.href) },
+  }));
 
   return (
     <section
@@ -34,7 +43,7 @@ export function CutPricing({ root }: { root: string }) {
           gap: 24,
         }}
       >
-        {cutPricingPlans(root).map((plan) => (
+        {plans.map((plan) => (
           <PricingPlanCard key={plan.name} plan={plan} />
         ))}
       </div>
