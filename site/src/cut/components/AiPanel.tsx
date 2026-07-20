@@ -5,6 +5,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type ChatTransport, type UIMessage } from "ai";
 import {
   ArrowUp,
+  Brain,
   Check,
   ChevronDown,
   CircleDashed,
@@ -24,7 +25,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import { baseMarkdownComponents } from "./markdownComponents";
 import { LiveElapsed } from "./Elapsed";
 import { SceneActivity, SceneCard } from "./SceneCard";
@@ -1091,6 +1092,67 @@ function RunningToolClock({ start }: { start: number }) {
   ) : null;
 }
 
+// Markdown for assistant chat text — the shared base plus a compact inline
+// `code` style. Defined once so the answer body and the reasoning body render
+// identically.
+const chatMarkdownComponents: Components = {
+  ...baseMarkdownComponents,
+  code: (p) => (
+    <code
+      className="rounded bg-muted px-1 py-px font-mono text-[11px] break-words whitespace-pre-wrap"
+      {...p}
+    />
+  ),
+  pre: (p) => (
+    <pre
+      className="my-1.5 max-w-full overflow-x-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+      {...p}
+    />
+  ),
+};
+
+// Some models verbalize their chain-of-thought inline in the reply, tagging
+// each block with a `NN_thought` marker (e.g. `96_thought The user wants…`).
+// It lands in a plain text part; splitting on the marker lets the reasoning
+// collapse behind a disclosure instead of flooding the conversation.
+const THOUGHT_MARKER = /(?<!\w)\d+_thought\b[ \t]*/g;
+type TextSegment = { kind: "text" | "thought"; text: string };
+
+function splitThoughtSegments(text: string): TextSegment[] {
+  const markers = [...text.matchAll(THOUGHT_MARKER)];
+  if (markers.length === 0) return [{ kind: "text", text }];
+  const segments: TextSegment[] = [];
+  const firstAt = markers[0].index ?? 0;
+  const lead = text.slice(0, firstAt);
+  if (lead.trim()) segments.push({ kind: "text", text: lead });
+  // Each marker opens a thought that runs to the next marker (or the end):
+  // the reasoning is the whole tail of the part, and any real answer arrives
+  // as its own later, unmarked part.
+  markers.forEach((m, idx) => {
+    const start = (m.index ?? 0) + m[0].length;
+    const end = idx + 1 < markers.length ? (markers[idx + 1].index ?? text.length) : text.length;
+    const body = text.slice(start, end);
+    if (body.trim()) segments.push({ kind: "thought", text: body });
+  });
+  return segments;
+}
+
+/** A collapsed disclosure for a reasoning block, styled like the tool row. */
+function ThoughtBlock({ text }: { text: string }) {
+  return (
+    <details className="ai-thought group max-w-full">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden">
+        <Brain className="size-3 shrink-0" />
+        <span>Thought</span>
+        <ChevronDown className="ml-auto size-3 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="ai-md mt-1 max-w-full px-2 text-[12px] leading-relaxed text-muted-foreground">
+        <Markdown components={chatMarkdownComponents}>{text}</Markdown>
+      </div>
+    </details>
+  );
+}
+
 const MessageView = memo(function MessageView({
   message,
 }: {
@@ -1137,28 +1199,26 @@ const MessageView = memo(function MessageView({
     .filter((p) => p.state === "output-available")
     .map((p) => p.output);
   return (
-    <div className="ai-msg-assistant group mb-3 flex flex-col gap-1.5">
+    <div className="ai-msg-assistant group mb-3 flex min-w-0 flex-col gap-1.5">
       {message.parts.map((part, i) => {
         if (part.type === "text") {
           return (
-            <div
-              key={i}
-              className="ai-md max-w-full text-[12.5px] leading-relaxed"
-            >
-              <Markdown
-                components={{
-                  ...baseMarkdownComponents,
-                  code: (p) => (
-                    <code
-                      className="rounded bg-muted px-1 py-px font-mono text-[11px]"
-                      {...p}
-                    />
-                  ),
-                }}
-              >
-                {part.text}
-              </Markdown>
-            </div>
+            <Fragment key={i}>
+              {splitThoughtSegments(part.text).map((seg, j) =>
+                seg.kind === "thought" ? (
+                  <ThoughtBlock key={j} text={seg.text} />
+                ) : (
+                  <div
+                    key={j}
+                    className="ai-md min-w-0 max-w-full overflow-hidden text-[12.5px] leading-relaxed break-words"
+                  >
+                    <Markdown components={chatMarkdownComponents}>
+                      {seg.text}
+                    </Markdown>
+                  </div>
+                ),
+              )}
+            </Fragment>
           );
         }
         if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
