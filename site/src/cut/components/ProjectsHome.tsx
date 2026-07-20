@@ -426,7 +426,7 @@ export function ProjectsHome() {
               <Unplug className="size-7 text-muted-foreground" />
             </div>
             <h1 className="text-lg font-semibold tracking-tight">
-              Donkey Cut works with the Donkey app
+              Donkey Cut works with the Donkey Mac app
             </h1>
             <p className="text-sm text-muted-foreground">
               Everything runs locally on your Mac.
