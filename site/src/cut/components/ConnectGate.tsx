@@ -72,8 +72,8 @@ export function ConnectGate({ children }: { children: ReactNode }) {
 
   if (gate === "blocked")
     return (
-      <div className="grid min-h-screen place-items-center">
-        <div className="flex max-w-sm flex-col items-center gap-4 text-center">
+      <div className="flex min-h-screen flex-col items-center px-6 pt-24 pb-12">
+        <div className="flex w-full max-w-2xl flex-col items-center gap-4 text-center">
           <div className="grid size-14 place-items-center rounded-2xl bg-muted">
             <ShieldX className="size-7 text-muted-foreground" />
           </div>
@@ -87,7 +87,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
           </p>
           <Image
             alt="Chrome's site settings open over the address bar, with the Apps on device toggle"
-            className="w-full rounded-xl border shadow-sm [mask-image:linear-gradient(to_bottom,black_72%,transparent)]"
+            className="w-full max-w-sm rounded-xl border shadow-sm"
             height={660}
             src="/cut/connect-site-settings.png"
             unoptimized
