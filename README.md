@@ -25,9 +25,9 @@ Donkey is two things in one repository:
 Open [donkeycut.com](https://donkeycut.com) and you're in a full editor: multi-track timeline, captions, music and effects tracks, and an AI assistant that edits alongside you. The page is only the client — every real operation runs on a local engine the Donkey Mac app ships and supervises, so your footage stays on your Mac. No uploads, no cloud storage fees.
 
 <p align="center">
-  <img src="site/public/cut/landing/og.png" alt="A frame from The Railway Mystery, generated and cut in Donkey Cut" width="720" />
+  <img src=".github/cut-editor-railway.gif" alt="The Donkey Cut editor with The Railway Mystery open: generated shots in the side panel, clips and score on the timeline, and the AI chat that assembled them" width="960" />
   <br />
-  <sub><i>A frame from "The Railway Mystery" — storyboarded, generated, and cut in Donkey Cut.</i></sub>
+  <sub><i>The editor with "The Railway Mystery" open — generated shots in the side panel, clips and score on the timeline, and the AI chat that assembled them.</i></sub>
 </p>
 
 ### Free and local
@@ -55,6 +55,12 @@ Describe a shot in chat and iterate until it's right. These are the two example 
 | Paris — Live the romance | New York — Rise above the city |
 | --- | --- |
 | ![Paris travel poster](site/public/cut/landing/poster-paris.jpg) | ![New York travel poster](site/public/cut/landing/poster-newyork.jpg) |
+
+<p align="center">
+  <img src=".github/cut-editor-travel-posters.gif" alt="The Donkey Cut editor with the City poster series open: both posters generated in the side panel, animated clips with captions and a waltz on the timeline" width="960" />
+  <br />
+  <sub><i>The poster series in the editor — both posters animated into clips, cut with captions and a waltz.</i></sub>
+</p>
 
 ### How it works
 
