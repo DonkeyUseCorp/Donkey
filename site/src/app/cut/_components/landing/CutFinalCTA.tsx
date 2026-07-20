@@ -22,7 +22,7 @@ export function CutFinalCTA({ root }: { root: string }) {
           </p>
           <div className="flex justify-center">
             <PillButton href={`${root}/app`} variant="primary" size="lg">
-              Start a new project
+              Start Today
             </PillButton>
           </div>
         </div>
