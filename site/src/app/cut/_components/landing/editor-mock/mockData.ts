@@ -168,6 +168,14 @@ export const MOCK_PROJECTS: MockProject[] = [
           { src: `${ASSETS}/chase-3.jpg`, label: "Shot 3", duration: "4.0s" },
         ],
       },
+      {
+        role: "user",
+        text: "Add a train whistle when it clears the tunnel, and gravel under the bicycle.",
+      },
+      {
+        role: "assistant",
+        text: "Placed both on the effects track and mixed them under the score. Want the cut tightened where the train enters the tunnel?",
+      },
     ],
   },
 ];
