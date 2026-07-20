@@ -11,12 +11,14 @@ export function CutHero({ root }: { root: string }) {
     >
       <div>
         <h1 className="text-[clamp(36px,5.5vw,64px)] leading-[0.95] font-semibold tracking-[-0.02em]">
-          Cut video with AI. <span className="italic">On your Mac.</span>
+          The video editor iMovie{" "}
+          <span className="italic">should have been.</span>
         </h1>
         <p className="mt-6 max-w-[720px] text-[17px] leading-[1.55] text-[#454545]">
-          A video editor with generation built into the timeline: images,
-          clips, voiceover, and music appear where you ask for them. Editing
-          and export run on your own Mac.
+          A browser editor with AI generation when needed. The companion Mac
+          app transcribes, stores, and exports using your own hardware. No
+          uploads, no cloud storage fees and works with your Claude or Codex
+          subscriptions.
         </p>
         <div className="mt-12">
           <PillButton href={`${root}/app`} variant="primary" size="md">
