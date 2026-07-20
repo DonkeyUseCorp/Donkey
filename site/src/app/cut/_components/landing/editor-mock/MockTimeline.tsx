@@ -7,7 +7,9 @@ import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import type { MockProject } from "@/app/cut/_components/landing/editor-mock/mockData";
 
-const TRACK_W = 1000;
+// The timeline column sits left of the full-height chat panel (340px), so its
+// usable track width is the frame minus that column and some gutter.
+const TRACK_W = 800;
 const CLIP_GAP = 4;
 const RULER_H = 26;
 const VIDEO_H = 56;

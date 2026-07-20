@@ -49,17 +49,21 @@ export function EditorMock() {
               <div
                 key={project.id}
                 className={cn(
-                  "absolute inset-0 grid grid-rows-[46px_minmax(0,1fr)_auto] bg-card transition-opacity duration-300",
+                  // Same frame as the real editor: the chat panel is a
+                  // full-height column beside the top-bar/preview/timeline grid.
+                  "absolute inset-0 flex bg-card transition-opacity duration-300",
                   i === active ? "opacity-100" : "opacity-0",
                 )}
               >
-                <MockTopBar project={project} />
-                <div className="grid min-h-0 grid-cols-[auto_minmax(0,1fr)_340px]">
-                  <MockSidePanel project={project} />
-                  <MockPreview project={project} active={i === active} />
-                  <MockAiPanel project={project} />
+                <div className="grid min-w-0 flex-1 grid-rows-[46px_minmax(0,1fr)_auto]">
+                  <MockTopBar project={project} />
+                  <div className="grid min-h-0 grid-cols-[auto_minmax(0,1fr)]">
+                    <MockSidePanel project={project} />
+                    <MockPreview project={project} active={i === active} />
+                  </div>
+                  <MockTimeline project={project} />
                 </div>
-                <MockTimeline project={project} />
+                <MockAiPanel project={project} />
               </div>
             ))}
           </div>
