@@ -1,5 +1,6 @@
 import AppKit
 import DonkeyContracts
+import DonkeyRuntime
 
 /// The menu bar entry point: a status item with the Donkey glyph whose menu follows the
 /// session — "Go to App" and "Log out" while signed in, "Log in" while signed out — plus an
@@ -117,7 +118,7 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     private static func menuBarIcon() -> NSImage {
         let image = NSImage(size: NSSize(width: 20, height: 20))
         for resource in ["menu-bar-icon", "menu-bar-icon@2x"] {
-            guard let url = Bundle.module.url(forResource: resource, withExtension: "png"),
+            guard let url = DonkeyResourceBundle.app?.url(forResource: resource, withExtension: "png"),
                   let data = try? Data(contentsOf: url),
                   let representation = NSBitmapImageRep(data: data) else { continue }
             representation.size = image.size
