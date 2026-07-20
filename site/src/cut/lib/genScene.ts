@@ -648,6 +648,9 @@ interface GenSceneState {
   /** A chat thread was deleted — every run it owned dies with it. Nothing
    * keeps working behind a conversation the user killed. */
   killThread: (chatId: string) => void;
+  /** A project was deleted — abort any live run so it stops spending and can't
+   * write back to a doc that no longer exists. */
+  killProject: (projectId: string) => void;
   dismiss: () => void;
 }
 
@@ -932,6 +935,10 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     // — a background run the boot sweep hasn't adopted — and the doc sweep
     // below clears their persisted plans.
     killedChats.add(chatId);
+    // Stop the thread's in-flight video renders too: aborting the orchestrator
+    // ends the scene loop, but each shot's render polls on its own in useGenerate
+    // and would otherwise land its clip under the dead thread minutes later.
+    useGenerate.getState().cancelForOwner({ chatId });
     for (const [projectId, orch] of orchestrators) {
       if (orch.project.chatId === chatId) killRun(projectId);
     }
@@ -940,6 +947,19 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     const run = get().run;
     if (run?.chatId === chatId) set({ run: null });
     void killPersistedThreadRuns(chatId);
+  },
+
+  killProject: (projectId) => {
+    // The project (folder, doc, media) is being deleted: abort a live scene run
+    // so it stops spending and never writes back to a doc that's gone. The
+    // persisted plan needs no clearing — it dies with the project folder.
+    const orch = orchestrators.get(projectId);
+    if (orch) {
+      orch.abort();
+      orchestrators.delete(projectId);
+    }
+    const run = get().run;
+    if (run?.projectId === projectId) set({ run: null });
   },
 
   dismiss: () => {

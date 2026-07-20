@@ -43,6 +43,7 @@ import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
+import { activeChatKey, threadsKey } from "@/cut/lib/chatThreads";
 import {
   beginChatTurn,
   deleteChatAssets,
@@ -104,13 +105,6 @@ interface ChatThread {
 }
 
 const THREAD_LIMIT = 30;
-// Chat history is strictly per project. The keys derive from the route's
-// project id passed down as a prop — never from the editor store, whose
-// projectId still points at the previously open project until loadProject
-// lands, which used to leak one project's chat into another.
-const threadsKey = (projectId: string) => `cut-ai-threads-${projectId}`;
-// The open chat survives hiding the panel — only the + button starts a new one.
-const activeChatKey = (projectId: string) => `cut-ai-active-${projectId}`;
 
 function readThreads(projectId: string): ChatThread[] {
   try {

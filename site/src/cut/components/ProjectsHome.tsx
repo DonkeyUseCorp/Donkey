@@ -44,6 +44,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { apiFetch, apiUrl, engineLost } from "@/cut/lib/api";
+import { clearProjectThreads } from "@/cut/lib/chatThreads";
+import { useGenerate } from "@/cut/lib/generate";
+import { useGenScene } from "@/cut/lib/genScene";
 import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
 import { homeHref, projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
@@ -257,8 +260,16 @@ export function ProjectsHome() {
   const remove = async () => {
     if (!deleting) return;
     setBusy(true);
+    const id = deleting.id;
     try {
-      await apiFetch(`/api/cut/projects/${deleting.id}`, { method: "DELETE" });
+      await apiFetch(`/api/cut/projects/${id}`, { method: "DELETE" });
+      // The doc, media, and exports go with the folder on the server. Purge the
+      // client-side residue keyed to this project so nothing survives it: a live
+      // scene run, its in-flight renders, and its chat history (whose ids the
+      // render-resume guard reads to keep a deleted thread's render from landing).
+      useGenScene.getState().killProject(id);
+      useGenerate.getState().cancelForOwner({ projectId: id });
+      clearProjectThreads(id);
       setDeleting(null);
       await refresh();
     } finally {

@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { apiFetch, apiJson } from "./api";
 import type { AssetRef } from "./assetRef";
 import { bytesFromBase64 } from "./bytes";
+import { readThreadIds } from "./chatThreads";
 import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { stockAssetInDoc } from "./genvideo/docWriter";
 import { cutAppBase } from "./hosts";
@@ -123,6 +124,11 @@ interface GenerateState {
     }
   ) => { jobId: string; settled: Promise<GenerateJob>; submitted: Promise<VideoSubmitOutcome> };
   dismiss: (id: string) => void;
+  /** Cancel every render owned by a deleted thread or project: matching jobs are
+   * dropped from the list and their in-flight polls refuse to land, so a render
+   * still running when the user deletes its owner can't re-add media afterward.
+   * Called by thread deletion (chatId) and project deletion (projectId). */
+  cancelForOwner: (owner: { chatId?: string; projectId?: string }) => void;
   /** Re-attach the poll loop of every persisted running render (reload
    * recovery) — called once when the app boots. Idempotent. */
   resumeRunningJobs: () => void;
@@ -384,6 +390,11 @@ export const useGenerate = create<GenerateState>((set, get) => {
   // tab, or the session cookie can land a beat after this page loads.
   let probing: Promise<boolean> | null = null;
 
+  // Jobs whose owner (thread or project) was deleted mid-render. Their poll loop
+  // checks this before landing anything, so a render that finishes after its
+  // owner is gone drops its result instead of re-adding orphaned media.
+  const cancelledJobs = new Set<string>();
+
   const update = (id: string, patch: Partial<GenerateJob>) => {
     set((s) => ({ jobs: s.jobs.map((j) => (j.id === id ? { ...j, ...patch } : j)) }));
     persistJobs(get().jobs);
@@ -422,11 +433,16 @@ export const useGenerate = create<GenerateState>((set, get) => {
     const job = get().jobs.find((j) => j.id === jobId);
     if (!job) return;
     let gen = first;
+    // The render is abandoned once its owner is deleted: cancelForOwner drops the
+    // job from the list, so a vanished job (or one flagged mid-render) means stop
+    // polling and land nothing — the media it would have added is unwanted.
+    const aborted = () => cancelledJobs.has(jobId) || !get().jobs.some((j) => j.id === jobId);
     // A resumed render keeps its original deadline, floored so a reload near
     // the limit still gets a couple of polls before giving up. A ladder rung
     // passes its own start so a slow first rung doesn't starve the fallback.
     const deadline = Math.max((since ?? job.startedAt) + VIDEO_DEADLINE_MS, Date.now() + 2 * 60_000);
     while (gen.status === "in_progress") {
+      if (aborted()) return;
       claimJobLease(jobId); // renewed every cycle; siblings back off until it staled
       update(jobId, {
         poll: {
@@ -457,6 +473,9 @@ export const useGenerate = create<GenerateState>((set, get) => {
     if (gen.status !== "completed") {
       throw new Error(providerError(gen.error) ?? "Video generation failed.");
     }
+    // Owner deleted while the render finished: skip the import entirely so no
+    // file is even written for media nobody will ever see.
+    if (aborted()) return;
 
     const out = gen.outputs.find((o) => o.dataBase64) ?? gen.outputs.find((o) => o.url);
     const fileName = `ai-${promptSlug(job.prompt)}.mp4`;
@@ -477,6 +496,15 @@ export const useGenerate = create<GenerateState>((set, get) => {
 
     const asset = await importFileToProject(job.projectId, file);
     if (!asset) throw new Error("Could not import the generated video.");
+    // The owner may have been deleted during the import (the file write is a
+    // round trip): drop the file we just wrote rather than leave it orphaned.
+    if (aborted()) {
+      void apiFetch(
+        `/api/cut/projects/${job.projectId}/media/${encodeURIComponent(asset.fileName)}`,
+        { method: "DELETE" }
+      ).catch(() => {});
+      return;
+    }
     asset.name = promptName(job.prompt);
     applyOwnership(asset, job.chatId);
     if (adopt(job.projectId, asset)) {
@@ -573,6 +601,15 @@ export const useGenerate = create<GenerateState>((set, get) => {
             throw new Error(body.error ?? "Could not add the image to the project.");
           }
           const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
+          // Owner deleted while the image rendered (cancelForOwner dropped the
+          // job): drop the baked file instead of adopting orphaned media.
+          if (cancelledJobs.has(job.id) || !get().jobs.some((j) => j.id === job.id)) {
+            void apiFetch(
+              `/api/cut/projects/${projectId}/media/${encodeURIComponent(body.fileName)}`,
+              { method: "DELETE" }
+            ).catch(() => {});
+            return settled(job.id, job);
+          }
           applyOwnership(asset, opts?.chatId);
           if (adopt(projectId, asset) && !opts?.chatId) {
             useGenNotify.getState().landed("image", asset.id);
@@ -706,9 +743,43 @@ export const useGenerate = create<GenerateState>((set, get) => {
       return { jobId: job.id, settled: settledRun, submitted };
     },
 
+    cancelForOwner: (owner) => {
+      const match = (j: GenerateJob) =>
+        (owner.chatId !== undefined && j.chatId === owner.chatId) ||
+        (owner.projectId !== undefined && j.projectId === owner.projectId);
+      const victims = get().jobs.filter(match);
+      if (victims.length === 0) return;
+      // Flag the running ones so their poll loop lands nothing (finishVideo reads
+      // cancelledJobs), then drop every matching job — running or settled, its
+      // card belonged to the owner the user just deleted.
+      for (const j of victims) {
+        cancelledJobs.add(j.id);
+        releaseJobLease(j.id);
+      }
+      set((s) => ({ jobs: s.jobs.filter((j) => !match(j)) }));
+      persistJobs(get().jobs);
+    },
+
     resumeRunningJobs: () => {
       const stored = new Map(readPersistedJobs().map((j) => [j.id, j]));
+      // Read each project's surviving thread ids once per sweep.
+      const threadCache = new Map<string, Set<string>>();
+      const threadIds = (projectId: string) => {
+        let ids = threadCache.get(projectId);
+        if (!ids) {
+          ids = readThreadIds(projectId);
+          threadCache.set(projectId, ids);
+        }
+        return ids;
+      };
       for (const j of get().jobs) {
+        // A render whose owning thread no longer exists — the thread was deleted,
+        // or its whole project was (which clears the project's threads) — must
+        // never land: drop it so a reload can't resurrect media the user removed.
+        if (j.chatId && !threadIds(j.projectId).has(j.chatId)) {
+          get().dismiss(j.id);
+          continue;
+        }
         if (j.kind !== "video" || j.status !== "running" || !j.poll || settlements.has(j.id)) continue;
         // Storage is the cross-tab truth: a sibling tab may have settled this
         // render already — adopt its outcome instead of re-polling (and
