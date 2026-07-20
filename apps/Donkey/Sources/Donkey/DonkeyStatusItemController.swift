@@ -2,20 +2,16 @@ import AppKit
 import DonkeyContracts
 import DonkeyRuntime
 
-/// The menu bar entry point: a status item with the Donkey glyph whose menu follows the
-/// session — "Go to App" and "Log out" while signed in, "Log in" while signed out — plus an
-/// install item whenever a Sparkle background check has an update waiting. The menu is rebuilt
-/// each time it opens, so it always reflects the current auth and update state without push
-/// updates from the app delegate.
+/// The menu bar entry point: a status item with the Donkey glyph whose menu carries "Go to App",
+/// the update section — with an install item whenever a Sparkle background check has an update
+/// waiting — and Quit. The menu is rebuilt each time it opens, so it always reflects the current
+/// update state without push updates from the app delegate.
 @MainActor
 final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     /// The hosted app "Go to App" opens — the Cut app, same destination as the billing page's host.
     private static let appURL = URL(string: "https://donkeycut.com/app")!
 
     private let statusItem: NSStatusItem
-    private let isSignedIn: () -> Bool
-    private let logIn: () -> Void
-    private let logOut: () -> Void
     private let checkForUpdates: () -> Void
     private let installUpdate: () -> Void
 
@@ -23,15 +19,9 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     var updateState: UserQueryUpdateState?
 
     init(
-        isSignedIn: @escaping () -> Bool,
-        logIn: @escaping () -> Void,
-        logOut: @escaping () -> Void,
         checkForUpdates: @escaping () -> Void,
         installUpdate: @escaping () -> Void
     ) {
-        self.isSignedIn = isSignedIn
-        self.logIn = logIn
-        self.logOut = logOut
         self.checkForUpdates = checkForUpdates
         self.installUpdate = installUpdate
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -51,18 +41,13 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        populateSessionItems(in: menu)
+        populateMenuItems(in: menu)
     }
 
-    /// The session-following item set — Go to App / Log in / Log out, the update section, and
-    /// Quit. The status-item menu is exactly this; the app main menu appends it after About.
-    func populateSessionItems(in menu: NSMenu) {
-        if isSignedIn() {
-            menu.addItem(makeItem(title: "Go to App", action: #selector(goToAppAction)))
-            menu.addItem(makeItem(title: "Log out", action: #selector(logOutAction)))
-        } else {
-            menu.addItem(makeItem(title: "Log in", action: #selector(logInAction)))
-        }
+    /// The shared item set — Go to App, the update section, and Quit. The status-item menu is
+    /// exactly this; the app main menu appends it after About.
+    func populateMenuItems(in menu: NSMenu) {
+        menu.addItem(makeItem(title: "Go to App", action: #selector(goToAppAction)))
 
         menu.addItem(.separator())
         menu.addItem(updateItem())
@@ -96,14 +81,6 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func goToAppAction(_ sender: Any?) {
         NSWorkspace.shared.open(Self.appURL)
-    }
-
-    @objc private func logInAction(_ sender: Any?) {
-        logIn()
-    }
-
-    @objc private func logOutAction(_ sender: Any?) {
-        logOut()
     }
 
     @objc private func checkForUpdatesAction(_ sender: Any?) {

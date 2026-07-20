@@ -12,14 +12,14 @@ import SwiftUI
 final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var onboardingWindowController: OnboardingWindowController?
-    /// The menu bar surface: the status item whose menu carries Go to App / Log in / Log out.
+    /// The menu bar surface: the status item whose menu carries Go to App, updates, and Quit.
     private var statusItemController: DonkeyStatusItemController?
     /// Sparkle, running windowless. A background check that finds an update surfaces the status
     /// menu's "Install Update" item; choosing it downloads, installs, and relaunches silently.
     private var updateChecker: (any DonkeyUpdateChecking)?
     private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
     /// Mirrors the auth coordinator's session phase into the process-wide session gate and the
-    /// session heartbeat for the whole run; the status menu reads the phase directly when it opens.
+    /// session heartbeat for the whole run.
     private var authStateCancellable: AnyCancellable?
     /// Periodically reconciles the app's session against the server, so a sign-out performed on the website
     /// (or another device) takes effect here without a relaunch. A periodic tick plus an app-reactivation
@@ -57,7 +57,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         registerAuthCallbackHandler()
         installMainMenu()
-        installStatusItem(authCoordinator: authCoordinator)
+        installStatusItem()
         startUpdateChecker()
 
         let cutEngineSupervisor = DonkeyCutEngineSupervisor()
@@ -99,9 +99,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The donkey:// sign-in callback can be serviced by a different app instance than this one
         // (LaunchServices cold-launching a second copy of this bundle id, which shares this
         // UserDefaults domain). That copy persists the session and exits, leaving this instance's
-        // in-memory phase signed-out and the status menu stuck on "Log in". Clicking "Open Donkey"
-        // activates us, so reconciling from the durable session here flips the phase — and the menu —
-        // without a relaunch. A no-op when already signed in or when no session is on disk.
+        // in-memory phase signed-out. Clicking "Open Donkey" activates us, so reconciling from the
+        // durable session here flips the phase without a relaunch. A no-op when already signed in
+        // or when no session is on disk.
         authCoordinator?.reconcileWithPersistedSession()
     }
 
@@ -171,19 +171,10 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Status item
 
-    private func installStatusItem(authCoordinator: DonkeyAuthCoordinator) {
+    private func installStatusItem() {
         statusItemController = DonkeyStatusItemController(
-            isSignedIn: { [weak authCoordinator] in
-                authCoordinator?.isAuthenticated == true
-            },
-            logIn: { [weak authCoordinator] in
-                authCoordinator?.beginGoogleSignIn()
-            },
-            logOut: { [weak self] in
-                self?.signOut()
-            },
             checkForUpdates: { [weak self] in
-                self?.updateChecker?.checkForUpdatesInBackground()
+                self?.updateChecker?.checkForUpdates()
             },
             installUpdate: { [weak self] in
                 self?.updateChecker?.installAvailableUpdate()
@@ -221,9 +212,10 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Session heartbeat
 
-    /// Starts the session heartbeat: a periodic tick plus an app-reactivation observer, each firing a cheap
-    /// session-validity probe, plus one immediate probe. Idempotent — a no-op while already running, so the
-    /// auth-phase observer can call it freely. Torn down by `stopSessionHeartbeat` on sign-out.
+    /// Starts the session heartbeat: a periodic tick plus an app-reactivation observer, each firing a
+    /// cheap session-validity probe, plus one immediate probe. Idempotent — a no-op while already
+    /// running, so the auth-phase observer can call it freely. Torn down by `stopSessionHeartbeat`
+    /// on sign-out.
     private func startSessionHeartbeat() {
         guard sessionHeartbeatTimer == nil else { return }
 
@@ -258,8 +250,8 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Confirms the session is still valid server-side. Fires one cheap, auth-gated GET
     /// (`/api/inference/models/`); a 401 clears the dead local session — the server already revoked it,
-    /// so this is local cleanup only — which flips the status menu to "Log in" via the phase observer.
-    /// Network or other errors are ignored so a transient hiccup never signs the user out.
+    /// so this is local cleanup only — which tears down the session-bound machinery via the phase
+    /// observer. Network or other errors are ignored so a transient hiccup never signs the user out.
     private func probeSessionValidity() {
         guard authCoordinator?.isAuthenticated == true,
               let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment()
@@ -278,15 +270,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Sign out
-
-    private func signOut() {
-        // User-initiated: revoke every session for this user so the website (and any other device) signs
-        // out too. The phase observer tears down the session-bound machinery, and the status menu flips
-        // to "Log in" the next time it opens.
-        authCoordinator?.signOut(revokingRemoteSessions: true)
-    }
-
     // MARK: - Menu
 
     /// The app main menu, mirroring the status-item menu with About on top.
@@ -298,7 +281,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         )
         menu.addItem(.separator())
-        statusItemController?.populateSessionItems(in: menu)
+        statusItemController?.populateMenuItems(in: menu)
     }
 
     private func installMainMenu() {
@@ -307,7 +290,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         // Rebuilt on every open (and on key-equivalent lookup) by `menuNeedsUpdate`, so it tracks
-        // the session and update state the same way the status-item menu does.
+        // the update state the same way the status-item menu does.
         let appMenu = NSMenu()
         appMenu.delegate = self
         appMenuItem.submenu = appMenu
