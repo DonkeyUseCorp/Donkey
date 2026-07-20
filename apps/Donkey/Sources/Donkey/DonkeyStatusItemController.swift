@@ -115,7 +115,7 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     /// The donkey glyph as a template image: pure black plus alpha, so the system recolors it
     /// for light/dark menu bars and the selected state (Apple's status-item guideline).
     private static func menuBarIcon() -> NSImage {
-        let image = NSImage(size: NSSize(width: 21, height: 21))
+        let image = NSImage(size: NSSize(width: 20, height: 20))
         for resource in ["menu-bar-icon", "menu-bar-icon@2x"] {
             guard let url = Bundle.module.url(forResource: resource, withExtension: "png"),
                   let data = try? Data(contentsOf: url),
