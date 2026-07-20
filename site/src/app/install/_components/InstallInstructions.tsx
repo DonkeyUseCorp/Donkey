@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
 import Image from "next/image";
-import { ArrowRight } from "lucide-react";
 
 import {
   Headline,
@@ -80,7 +79,7 @@ export function InstallInstructions() {
               like any other Mac app.
             </p>
             <PillButton href={DONKEY_DOWNLOAD_URL} variant="primary" size="lg">
-              Download for Mac <ArrowRight size={18} />
+              Download for Mac
             </PillButton>
           </div>
         </div>

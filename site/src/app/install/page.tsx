@@ -1,18 +1,29 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 
-import { Footer } from "@/app/_components/landing/Footer";
-import { TopNav } from "@/app/_components/landing/TopNav";
 import { BG, BLACK } from "@/app/_components/landing/theme";
+import { CutFooter } from "@/app/cut/_components/landing/CutFooter";
+import { CutTopNav } from "@/app/cut/_components/landing/CutTopNav";
 import { InstallInstructions } from "@/app/install/_components/InstallInstructions";
-
-export const dynamic = "force-static";
+import {
+  DONKEYCUT_CANONICAL,
+  isDonkeycutHost,
+  isLocalHost,
+} from "@/cut/lib/hosts";
 
 export const metadata: Metadata = {
   title: "Install Donkey",
   description: "Download Donkey for macOS and install it with the standard drag-to-Applications flow.",
+  alternates: { canonical: `${DONKEYCUT_CANONICAL}/install` },
 };
 
-export default function InstallPage() {
+// The install page lives on donkeycut.com (passed through by src/proxy.ts) and
+// wears the Cut site's header and footer; every other host 404s. Local dev
+// mirrors donkeycut.com.
+export default async function InstallPage() {
+  const host = (await headers()).get("host");
+  if (!isDonkeycutHost(host) && !isLocalHost(host)) notFound();
   return (
     <main
       style={{
@@ -23,9 +34,9 @@ export default function InstallPage() {
         WebkitFontSmoothing: "antialiased",
       }}
     >
-      <TopNav />
+      <CutTopNav root="" />
       <InstallInstructions />
-      <Footer />
+      <CutFooter />
     </main>
   );
 }

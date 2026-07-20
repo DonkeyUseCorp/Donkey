@@ -1,16 +1,12 @@
 "use client";
 
-import { TopNav } from "@/app/_components/landing/TopNav";
-import {
-  signInHrefFor,
-  signUpHrefFor,
-} from "@/app/_components/landing/useAppEntryHref";
 import { BG, BLACK } from "@/app/_components/landing/theme";
 import { CutFinalCTA } from "@/app/cut/_components/landing/CutFinalCTA";
 import { CutFooter } from "@/app/cut/_components/landing/CutFooter";
 import { CutHero } from "@/app/cut/_components/landing/CutHero";
 import { CutOpenSource } from "@/app/cut/_components/landing/CutOpenSource";
 import { CutPricing } from "@/app/cut/_components/landing/CutPricing";
+import { CutTopNav } from "@/app/cut/_components/landing/CutTopNav";
 import { CutWorksWith } from "@/app/cut/_components/landing/CutWorksWith";
 
 // The donkeycut.com marketing page: the Donkey landing's cream visual system
@@ -30,15 +26,7 @@ export function CutLanding({ root }: { root: string }) {
         WebkitFontSmoothing: "antialiased",
       }}
     >
-      <TopNav
-        homeHref={root || "/"}
-        wordmark="Donkey Cut"
-        signedInPill={{ href: `${root}/app`, label: "Go to App" }}
-        signedOutAuth={{
-          logInHref: signInHrefFor(`${root}/app`),
-          signUpHref: signUpHrefFor(`${root}/app`),
-        }}
-      />
+      <CutTopNav root={root} />
       <CutHero root={root} />
       <CutWorksWith />
       <CutPricing root={root} />

@@ -18,12 +18,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       lastModified,
       priority: 0.8,
-      url: `${SITE_URL}/install`,
-    },
-    {
-      changeFrequency: "monthly",
-      lastModified,
-      priority: 0.8,
       url: `${SITE_URL}/pricing`,
     },
     {

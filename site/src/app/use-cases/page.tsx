@@ -8,6 +8,7 @@ import {
   PillButton,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
+import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 import { MediaShowcase } from "@/app/_components/landing/media-showcase/MediaShowcase";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import {
@@ -91,7 +92,7 @@ export default function UseCasesPage() {
           browser.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
-          <PillButton href="/install" variant="dark">
+          <PillButton href={DONKEY_INSTALL_URL} variant="dark">
             Try Donkey
             <ArrowRight size={16} />
           </PillButton>
@@ -169,7 +170,7 @@ export default function UseCasesPage() {
               <Headline size="lg">Try Donkey today.</Headline>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <PillButton href="/install" variant="primary">
+              <PillButton href={DONKEY_INSTALL_URL} variant="primary">
                 Install Donkey
               </PillButton>
             </div>

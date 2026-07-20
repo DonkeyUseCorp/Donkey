@@ -10,6 +10,7 @@ import {
   PillButton,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
+import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 import { CopyPromptButton } from "@/app/_components/landing/media-showcase/CopyPromptButton";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import { getUseCase, useCases } from "@/app/use-cases/useCases";
@@ -114,7 +115,7 @@ export default async function UseCasePage({ params }: PageProps) {
               {useCase.description}
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <PillButton href="/install" variant="dark">
+              <PillButton href={DONKEY_INSTALL_URL} variant="dark">
                 Try this with Donkey
                 <ArrowRight size={16} />
               </PillButton>

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
+import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 import { CopyPromptButton } from "@/app/_components/landing/media-showcase/CopyPromptButton";
 import { type MediaShowcaseItem } from "@/app/_components/landing/media-showcase/data";
 
@@ -116,7 +117,7 @@ export function MediaDetailDialog({ item, onClose }: Props) {
                   Paste this prompt into Donkey to generate your own.
                 </p>
                 <div className="mt-3">
-                  <PillButton href="/install" variant="dark" size="sm">
+                  <PillButton href={DONKEY_INSTALL_URL} variant="dark" size="sm">
                     Install Donkey
                     <ArrowRight size={16} />
                   </PillButton>
