@@ -74,7 +74,7 @@ export function EditorMock() {
         the side panel, clips and music on the timeline, and the AI chat that
         assembled them.
       </figcaption>
-      <div className="mt-6 flex justify-center gap-1.5">
+      <div className="mt-6 flex flex-wrap justify-center gap-1.5">
         {MOCK_PROJECTS.map((project, i) => (
           <button
             key={project.id}

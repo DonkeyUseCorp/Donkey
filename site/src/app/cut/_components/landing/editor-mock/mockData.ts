@@ -121,7 +121,7 @@ export const MOCK_PROJECTS: MockProject[] = [
   },
   {
     id: "railway",
-    switcherLabel: "The Railway Mystery",
+    switcherLabel: "Railway mystery",
     name: "The Railway Mystery",
     aspect: "16:9",
     aspectLabel: "16:9 · Landscape",
