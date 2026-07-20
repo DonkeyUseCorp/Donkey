@@ -1,5 +1,6 @@
 "use client";
 
+import { useGenerate } from "./generate";
 import { getClipSpans, overlayLayers, totalDuration, useEditor } from "./store";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { isCrossStyle, rectOf, regionLabel, type ClipSpan, type VideoClip } from "./types";
@@ -107,6 +108,23 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       ...(a.origin ? { origin: a.origin } : {}),
     })),
     mediaTruncated: s.assets.length > cueCap,
+    // AI video renders for this project, live from the job store — what
+    // "rendering" claims must be grounded in. A done render names the asset
+    // it landed as (already in `media`); a failed one carries its error.
+    renders: useGenerate
+      .getState()
+      .jobs.filter((j) => j.kind === "video" && j.projectId === s.projectId)
+      .slice(0, 8)
+      .map((j) => ({
+        jobId: j.id,
+        prompt: j.prompt.length > 80 ? `${j.prompt.slice(0, 77)}…` : j.prompt,
+        status: j.status,
+        ...(j.status === "running"
+          ? { elapsedSec: Math.round((Date.now() - j.startedAt) / 1000) }
+          : {}),
+        ...(j.status === "done" && j.assetId ? { assetId: j.assetId } : {}),
+        ...(j.status === "error" && j.error ? { error: j.error } : {}),
+      })),
     videoTrack: spans.map((sp, index) => ({
       index,
       id: sp.clip.id,

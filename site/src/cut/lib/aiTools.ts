@@ -681,6 +681,49 @@ export async function runAiTool(
       return launchVideoJob(projectId, input, [{ prompt, opts: { ...baseOpts } }]);
     }
 
+    case "wait_for_renders": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const watched = useGenerate
+        .getState()
+        .jobs.filter(
+          (j) => j.kind === "video" && j.status === "running" && j.projectId === projectId
+        )
+        .map((j) => j.id);
+      if (watched.length === 0) {
+        return { renders: [], note: "No renders in flight — check `renders` in the state for recent outcomes." };
+      }
+      // Poll the job store rather than the settlement promises: it also tracks
+      // renders another tab owns. Stay under the tool bridge's 2-minute cap;
+      // whatever hasn't settled reports as still rendering.
+      const deadline = Date.now() + 100_000;
+      while (Date.now() < deadline) {
+        const jobs = useGenerate.getState().jobs;
+        if (!watched.some((id) => jobs.find((j) => j.id === id)?.status === "running")) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      const jobs = useGenerate.getState().jobs;
+      const cur = useEditor.getState();
+      const renders = watched.map((id) => {
+        const j = jobs.find((x) => x.id === id);
+        if (!j) return { jobId: id, status: "dismissed" as const };
+        const asset = j.assetId ? cur.assets.find((a) => a.id === j.assetId) : undefined;
+        return {
+          jobId: id,
+          status: j.status,
+          ...(asset ? { assetId: asset.id, name: asset.name, duration: asset.duration } : {}),
+          ...(j.status === "error" && j.error ? { error: j.error } : {}),
+        };
+      });
+      const stillRunning = renders.filter((x) => x.status === "running").length;
+      return {
+        renders,
+        ...(stillRunning > 0
+          ? { note: `${stillRunning} still rendering — call wait_for_renders again to keep waiting.` }
+          : {}),
+      };
+    }
+
     case "generate_character_video": {
       const projectId = s.projectId;
       if (!projectId) throw new ToolError("No project open.");
