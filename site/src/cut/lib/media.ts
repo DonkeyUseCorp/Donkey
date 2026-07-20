@@ -261,8 +261,15 @@ export async function enrichAsset(asset: MediaAsset) {
         useEditor.getState().updateAsset(asset.id, { thumbs: [asset.url], thumbStep: IMAGE_CLIP_SECONDS });
       }
     } else if (asset.type === "video" && !asset.thumbs?.length) {
-      const { thumbs, thumbStep } = await makeThumbs(asset.url, asset.duration);
-      useEditor.getState().updateAsset(asset.id, { thumbs, thumbStep });
+      const key = stripCacheKey(asset.url);
+      const cached = await readCachedStrip(key, asset.duration);
+      if (cached) {
+        useEditor.getState().updateAsset(asset.id, { thumbs: cached.thumbs, thumbStep: cached.thumbStep });
+      } else {
+        const { thumbs, thumbStep } = await makeThumbs(asset.url, asset.duration);
+        useEditor.getState().updateAsset(asset.id, { thumbs, thumbStep });
+        writeCachedStrip(key, { thumbs, thumbStep, duration: asset.duration, at: Date.now() });
+      }
     } else if (asset.type === "audio" && !asset.peaks?.length) {
       const peaks = await makePeaks(asset.url);
       useEditor.getState().updateAsset(asset.id, { peaks });
@@ -328,6 +335,79 @@ export function loadAudioDuration(url: string): Promise<number> {
 // Filmstrip frames render at 60 CSS px tall — capture at 3× so they stay sharp
 // on Retina (and when a tall timeline scales the row up).
 const THUMB_H = 180;
+
+// Filmstrips persist in IndexedDB keyed by the media file's project path, so
+// reopening a project paints clips from cache instead of re-seeking every
+// video. Cache failures fall through to regeneration.
+const STRIP_DB = "cut-filmstrips";
+const STRIP_STORE = "strips";
+const STRIP_CAP = 500; // prune oldest beyond this many cached strips
+
+type CachedStrip = { thumbs: string[]; thumbStep: number; duration: number; at: number };
+
+function stripCacheKey(url: string) {
+  return new URL(url, window.location.href).pathname;
+}
+
+function openStripDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(STRIP_DB, 1);
+    req.onupgradeneeded = () => {
+      const store = req.result.createObjectStore(STRIP_STORE);
+      store.createIndex("at", "at");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function readCachedStrip(key: string, duration: number): Promise<CachedStrip | null> {
+  try {
+    const db = await openStripDb();
+    const strip = await new Promise<CachedStrip | undefined>((resolve, reject) => {
+      const req = db.transaction(STRIP_STORE).objectStore(STRIP_STORE).get(key);
+      req.onsuccess = () => resolve(req.result as CachedStrip | undefined);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    // A same-path file with a different duration was rewritten; regenerate.
+    if (!strip?.thumbs?.length || Math.abs(strip.duration - duration) > 0.25) return null;
+    return strip;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedStrip(key: string, strip: CachedStrip) {
+  void (async () => {
+    try {
+      const db = await openStripDb();
+      const tx = db.transaction(STRIP_STORE, "readwrite");
+      const store = tx.objectStore(STRIP_STORE);
+      store.put(strip, key);
+      const count = await new Promise<number>((resolve, reject) => {
+        const req = store.count();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (count > STRIP_CAP) {
+        const cursorReq = store.index("at").openCursor();
+        let toDrop = count - STRIP_CAP;
+        cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (!cursor || toDrop <= 0) return;
+          cursor.delete();
+          toDrop--;
+          cursor.continue();
+        };
+      }
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => db.close();
+    } catch {
+      // Cache writes are best-effort; the strip is already on screen.
+    }
+  })();
+}
 
 async function makeThumbs(url: string, duration: number) {
   const v = await loadVideoMeta(url);
