@@ -16,7 +16,6 @@ export function CutFooter() {
     {
       title: "Product",
       links: [
-        { href: "https://donkeyuse.com", label: "Donkey" },
         { href: GITHUB_REPO_URL, label: "GitHub" },
         { href: "https://discord.gg/CPQu5XXmw", label: "Discord" },
       ],
