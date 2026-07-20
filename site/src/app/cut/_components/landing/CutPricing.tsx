@@ -23,8 +23,7 @@ export function CutPricing({ root }: { root: string }) {
         Simple <span style={{ fontStyle: "italic" }}>pricing</span>
       </Headline>
       <p className="mt-6 max-w-[900px] text-[17px] leading-[1.55] text-[#454545]">
-        The editor is free. Pay only for the AI that generates media for your
-        timeline.
+        The editor is free. Pay only for AI generated media.
       </p>
       <div
         style={{
