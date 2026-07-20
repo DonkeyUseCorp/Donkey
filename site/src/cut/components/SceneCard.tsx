@@ -7,6 +7,7 @@ import {
   CircleDashed,
   Clapperboard,
   Maximize2,
+  RotateCw,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -38,19 +39,18 @@ const STATUS_LABEL: Record<SceneRun["status"], string> = {
   failed: "Failed",
 };
 
-/** Badge color by shot state: green when placed, amber when it fell back to a
- * still, blue while in flight, muted while pending. */
-function shotTone(status: ShotStatus): string {
-  if (status === "placed") return "border-emerald-500/30 bg-emerald-500/15 text-emerald-600";
-  if (status === "failed") return "border-amber-500/30 bg-amber-500/15 text-amber-600";
-  if (status === "pending") return "border-border bg-muted text-muted-foreground";
-  return "border-[#0a84ff]/30 bg-[#0a84ff]/12 text-[#0a84ff]";
-}
-
 /** mm:ss for a frame count at the plan's fixed rate. */
 function fmt(frames: number): string {
   return formatDuration((frames / GEN_FPS) * 1000);
 }
+
+/** A single shot's own length in seconds, for the filmstrip badge ("3.2s"). */
+function shotSecs(sh: Shot): string {
+  return `${((sh.endFrame - sh.startFrame) / GEN_FPS).toFixed(1)}s`;
+}
+
+/** The shot statuses that mean a render is actively in flight. */
+const SHOT_INFLIGHT = new Set<ShotStatus>(["keyframing", "generating", "lipsync", "reviewing"]);
 
 /** The one line a plan row shows — what's on screen, else the spoken line. */
 function describe(sh: Shot): string {
@@ -136,52 +136,7 @@ export function SceneCard({ threadId }: { threadId: string }) {
             )}
           </button>
 
-          {open && (
-            <ol className="mt-1 flex flex-col gap-2">
-              {run.shots.map((sh, i) => {
-                // Redoable only once done — a click before then would render (and
-                // bill) a shot the user never approved.
-                const redoable = run.status === "done";
-                return (
-                  <li key={sh.id}>
-                    <button
-                      type="button"
-                      disabled={!redoable}
-                      onClick={() => useGenScene.getState().regenerateShot(i + 1)}
-                      title={redoable ? "Click to redo this shot" : `Shot ${i + 1} — ${sh.status}`}
-                      className={`flex w-full items-start gap-2 rounded-md py-0.5 text-left transition-colors ${
-                        redoable ? "cursor-pointer hover:bg-muted/40" : "cursor-default"
-                      }`}
-                    >
-                      <span
-                        className={`mt-px grid size-4 shrink-0 place-items-center rounded-full text-[9.5px] font-medium ${shotTone(
-                          sh.status
-                        )}`}
-                      >
-                        {sh.status === "placed" ? <Check className="size-2.5" /> : i + 1}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="mr-1.5 tabular-nums text-muted-foreground">
-                          {fmt(sh.startFrame)}–{fmt(sh.endFrame)}
-                        </span>
-                        <span className="text-foreground/90">{describe(sh)}</span>
-                      </span>
-                    </button>
-                    {sh.status === "failed" && (
-                      <span className="mt-0.5 block pl-6 text-[10px] text-amber-700">
-                        Couldn&apos;t animate — showing a still
-                        {sh.error ? (
-                          <>
-                            : <HostedErrorText error={sh.error} link={false} />
-                          </>
-                        ) : null}
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ol>
-          )}
+          {open && <ShotStrip run={run} redoable={run.status === "done"} />}
         </div>
       )}
 
@@ -266,6 +221,133 @@ export function SceneCard({ threadId }: { threadId: string }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The plan as a horizontal filmstrip — one tile per shot, laid out left to
+ * right the way the finished scenes read: each shot's opening frame (then its
+ * take once it renders), a duration badge, and a "Shot N" label. Numbered
+ * placeholders stand in while the planner is still cutting the shots, so the
+ * same strip carries the run from plan through render without changing shape. */
+function ShotStrip({ run, redoable }: { run: SceneRun; redoable: boolean }) {
+  const assets = useEditor((s) => s.assets);
+  const aspect = useEditor((s) => s.aspect);
+  const baseRatio = aspect === "9:16" ? 9 / 16 : 16 / 9;
+  return (
+    <div className="ai-scene-strip mt-1.5 flex gap-1.5 overflow-x-auto pb-1">
+      {run.shots.map((sh, i) => (
+        <ShotTile
+          key={sh.id}
+          shot={sh}
+          n={i + 1}
+          assets={assets}
+          baseRatio={baseRatio}
+          redoable={redoable}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** One filmstrip tile: the shot's take once placed, else its opening frame,
+ * else a numbered placeholder. Click opens whatever exists in the lightbox;
+ * once the run is done the hover redo button re-renders just this shot (the
+ * same gate the old plan rows carried — a redo before then would bill an
+ * unapproved shot). Tiles are borderless so the strip stays flat inside the
+ * card. */
+function ShotTile({
+  shot,
+  n,
+  assets,
+  baseRatio,
+  redoable,
+}: {
+  shot: Shot;
+  n: number;
+  assets: MediaAsset[];
+  baseRatio: number;
+  redoable: boolean;
+}) {
+  const clip = shot.clip ? assets.find((a) => a.id === shot.clip) : undefined;
+  const frame = shot.startKeyframe ? assets.find((a) => a.id === shot.startKeyframe) : undefined;
+  const media = clip ?? frame;
+  const ref = media ? refFromAsset(media) : undefined;
+  const ratio = media?.width && media?.height ? media.width / media.height : baseRatio;
+  // Portrait strips get taller tiles so a 9:16 shot isn't a sliver; one run is
+  // one aspect, so the strip stays a uniform height either way.
+  const height = baseRatio < 1 ? 100 : 72;
+  const width = Math.round(height * ratio);
+  const inFlight = SHOT_INFLIGHT.has(shot.status);
+  const view = () => ref && useLightbox.getState().open(lightboxItemFromRef(ref));
+  return (
+    <div className="flex shrink-0 flex-col gap-1" style={{ width }}>
+      <div
+        onClick={view}
+        title={`Shot ${n} — ${describe(shot)}`}
+        className={cn(
+          "group relative overflow-hidden rounded-md bg-muted transition-opacity",
+          ref ? "cursor-zoom-in hover:opacity-95" : "cursor-default"
+        )}
+        style={{ height }}
+      >
+        {clip && ref ? (
+          <video
+            src={`${ref.url}#t=0.1`}
+            preload="metadata"
+            muted
+            playsInline
+            className="size-full object-cover"
+          />
+        ) : frame && ref ? (
+          // eslint-disable-next-line @next/next/no-img-element -- engine/static file, not Next-optimizable
+          <img src={ref.url} alt="" className="size-full object-cover" />
+        ) : (
+          <span className="grid size-full place-items-center text-[13px] font-semibold text-muted-foreground/50">
+            {inFlight ? <CircleDashed className="size-4 animate-spin text-[#0a84ff]" /> : n}
+          </span>
+        )}
+
+        {/* A frame that's still animating: dim it and spin over the top. */}
+        {inFlight && media && (
+          <span className="absolute inset-0 grid place-items-center bg-black/35">
+            <CircleDashed className="size-4 animate-spin text-white" />
+          </span>
+        )}
+
+        {shot.status === "placed" && (
+          <span className="absolute top-1 left-1 grid size-3.5 place-items-center rounded-full bg-emerald-500 text-white">
+            <Check className="size-2.5" />
+          </span>
+        )}
+        {shot.status === "failed" && (
+          <span className="absolute top-1 left-1 rounded bg-amber-500/90 px-1 text-[8.5px] font-medium text-white">
+            still
+          </span>
+        )}
+
+        <span className="absolute right-1 bottom-1 rounded bg-black/65 px-1 font-mono text-[9px] text-white tabular-nums">
+          {shotSecs(shot)}
+        </span>
+
+        {redoable && (
+          <button
+            type="button"
+            title="Redo this shot"
+            onClick={(e) => {
+              e.stopPropagation();
+              useGenScene.getState().regenerateShot(n);
+            }}
+            className={cn(
+              scrimIconButton,
+              "absolute top-1 right-1 opacity-0 transition-opacity group-hover:opacity-100"
+            )}
+          >
+            <RotateCw className="size-3" />
+          </button>
+        )}
+      </div>
+      <span className="truncate text-[9.5px] text-muted-foreground">Shot {n}</span>
     </div>
   );
 }

@@ -1129,6 +1129,14 @@ const MessageView = memo(function MessageView({
   const text = message.parts
     .map((p) => (p.type === "text" ? p.text : ""))
     .join("");
+  // Media the turn produced, gathered from every finished tool call. It renders
+  // as one left-to-right row after the chips — the way the mock presents a set
+  // of generated stills — instead of one card stacked under each tool.
+  const toolOutputs = message.parts
+    .filter((part) => part.type.startsWith("tool-") || part.type === "dynamic-tool")
+    .map((part) => part as unknown as { state: string; output?: unknown })
+    .filter((p) => p.state === "output-available")
+    .map((p) => p.output);
   return (
     <div className="ai-msg-assistant group mb-3 flex flex-col gap-1.5">
       {message.parts.map((part, i) => {
@@ -1208,14 +1216,21 @@ const MessageView = memo(function MessageView({
                   )}
                 </pre>
               </details>
-              {/* Media the tool made previews right under its chip — it stays
-                  in the chat until the user drags it out or files it away. */}
-              {done && <ToolOutputAssets output={p.output} />}
             </Fragment>
           );
         }
         return null;
       })}
+      {/* Everything the turn generated, in one left-to-right row (images and
+          clips flow and wrap; audio and documents take their own line). It
+          stays in the chat until the user drags it out or files it away. */}
+      {toolOutputs.length > 0 && (
+        <div className="flex flex-wrap items-start gap-1.5">
+          {toolOutputs.map((output, i) => (
+            <ToolOutputAssets key={i} output={output} />
+          ))}
+        </div>
+      )}
       <MessageCopy text={text} />
     </div>
   );
