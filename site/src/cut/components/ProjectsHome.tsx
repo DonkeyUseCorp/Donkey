@@ -421,7 +421,7 @@ export function ProjectsHome() {
 
       {engineDown ? (
         <div className="grid min-h-[60vh] place-items-center">
-          <div className="flex max-w-sm flex-col items-center gap-4 text-center">
+          <div className="flex flex-col items-center gap-4 text-center">
             <div className="grid size-14 place-items-center rounded-2xl bg-muted">
               <Unplug className="size-7 text-muted-foreground" />
             </div>

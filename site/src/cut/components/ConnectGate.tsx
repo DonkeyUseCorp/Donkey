@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader2, Plug, ShieldX } from "lucide-react";
 
@@ -80,9 +81,18 @@ export function ConnectGate({ children }: { children: ReactNode }) {
           <p className="text-sm text-muted-foreground">
             Your browser is blocking this page from reaching the Donkey app on
             this Mac. Open the site settings from the icon next to the address
-            bar, allow access to apps and services on this device, then try
-            again.
+            bar, turn on{" "}
+            <span className="font-medium text-foreground">Apps on device</span>,
+            then try again.
           </p>
+          <Image
+            alt="Chrome's site settings open over the address bar, with the Apps on device toggle"
+            className="w-full rounded-xl border shadow-sm [mask-image:linear-gradient(to_bottom,black_72%,transparent)]"
+            height={660}
+            src="/cut/connect-site-settings.png"
+            unoptimized
+            width={970}
+          />
           <Button onClick={() => void check()}>Try again</Button>
         </div>
       </div>
