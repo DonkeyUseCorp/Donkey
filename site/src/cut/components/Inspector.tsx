@@ -3,11 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bold, Info, RotateCcw, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { EmojiPicker } from "@/cut/components/EmojiPicker";
 import {
   Select,
   SelectContent,
@@ -58,14 +54,6 @@ import {
 import { cn } from "@/lib/utils";
 
 const SWATCHES = ["#FFFFFF", "#111114", "#FFD60A", "#FF375F", "#0A84FF", "#30D158"];
-
-// A compact set of social-friendly emoji for the text editor. These are plain
-// unicode, so they render with the viewer's system emoji font.
-const EMOJIS = [
-  "🔥", "😂", "😮", "😍", "💯", "👀", "🎉", "✨",
-  "🙌", "💪", "🤯", "👇", "👉", "❤️", "😅", "🥶",
-  "🚀", "💡", "⚡", "🤔", "😱", "👍", "🙏", "💸",
-];
 
 /** Last three custom colors picked with the eyedropper, newest first. */
 const RECENT_COLORS_KEY = "cut-recent-colors";
@@ -967,11 +955,10 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
     const end = ta?.selectionEnd ?? start;
     const next = o.text.slice(0, start) + emoji + o.text.slice(end);
     s.updateOverlayTransient(o.id, { text: next });
-    requestAnimationFrame(() => {
-      const pos = start + emoji.length;
-      ta?.focus();
-      ta?.setSelectionRange(pos, pos);
-    });
+    // Advance the caret for the next insert without pulling focus off the
+    // picker, so several emoji can be tapped in a row. The selection sticks to
+    // the textarea even while it's unfocused.
+    requestAnimationFrame(() => ta?.setSelectionRange(start + emoji.length, start + emoji.length));
   };
 
   return (
@@ -989,33 +976,20 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
             }
             onFocus={() => useEditor.getState().pushHistory()}
           />
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Insert emoji"
-                  title="Insert emoji"
-                  className="absolute top-1.5 right-1.5 text-muted-foreground"
-                />
-              }
-            >
-              <Smile />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="grid grid-cols-8 gap-0.5 p-1.5">
-              {EMOJIS.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  className="grid size-7 place-items-center rounded text-lg hover:bg-accent"
-                  onClick={() => insertEmoji(e)}
-                >
-                  {e}
-                </button>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <EmojiPicker
+            onPick={insertEmoji}
+            trigger={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Insert emoji"
+                title="Insert emoji"
+                className="absolute top-1.5 right-1.5 text-muted-foreground"
+              >
+                <Smile />
+              </Button>
+            }
+          />
         </div>
         <Row label="Font">
           <Select
