@@ -26,6 +26,8 @@ import { STOCK_VIDEOS } from "./stockVideoManifest";
 import { baseClips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
 import { laneCues, subtitleLaneCount } from "./subtitles";
+import { synthesizeMusic } from "./audioGen";
+import { stockAssetInDoc } from "./genvideo/docWriter";
 import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
 import { DUCK_DEFAULT, generateSubtitlesReadout } from "./voiceover";
 import {
@@ -1262,6 +1264,66 @@ export async function runAiTool(
         input,
         place
       );
+    }
+
+    case "generate_music": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const prompt = String(input.prompt ?? "").trim();
+      if (!prompt) throw new ToolError("A prompt is required.");
+      const gen = useGenerate.getState();
+      // An unprobed session (null) resolves before we spend the user's credits.
+      const signedIn = gen.signedIn ?? (await gen.probeNow());
+      if (!signedIn) throw new ToolError("Sign in to Donkey to generate music.");
+      const variant = input.length === "song" ? "song" : "clip";
+      // Default to a vocal-free bed; the model opts into a sung song explicitly.
+      const instrumental = input.instrumental !== false;
+      // Captured before synthesis: the track files under the chat that asked,
+      // even if the user switches threads while it renders.
+      const chatId = chatOwner();
+      const asset = await synthesizeMusic(projectId, prompt, { variant, instrumental });
+      const cur = useEditor.getState();
+      // The render can outlast the open project: if the user switched away while
+      // it ran, save it into the project it was made for — never the one now on
+      // screen — and don't touch the current store.
+      if (cur.projectId !== projectId) {
+        void stockAssetInDoc(projectId, asset).catch(() => {});
+        return {
+          assetId: asset.id,
+          name: asset.name,
+          duration: round2(asset.duration),
+          addedToTimeline: false,
+          note: "The music finished and was saved to the project it was generated for; the user has since switched projects, so it isn't on this one.",
+        };
+      }
+      cur.addAsset(asset);
+      tagChatAsset(asset.id, chatId);
+      void enrichAsset(asset);
+      if (!wantsTimeline(input, "start")) {
+        return {
+          assetId: asset.id,
+          name: asset.name,
+          duration: round2(asset.duration),
+          addedToTimeline: false,
+          note: "The music previews in this chat — the user can play it and drag it onto the soundtrack; pass add_to_timeline or start when they ask for it in the cut.",
+        };
+      }
+      const start = isNum(input.start) ? Math.max(0, input.start) : cur.currentTime;
+      cur.addAudioFromAsset(asset.id, start);
+      // Sits under speech at a soft bed volume by default; the model can raise it.
+      const volume = isNum(input.volume) ? clamp(input.volume, 0, 1.5) : 0.4;
+      const sel = useEditor.getState().selection;
+      const clipId = sel?.kind === "audio" ? sel.id : null;
+      if (clipId) useEditor.getState().updateAudio(clipId, { volume });
+      return {
+        assetId: asset.id,
+        name: asset.name,
+        audioClipId: clipId,
+        start: round2(start),
+        duration: round2(asset.duration),
+        volume,
+        addedToTimeline: true,
+      };
     }
 
     case "read_subtitles_aloud": {

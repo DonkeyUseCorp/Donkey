@@ -641,6 +641,23 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
       },
     },
     {
+      // Background music goes straight to generate_music (not voiceover, which
+      // is speech; not generate_scene, which is a whole narrated production).
+      name: "music-ask-single-generate",
+      input: () => [userTurn("add some chill background music to this video")],
+      reply: /music|track|bed|chill|background/i,
+      requiredTools: ["generate_music"],
+      maxToolCalls: 3,
+      stubs: {
+        generate_music: {
+          assetId: "a-music1",
+          name: "chill background music",
+          duration: 30,
+          addedToTimeline: false,
+        },
+      },
+    },
+    {
       // Fast path: a direct edit is one trim_clip on the clip in the snapshot.
       name: "trim-ask-single-tool",
       input: () => [userTurn("trim the first clip down to 5 seconds")],
