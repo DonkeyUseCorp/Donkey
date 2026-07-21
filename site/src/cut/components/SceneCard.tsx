@@ -88,6 +88,9 @@ export function SceneCard({ threadId }: { threadId: string }) {
   const pct = run.total ? Math.round((run.placed / run.total) * 100) : 0;
   const showProgress = run.status === "generating" || run.status === "done";
   const totalFrames = run.shots.length ? Math.max(...run.shots.map((sh) => sh.endFrame)) : 0;
+  // Whether any shot has something to show yet — a landed take or its opening
+  // frame. Until one does, the tile grid would be blank placeholders.
+  const hasFrames = run.shots.some((sh) => sh.clip || sh.startKeyframe);
   // Shots that couldn't be rendered as video and are holding a still instead.
   const stillCount = run.shots.filter((sh) => sh.status === "failed").length;
   // Any shot stopped by an empty balance: the summary names the cause (the
@@ -115,30 +118,41 @@ export function SceneCard({ threadId }: { threadId: string }) {
 
       <p className="mt-1 line-clamp-2 text-muted-foreground">{run.title}</p>
 
-      {run.shots.length > 0 && (
-        <div className="mt-2">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="flex w-full items-center gap-1.5 py-0.5 text-left text-muted-foreground hover:text-foreground"
-          >
-            <ChevronRight
-              className={`size-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
-            />
-            <span className="font-medium text-foreground">Plan</span>
-            <span>
+      {run.shots.length > 0 &&
+        (hasFrames ? (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              className="flex w-full items-center gap-1.5 py-0.5 text-left text-muted-foreground hover:text-foreground"
+            >
+              <ChevronRight
+                className={`size-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+              />
+              <span className="font-medium text-foreground">Plan</span>
+              <span>
+                {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} · {fmt(totalFrames)}
+              </span>
+              {showProgress && (
+                <span className="ml-auto tabular-nums text-[10.5px]">
+                  {run.placed}/{run.total} placed
+                </span>
+              )}
+            </button>
+
+            {open && <ShotStrip run={run} redoable={run.status === "done"} />}
+          </div>
+        ) : (
+          // Nothing rendered yet (planning, at the gate, or a run that died
+          // before its frames): the tiles would be blank placeholders, so state
+          // the plan as a line and let shots appear as they actually render.
+          <p className="mt-2 flex items-center gap-1.5">
+            <span className="font-medium">Plan</span>
+            <span className="text-muted-foreground">
               {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} · {fmt(totalFrames)}
             </span>
-            {showProgress && (
-              <span className="ml-auto tabular-nums text-[10.5px]">
-                {run.placed}/{run.total} placed
-              </span>
-            )}
-          </button>
-
-          {open && <ShotStrip run={run} redoable={run.status === "done"} />}
-        </div>
-      )}
+          </p>
+        ))}
 
       {run.status === "generating" && (
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
@@ -225,17 +239,18 @@ export function SceneCard({ threadId }: { threadId: string }) {
   );
 }
 
-/** The plan as a horizontal filmstrip — one tile per shot, laid out left to
- * right the way the finished scenes read: each shot's opening frame (then its
- * take once it renders), a duration badge, and a "Shot N" label. Numbered
- * placeholders stand in while the planner is still cutting the shots, so the
- * same strip carries the run from plan through render without changing shape. */
+/** The plan as a two-up grid — two shots per row, top to bottom the way the
+ * finished scenes read: each shot's opening frame (then its take once it
+ * renders), a duration badge, and its "Shot N" heading with what's on screen.
+ * Numbered placeholders with the planned description stand in while the frames
+ * are still being cut, so the same grid carries the run from plan through
+ * render without changing shape. */
 function ShotStrip({ run, redoable }: { run: SceneRun; redoable: boolean }) {
   const assets = useEditor((s) => s.assets);
   const aspect = useEditor((s) => s.aspect);
   const baseRatio = aspect === "9:16" ? 9 / 16 : 16 / 9;
   return (
-    <div className="ai-scene-strip mt-1.5 flex gap-1.5 overflow-x-auto pb-1">
+    <div className="ai-scene-strip mt-1.5 grid grid-cols-2 gap-1.5">
       {run.shots.map((sh, i) => (
         <ShotTile
           key={sh.id}
@@ -250,12 +265,12 @@ function ShotStrip({ run, redoable }: { run: SceneRun; redoable: boolean }) {
   );
 }
 
-/** One filmstrip tile: the shot's take once placed, else its opening frame,
- * else a numbered placeholder. Click opens whatever exists in the lightbox;
- * once the run is done the hover redo button re-renders just this shot (the
- * same gate the old plan rows carried — a redo before then would bill an
- * unapproved shot). Tiles are borderless so the strip stays flat inside the
- * card. */
+/** One grid tile: the shot's take once placed, else its opening frame, else a
+ * numbered placeholder over the planned description — so a shot reads before it
+ * has a frame. Click opens whatever exists in the lightbox; once the run is done
+ * the hover redo button re-renders just this shot (the same gate the old plan
+ * rows carried — a redo before then would bill an unapproved shot). Tiles are
+ * borderless so the grid stays flat inside the card. */
 function ShotTile({
   shot,
   n,
@@ -274,22 +289,20 @@ function ShotTile({
   const media = clip ?? frame;
   const ref = media ? refFromAsset(media) : undefined;
   const ratio = media?.width && media?.height ? media.width / media.height : baseRatio;
-  // Portrait strips get taller tiles so a 9:16 shot isn't a sliver; one run is
-  // one aspect, so the strip stays a uniform height either way.
-  const height = baseRatio < 1 ? 100 : 72;
-  const width = Math.round(height * ratio);
   const inFlight = SHOT_INFLIGHT.has(shot.status);
   const view = () => ref && useLightbox.getState().open(lightboxItemFromRef(ref));
   return (
-    <div className="flex shrink-0 flex-col gap-1" style={{ width }}>
+    <div className="flex min-w-0 flex-col gap-1">
       <div
         onClick={view}
         title={`Shot ${n} — ${describe(shot)}`}
         className={cn(
-          "group relative overflow-hidden rounded-md bg-muted transition-opacity",
+          "group relative w-full overflow-hidden rounded-md bg-muted transition-opacity",
           ref ? "cursor-zoom-in hover:opacity-95" : "cursor-default"
         )}
-        style={{ height }}
+        // The tile fills its column at the run's aspect; a tall 9:16 shot is
+        // capped so two columns of a long plan stay a scannable height.
+        style={{ aspectRatio: ratio, maxHeight: baseRatio < 1 ? 200 : undefined }}
       >
         {clip && ref ? (
           <video
@@ -347,7 +360,10 @@ function ShotTile({
           </button>
         )}
       </div>
-      <span className="truncate text-[9.5px] text-muted-foreground">Shot {n}</span>
+      <div className="min-w-0">
+        <div className="truncate text-[9.5px] font-medium text-foreground">Shot {n}</div>
+        <p className="line-clamp-2 text-[9px] leading-snug text-muted-foreground">{describe(shot)}</p>
+      </div>
     </div>
   );
 }
