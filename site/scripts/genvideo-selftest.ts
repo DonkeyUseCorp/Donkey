@@ -432,6 +432,30 @@ async function run(): Promise<void> {
     assertTiling("split-beat shots still tile", editor.placed, project.durationFrames);
   }
 
+  // ── a silent, action-only beat renders instead of failing the run ────────
+  // (an empty line reaching TTS threw "Nothing to say." and killed the render)
+  section("a silent beat renders without a voiceover, doesn't fail the run");
+  {
+    const editor = emptyEditor();
+    const { d, studio } = deps(editor, { audioNative: true, scriptBeats: 3, silentBeats: [1] });
+    const project = generatedProject();
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    check("run with a silent beat reaches done", project.phase === "done");
+    check("only the two spoken beats were voiced", studio.calls.filter((c) => c.role === "voice").length === 2);
+    check("the silent beat holds no voiceover asset", !project.beatVoices?.[1]?.voiceAssetId);
+    check(
+      "the spoken beats each hold a voiceover asset",
+      !!project.beatVoices?.[0]?.voiceAssetId && !!project.beatVoices?.[2]?.voiceAssetId
+    );
+    check("voiceovers placed only for the spoken beats", editor.placedAudio.filter((a) => a.kind === "voice").length === 2);
+    const silentShots = project.shots.filter((s) => !s.dialogue?.trim());
+    check("the silent beat still rendered a shot", silentShots.length > 0);
+    check("silent shots carry a clip but no voice", silentShots.every((s) => !!s.clip && !s.voiceAssetId));
+    assertTiling("the silent-beat scene still tiles the spine", editor.placed, project.durationFrames);
+  }
+
   // ── the bible is the run's spine: a failed design fails the run loudly ───
   // (a stand-in look would silently corrupt every render downstream)
   section("style-bible failure fails the run loudly (finding 8, revised)");

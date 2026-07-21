@@ -24,7 +24,7 @@ import { fanOut } from "./pool";
 import { buildNegative, buildPrompt, buildRefPrompt, refsForAsset, shotRefs, styleAnchor } from "./prompt";
 import { segmentByDuration, type ModelSuite, type ReviewVerdict } from "./capabilities";
 import type { EditorBridge } from "./editor";
-import type { BeatVoice, RefAsset, Shot, TranscriptWord, VideoAsset, VideoEmit, VideoPhase, VideoProject } from "./types";
+import type { BeatVoice, RefAsset, ScriptBeat, Shot, TranscriptWord, VideoAsset, VideoEmit, VideoPhase, VideoProject } from "./types";
 
 export interface OrchestratorDeps {
   editor: EditorBridge;
@@ -164,7 +164,7 @@ export class VideoOrchestrator {
     // is likewise deferred to polish.
     const minF = Math.round(MIN_SHOT_SEC * this.fps);
     const frames = this.project.script.beats.map((b) =>
-      Math.max(minF, secToFrame(estimateSpokenSeconds(b.dialogue), this.fps))
+      Math.max(minF, secToFrame(estimateBeatSeconds(b), this.fps))
     );
     this.layoutBeats(
       frames,
@@ -177,14 +177,18 @@ export class VideoOrchestrator {
   private async voice(): Promise<void> {
     if (this.aborted) return;
     if (this.project.audioMode !== "generated" || !this.project.script) return;
-    // Idempotent across resumes: done once every beat carries its asset id AND
-    // the shots have been re-laid onto the voiced spine (a later resume must
-    // never rebuild shots that already rendered).
+    // Idempotent across resumes: done once every spoken beat carries its asset
+    // id AND the shots have been re-laid onto the voiced spine (a later resume
+    // must never rebuild shots that already rendered). A silent, action-only
+    // beat has no line to voice, so it counts as settled without an asset —
+    // otherwise a scene with one would re-run this phase on every resume.
+    const beats = this.project.script.beats;
+    const spoken = (bi: number) => !!beats[bi]?.dialogue.trim();
     const voices = this.project.beatVoices ?? [];
     if (
       voices.length > 0 &&
-      voices.every((bv) => bv.voiceAssetId) &&
-      this.project.shots.every((s) => s.voiceAssetId)
+      voices.every((bv, bi) => bv.voiceAssetId || !spoken(bi)) &&
+      this.project.shots.every((s) => s.voiceAssetId || !s.dialogue?.trim())
     ) {
       return;
     }
@@ -194,9 +198,9 @@ export class VideoOrchestrator {
     // lip-sync to their own slice — so a long line is never cut off. Each beat
     // persists as it lands, so an interruption never re-bills voiced beats.
     const minF = Math.round(MIN_SHOT_SEC * this.fps);
-    const voiceIds: string[] = [];
+    const voiceIds: (string | undefined)[] = [];
     const frames: number[] = [];
-    for (const [bi, beat] of this.project.script.beats.entries()) {
+    for (const [bi, beat] of beats.entries()) {
       if (this.aborted) return;
       const prior = voices[bi];
       if (prior?.voiceAssetId) {
@@ -204,7 +208,14 @@ export class VideoOrchestrator {
         frames.push(prior.durationFrames);
         continue;
       }
-      this.deps.emit({ type: "activity", message: `Voicing line ${bi + 1} of ${this.project.script.beats.length}…` });
+      // A silent, action-only beat carries no line: keep its estimated span and
+      // render it without audio. Sending empty text to TTS fails the whole run.
+      if (!beat.dialogue.trim()) {
+        voiceIds.push(undefined);
+        frames.push(prior?.durationFrames ?? Math.max(minF, secToFrame(estimateBeatSeconds(beat), this.fps)));
+        continue;
+      }
+      this.deps.emit({ type: "activity", message: `Voicing line ${bi + 1} of ${beats.length}…` });
       const vo = await this.deps.suite.voice.speak({ script: beat.dialogue });
       const id = await this.deps.editor.importMedia(vo.mediaId);
       const dur = Math.max(minF, secToFrame(vo.durationSec, this.fps));
@@ -1121,6 +1132,13 @@ export class VideoOrchestrator {
 function estimateSpokenSeconds(dialogue: string): number {
   const words = dialogue.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1.2, (words / 165) * 60);
+}
+
+/** Planning length for a beat before any voiceover exists: a spoken beat scales
+ * with its word count; a silent, action-only beat has no line to time, so it
+ * holds the scripted `approxSeconds` instead of collapsing to the floor. */
+function estimateBeatSeconds(beat: ScriptBeat): number {
+  return beat.dialogue.trim() ? estimateSpokenSeconds(beat.dialogue) : Math.max(1.2, beat.approxSeconds || 0);
 }
 
 /** Split one beat's span into contiguous shots each no longer than `maxFrames`,

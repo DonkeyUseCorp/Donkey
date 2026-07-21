@@ -50,6 +50,9 @@ export interface FakeStudioOptions {
   videoVariant?: string;
   /** Beats the fake script writes when starting from a brief. */
   scriptBeats?: number;
+  /** Beat indices the fake script writes with no dialogue — a silent,
+   * action-only beat, which must render without a voiceover rather than fail. */
+  silentBeats?: number[];
   /** Force every voiceover to this many seconds (else derived from the line);
    * used to exercise a beat whose VO outruns one clip and spans several shots. */
   voiceSeconds?: number;
@@ -108,8 +111,9 @@ export class FakeStudio {
 
   private async writeScript(input: ScriptInput): Promise<ScriptPlan> {
     const n = this.opts.scriptBeats ?? Math.max(2, Math.round((input.targetSeconds ?? 30) / 6));
+    const silent = new Set(this.opts.silentBeats ?? []);
     const beats = Array.from({ length: n }, (_, i) => ({
-      dialogue: `Line ${i + 1}: ${input.brief}`.slice(0, 80),
+      dialogue: silent.has(i) ? "" : `Line ${i + 1}: ${input.brief}`.slice(0, 80),
       action: i === 0 ? "establishing the scene" : "the story continues",
       characters: ["char:1"],
       location: "loc:1",
@@ -161,6 +165,9 @@ export class FakeStudio {
   }
 
   private async speak(input: VoiceInput): Promise<VoiceResult> {
+    // Faithful to the real TTS guard: empty text has nothing to say and throws.
+    // A silent beat must be skipped upstream, never reach here.
+    if (!input.script.trim()) throw new Error("Nothing to say.");
     // Length from the line (or forced via voiceSeconds). A line longer than one
     // clip is a real case — the orchestrator spans it across several shots.
     const raw = Math.max(1, input.script.length) * 0.06;
