@@ -6,8 +6,8 @@ import { fetchLibrary, libraryMediaUrl, type LibraryAsset } from "./library";
 import { stockTitle, type StockImage, type StockMusic, type StockVideo } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
-import { getClipSpans, useEditor } from "./store";
-import type { MediaAsset } from "./types";
+import { clipLen, getClipSpans, useEditor } from "./store";
+import type { AudioClip, MediaAsset } from "./types";
 
 // One reference model for every piece of media in the app. A ref names an
 // asset wherever it lives — the open project, the shared library, the bundled
@@ -27,9 +27,9 @@ import type { MediaAsset } from "./types";
 
 /** "file" marks a transient ref made from a desktop drop (a text file riding a
  * composer) — it lives only in the composer's state, never in a catalog.
- * "clip" names a clip on the timeline's video track (id = the clip id, url =
- * its source media), so chat can talk about segments of the cut, not just
- * assets. */
+ * "clip" names a clip on the timeline — a video-track clip or a soundtrack
+ * clip (id = the clip id, url = its source media), so chat can talk about
+ * segments of the cut, not just assets. */
 export type AssetRefScope = "project" | "library" | "stock" | "file" | "clip";
 export type AssetRefKind = "video" | "audio" | "image" | "text";
 
@@ -359,15 +359,43 @@ export function clipRefs(
   }));
 }
 
+/** The soundtrack's audio clips as refs — `s1`, `s2`… in start-time order — so
+ * a prompt can point at a sound on the timeline ("@s1 is too loud"). Each ref
+ * carries its source audio's URL and `kind: "audio"`, so using the token in
+ * chat pulls the actual sound in. Handles are derived from the current order,
+ * never stored; the timeline shows each clip's token on hover. A clip whose
+ * asset has gone missing is dropped. */
+export function audioClipRefs(audioClips: AudioClip[], assets: MediaAsset[]): AssetRef[] {
+  return [...audioClips]
+    .sort((a, b) => a.start - b.start || (a.lane ?? 0) - (b.lane ?? 0))
+    .flatMap((clip, i) => {
+      const asset = assets.find((x) => x.id === clip.assetId);
+      if (!asset) return [];
+      return [
+        {
+          scope: "clip",
+          id: clip.id,
+          name: `sound ${i + 1}`,
+          kind: "audio",
+          url: asset.url,
+          duration: clipLen(clip),
+          handle: `s${i + 1}`,
+        } satisfies AssetRef,
+      ];
+    });
+}
+
 /** Everything referenceable right now, in resolution order: the timeline's
- * clips first (what's in front of the user — a bare `@` leads with the cut),
- * then the open project's media, the shared library, and the stock catalog.
+ * clips first — video-track clips, then soundtrack clips (what's in front of
+ * the user — a bare `@` leads with the cut), then the open project's media,
+ * the shared library, and the stock catalog.
  * Names are unique within the list (first scope wins) so a mention resolves
  * to one asset. Library items mention by name; stock ids are already short
  * (`@nature-dunes`). */
 export function useRefCandidates(): AssetRef[] {
   const assets = useEditor((s) => s.assets);
   const clips = useEditor((s) => s.clips);
+  const audioClips = useEditor((s) => s.audioClips);
   const [lib, setLib] = useState<LibraryAsset[]>(libraryCache ?? []);
 
   useEffect(() => {
@@ -387,6 +415,7 @@ export function useRefCandidates(): AssetRef[] {
     const out: AssetRef[] = [];
     for (const ref of [
       ...clipRefs(clips, assets),
+      ...audioClipRefs(audioClips, assets),
       ...project,
       ...lib.map(refFromLibrary),
       ...STOCK_IMAGES.map(refFromStock),
@@ -398,7 +427,7 @@ export function useRefCandidates(): AssetRef[] {
       out.push(ref);
     }
     return out;
-  }, [assets, clips, lib]);
+  }, [assets, clips, audioClips, lib]);
 }
 
 /** The prompt token for an asset name: `@name`, quoted when it has spaces. */

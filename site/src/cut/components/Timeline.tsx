@@ -22,7 +22,7 @@ import {
   hasLibraryDrag,
   hasTemplateDrag,
 } from "@/cut/lib/assetDrag";
-import { draggingRef, hasRefDrag, type AssetRef } from "@/cut/lib/assetRef";
+import { audioClipRefs, draggingRef, hasRefDrag, type AssetRef } from "@/cut/lib/assetRef";
 import {
   addProjectTemplateToTimeline,
   addTemplateToProject,
@@ -325,6 +325,16 @@ export function Timeline() {
     const rowOf = new Map(used.map((l, i) => [l, i]));
     return { used, rowOf, count: used.length };
   }, [audioClips]);
+  // Chat mention token per audio clip ("@s1"), keyed by clip id — the same
+  // handles the chat resolves against, so the token shown on hover is exactly
+  // what pulls this sound into a message.
+  const audioMentions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ref of audioClipRefs(audioClips, assets)) {
+      if (ref.handle) map.set(ref.id, `@${ref.handle}`);
+    }
+    return map;
+  }, [audioClips, assets]);
 
   // The home track of an in-flight upper-layer drag, so that row can render
   // the landing slot while the clip stays on its own track.
@@ -1132,6 +1142,7 @@ export function Timeline() {
                     key={a.id}
                     clip={a}
                     asset={assets.find((x) => x.id === a.assetId)}
+                    mention={audioMentions.get(a.id)}
                     pps={pps}
                     top={homeRow * AUDIO_H}
                     homeRow={homeRow}
@@ -1783,6 +1794,7 @@ function MuteChip({
 function AudioView({
   clip,
   asset,
+  mention,
   pps,
   top,
   homeRow,
@@ -1795,6 +1807,9 @@ function AudioView({
 }: {
   clip: AudioClip;
   asset: MediaAsset | undefined;
+  /** The clip's chat mention token ("@s1"), shown on hover so the user can
+   * point the assistant at this exact sound. Absent when its asset is gone. */
+  mention: string | undefined;
   pps: number;
   /** Home-row top in px; while carried the ghost adds the pointer's offset. */
   top: number;
@@ -1873,9 +1888,20 @@ function AudioView({
           style={{ width: Math.min(w, (clip.fadeOut ?? 0) * pps) }}
         />
       )}
-      <span className="pointer-events-none absolute top-[3px] left-2 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+      <span
+        className={cn(
+          "pointer-events-none absolute top-[3px] left-2 text-[9.5px] whitespace-nowrap text-white/90 transition-opacity [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]",
+          // On hover the mention chip takes the corner, so step the name aside.
+          mention && !drag && "group-hover:opacity-0"
+        )}
+      >
         {asset.name}
       </span>
+      {mention && !drag && (
+        <span className="tl-mention-chip pointer-events-none absolute top-1 left-1 z-2 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+          {mention}
+        </span>
+      )}
       <ClipMenu asset={asset} />
       <MuteChip
         muted={!!clip.hidden}
