@@ -40,6 +40,15 @@ const elErrored = (el: MediaEl) =>
  * speed, at the cost of a choppier preview. Export renders the real rate. */
 const safeRate = (speed: number) => Math.min(16, Math.max(0.0625, speed));
 
+// Decode-ahead window. Every tick, clips whose entrance is within this many
+// seconds of the playhead get their decoder built now and seeked to their first
+// frame, so the file is already buffering (preload="auto") and frame 0 is
+// decoded before the playhead reaches them — a cut lands with no cold-start
+// hitch. Capped so a montage of tiny clips can't start a fetch storm that
+// starves the clip actually on screen.
+const WARM_HORIZON_S = 8;
+const WARM_MAX = 4;
+
 const pauseEl = (el: MediaEl) => {
   if (!isImageEl(el) && !el.paused) el.pause();
 };
@@ -134,6 +143,45 @@ class Engine {
 
   private videoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
     return this.elFor(this.videoEls, clip.id, asset);
+  }
+
+  /** Decode-ahead for the base track: build each soon-to-enter clip's element
+   * and seek it to its entrance frame now, so its file is fetching and frame 0
+   * is decoded before the playhead arrives. Only clips strictly ahead of `t`
+   * are touched — the live master (and any dissolve partner) steers its own
+   * clock through `composite`. Bounded by `WARM_HORIZON_S`/`WARM_MAX`; spans are
+   * start-ordered, so we can stop once one is past the horizon. */
+  private warmAhead(spans: ClipSpan[], t: number) {
+    let warmed = 0;
+    for (const span of spans) {
+      if (span.start <= t) continue; // current or past — not ours to warm
+      if (span.start > t + WARM_HORIZON_S) break;
+      const el = this.videoFor(span.clip, span.asset); // creating it starts the fetch
+      if (!isImageEl(el) && !el.seeking) {
+        const target = span.clip.in;
+        if (Math.abs(el.currentTime - target) > 0.1) el.currentTime = target;
+      }
+      if (++warmed >= WARM_MAX) break;
+    }
+  }
+
+  /** Decode-ahead counterpart for overlay tracks: warm each overlay clip whose
+   * entrance is within the horizon (overlay clips aren't start-ordered, so this
+   * scans rather than breaking early). A warmed element sits paused on its first
+   * frame until the tick's overlay path takes it live. */
+  private warmOverlaysAhead(t: number) {
+    const s = useEditor.getState();
+    let warmed = 0;
+    for (const c of overlayLayers(s.clips)) {
+      if (c.hidden || c.start <= t || c.start > t + WARM_HORIZON_S) continue;
+      const asset = s.assets.find((a) => a.id === c.assetId);
+      if (!asset) continue;
+      const el = this.overlayVideoFor(c, asset);
+      if (!isImageEl(el) && !el.seeking && Math.abs(el.currentTime - c.in) > 0.1) {
+        el.currentTime = c.in;
+      }
+      if (++warmed >= WARM_MAX) break;
+    }
   }
 
   /** Seek/rate/play one clip's element toward its frame at timeline time `t`,
@@ -575,6 +623,13 @@ class Engine {
     }
 
     let t = Math.min(s.currentTime, total);
+
+    // Keep the next few clips decoded and buffering ahead of the playhead (and
+    // ahead of a paused playhead, so pressing play resumes clean). Runs before
+    // either branch since both benefit; warms only clips ahead of `t`, so it
+    // never touches the element the branches are about to drive.
+    this.warmAhead(spans, t);
+    this.warmOverlaysAhead(t);
 
     if (!s.playing) {
       // Not advancing: drop the wall-clock stamp so the first playing tick
