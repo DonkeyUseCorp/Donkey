@@ -16,6 +16,8 @@ final class UpdateMenuItemView: NSView {
         static let cornerRadius: CGFloat = 4
         static let spinnerSize: CGFloat = 14
         static let spinnerTrailing: CGFloat = 10
+        static let indicatorDiameter: CGFloat = 6
+        static let indicatorLeading: CGFloat = 6
     }
 
     private let label = NSTextField(labelWithString: "")
@@ -24,6 +26,8 @@ final class UpdateMenuItemView: NSView {
 
     private var isClickable = true
     private var isHovered = false
+    /// Draws the blue leading dot marking a waiting update, mirroring the menu bar icon's badge.
+    private var showsIndicator = false
 
     init(onClick: @escaping () -> Void) {
         self.onClick = onClick
@@ -60,9 +64,10 @@ final class UpdateMenuItemView: NSView {
 
     /// Point the row at the current update state: its title, whether a tap does anything, and whether
     /// the spinner runs. Safe to call while the menu is open — the row refreshes in place.
-    func configure(title: String, isClickable: Bool, isBusy: Bool) {
+    func configure(title: String, isClickable: Bool, isBusy: Bool, showsIndicator: Bool = false) {
         label.stringValue = title
         self.isClickable = isClickable
+        self.showsIndicator = showsIndicator
         if isBusy {
             spinner.startAnimation(nil)
         } else {
@@ -84,15 +89,29 @@ final class UpdateMenuItemView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isHovered, isClickable else { return }
-        let rect = bounds.insetBy(dx: Metrics.highlightInset, dy: 0)
-        let path = NSBezierPath(
-            roundedRect: rect,
-            xRadius: Metrics.cornerRadius,
-            yRadius: Metrics.cornerRadius
+        let highlighted = isHovered && isClickable
+        if highlighted {
+            let rect = bounds.insetBy(dx: Metrics.highlightInset, dy: 0)
+            let path = NSBezierPath(
+                roundedRect: rect,
+                xRadius: Metrics.cornerRadius,
+                yRadius: Metrics.cornerRadius
+            )
+            NSColor.selectedContentBackgroundColor.setFill()
+            path.fill()
+        }
+
+        guard showsIndicator else { return }
+        let diameter = Metrics.indicatorDiameter
+        let dot = NSRect(
+            x: Metrics.indicatorLeading,
+            y: (bounds.height - diameter) / 2,
+            width: diameter,
+            height: diameter
         )
-        NSColor.selectedContentBackgroundColor.setFill()
-        path.fill()
+        // White over the blue hover fill, blue otherwise — matching the label's highlight treatment.
+        (highlighted ? NSColor.white : NSColor.systemBlue).setFill()
+        NSBezierPath(ovalIn: dot).fill()
     }
 
     // MARK: - Hover and click

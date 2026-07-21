@@ -24,7 +24,10 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     /// is open refreshes the update row in place, so a user-triggered check spins and resolves without
     /// the menu having to be reopened.
     var updateState: UserQueryUpdateState? {
-        didSet { refreshLiveUpdateItem() }
+        didSet {
+            refreshLiveUpdateItem()
+            refreshStatusItemImage()
+        }
     }
 
     /// The update row of the currently-open menu, held so state changes can refresh it in place. Weak:
@@ -44,7 +47,7 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
-        statusItem.button?.image = Self.menuBarIcon()
+        refreshStatusItemImage()
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -146,13 +149,20 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
         view.configure(
             title: presentation.title,
             isClickable: presentation.isClickable,
-            isBusy: presentation.isBusy
+            isBusy: presentation.isBusy,
+            showsIndicator: updateState?.isActionable ?? false
         )
     }
 
     private func refreshLiveUpdateItem() {
         guard let liveUpdateView else { return }
         applyUpdatePresentation(to: liveUpdateView)
+    }
+
+    /// Recompute the status-item glyph so a blue badge sits in its top-right corner exactly while an
+    /// update is waiting to install, and clears once the app is up to date again.
+    private func refreshStatusItemImage() {
+        statusItem.button?.image = Self.menuBarIcon(updateAvailable: updateState?.isActionable ?? false)
     }
 
     /// Route an update-row tap by the current state: install a waiting update, or start a check.
@@ -183,14 +193,56 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     /// The donkey glyph as a template image: pure black plus alpha, so the system recolors it
     /// for light/dark menu bars and the selected state (Apple's status-item guideline). The dev
     /// build gets a red-outlined variant instead, so it's unmistakable next to a release copy in
-    /// the same menu bar.
-    private static func menuBarIcon() -> NSImage {
+    /// the same menu bar. When an update is waiting, a blue badge is stamped into the top-right
+    /// corner; a template image would strip the badge's color, so the badged variants recolor the
+    /// glyph body to the dynamic label color themselves and still track the light/dark bar.
+    private static func menuBarIcon(updateAvailable: Bool = false) -> NSImage {
         let glyph = loadGlyph()
-        guard isDevBuild else {
+        let base: NSImage
+        if isDevBuild {
+            base = devMenuBarIcon(glyph)
+        } else if updateAvailable {
+            base = recoloredGlyph(glyph, tint: .labelColor)
+        } else {
             glyph.isTemplate = true
             return glyph
         }
-        return devMenuBarIcon(glyph)
+        return updateAvailable ? badged(base) : base
+    }
+
+    /// The glyph as a non-template image recolored to `tint`, so a colored badge composited on top
+    /// survives (a template image keeps only black plus alpha). Cache `.never` so a dynamic `tint`
+    /// like `.labelColor` re-resolves as the menu bar flips between light and dark.
+    private static func recoloredGlyph(_ glyph: NSImage, tint: NSColor) -> NSImage {
+        let image = NSImage(size: glyph.size, flipped: false) { rect in
+            stamp(glyph, in: rect, tint: tint)
+            return true
+        }
+        image.cacheMode = .never
+        return image
+    }
+
+    /// `base` with a blue badge in its top-right corner: a filled dot ringed by a thin transparent
+    /// gap punched out of the glyph beneath, so the badge reads apart from it.
+    private static func badged(_ base: NSImage) -> NSImage {
+        let image = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            let diameter: CGFloat = 7
+            let dot = NSRect(
+                x: rect.maxX - diameter,
+                y: rect.maxY - diameter,
+                width: diameter,
+                height: diameter
+            )
+            NSGraphicsContext.current?.cgContext.setBlendMode(.clear)
+            NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+            NSGraphicsContext.current?.cgContext.setBlendMode(.normal)
+            NSColor.systemBlue.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.cacheMode = .never
+        return image
     }
 
     /// The dev build packages its own bundle identifier (com.donkeyuse.Donkey.dev), so a `.dev`
