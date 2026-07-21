@@ -136,8 +136,24 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// The donkey glyph as a template image: pure black plus alpha, so the system recolors it
-    /// for light/dark menu bars and the selected state (Apple's status-item guideline).
+    /// for light/dark menu bars and the selected state (Apple's status-item guideline). The dev
+    /// build gets a red-outlined variant instead, so it's unmistakable next to a release copy in
+    /// the same menu bar.
     private static func menuBarIcon() -> NSImage {
+        let glyph = loadGlyph()
+        guard isDevBuild else {
+            glyph.isTemplate = true
+            return glyph
+        }
+        return devMenuBarIcon(glyph)
+    }
+
+    /// The dev build packages its own bundle identifier (com.donkeyuse.Donkey.dev), so a `.dev`
+    /// suffix marks this as the dev app.
+    private static let isDevBuild = Bundle.main.bundleIdentifier?.hasSuffix(".dev") ?? false
+
+    /// The 20pt donkey glyph, both resolutions, with no template flag set yet.
+    private static func loadGlyph() -> NSImage {
         let image = NSImage(size: NSSize(width: 20, height: 20))
         for resource in ["menu-bar-icon", "menu-bar-icon@2x"] {
             guard let url = DonkeyResourceBundle.app?.url(forResource: resource, withExtension: "png"),
@@ -146,7 +162,41 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
             representation.size = image.size
             image.addRepresentation(representation)
         }
-        image.isTemplate = true
         return image
+    }
+
+    /// The donkey glyph with a red silhouette outline. Not a template image — a template discards
+    /// color — so the body is filled with the dynamic label color to still track the light/dark
+    /// menu bar while the outline stays red. Drawn on each render (cacheMode `.never`) so the body
+    /// re-resolves when the menu bar appearance flips.
+    private static func devMenuBarIcon(_ glyph: NSImage) -> NSImage {
+        let stroke: CGFloat = 1.5
+        let ring = (0 ..< 8).map { step -> CGVector in
+            let angle = Double(step) / 8 * 2 * .pi
+            return CGVector(dx: CGFloat(cos(angle)) * stroke, dy: CGFloat(sin(angle)) * stroke)
+        }
+        let image = NSImage(size: glyph.size, flipped: false) { rect in
+            let body = rect.insetBy(dx: stroke, dy: stroke)
+            for offset in ring {
+                stamp(glyph, in: body.offsetBy(dx: offset.dx, dy: offset.dy), tint: .systemRed)
+            }
+            stamp(glyph, in: body, tint: .labelColor)
+            return true
+        }
+        image.cacheMode = .never
+        return image
+    }
+
+    /// Draw `glyph` recolored to `tint`, isolated in a transparency layer so the fill recolors only
+    /// this stamp's pixels and leaves the halo stamps already composited beneath it untouched.
+    private static func stamp(_ glyph: NSImage, in rect: NSRect, tint: NSColor) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        glyph.draw(in: rect)
+        tint.set()
+        rect.fill(using: .sourceAtop)
+        context.endTransparencyLayer()
+        context.restoreGState()
     }
 }
