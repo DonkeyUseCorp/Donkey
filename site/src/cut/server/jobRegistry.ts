@@ -15,10 +15,14 @@ export interface JobRegistry<J> {
 
 export function createJobRegistry<J extends { id: string; status: string }>(
   globalKey: string,
-  opts: { maxJobs?: number; retireMs?: number } = {}
+  opts: { maxJobs?: number; retireMs?: number; isTerminal?: (job: J) => boolean } = {}
 ): JobRegistry<J> {
   const maxJobs = opts.maxJobs ?? 50;
   const retireMs = opts.retireMs ?? 10 * 60 * 1000;
+  // What counts as backlog to evict. Default: anything not running. A registry
+  // with a queue passes its own predicate so waiting ("queued") jobs are never
+  // mistaken for settled backlog and dropped before they get a slot.
+  const isTerminal = opts.isTerminal ?? ((j: J) => j.status !== "running");
   const g = globalThis as unknown as Record<string, Map<string, J> | undefined>;
   const jobs = (g[globalKey] ??= new Map<string, J>());
   const retiring = new Set<string>();
@@ -36,7 +40,7 @@ export function createJobRegistry<J extends { id: string; status: string }>(
       jobs.delete(job.id);
       retiring.delete(job.id);
     }, retireMs).unref();
-    const terminal = [...jobs.values()].filter((j) => j.status !== "running");
+    const terminal = [...jobs.values()].filter(isTerminal);
     for (let i = 0; i < terminal.length - maxJobs; i++) {
       jobs.delete(terminal[i].id);
       retiring.delete(terminal[i].id);

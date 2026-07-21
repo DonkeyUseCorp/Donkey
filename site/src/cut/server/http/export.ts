@@ -1,4 +1,4 @@
-import { cancelJob, createJob, getJob, listJobsForProject } from "../jobs";
+import { cancelJob, createJob, getJob, listAllJobs, listJobsForProject } from "../jobs";
 import { serveFileRange } from "../serveFile";
 
 /** Export rendering: start a job, poll it, cancel it, download the result. */
@@ -7,6 +7,12 @@ export const exportApi = {
    * reloaded editor can reconnect to a render still in flight. */
   activeForProject(_req: Request, { id }: { id: string }) {
     return Response.json(listJobsForProject(id));
+  },
+
+  /** Every export job across every project, in start order — the feed the
+   * app-wide exports dock polls so it shows the same queue in every tab. */
+  activeAll() {
+    return Response.json(listAllJobs());
   },
 
   async create(req: Request) {

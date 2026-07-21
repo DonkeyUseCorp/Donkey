@@ -5,6 +5,7 @@ import path from "node:path";
 import { assertLocalRuntime } from "./local-only";
 import { createJobRegistry } from "./jobRegistry";
 import { exportsDir, mediaPath, projectDir, readProject } from "./projects";
+import { currentCutUser } from "./userScope";
 import { atempoChain, hasStream, num } from "./util";
 import { projectFadeSeconds, TRANSITION_ZOOM } from "../lib/types";
 
@@ -93,13 +94,23 @@ export interface ExportSpec {
 
 export interface Job {
   id: string;
+  /** The Donkey account that started the job. The cross-project feed is scoped
+   * to it, so accounts sharing a Mac never see each other's exports. */
+  user: string;
   projectId: string;
+  /** Shown in the exports dock; the engine assigns it from the project doc. */
+  projectName: string;
   /** "preview" is the internal hover-proxy render; only "export" jobs are
-   * surfaced to the client for reconnect/download. */
+   * surfaced to the client dock for progress/download. */
   target: "export" | "preview";
-  status: "running" | "done" | "error";
+  /** "queued" waits for a running slot; the rest track the ffmpeg run. */
+  status: "queued" | "running" | "done" | "error";
   progress: number; // 0..1
   error?: string;
+  /** When the job was created (queue order) and when it actually began the
+   * encode (elapsed clock in the dock). */
+  createdAt: number;
+  startedAt?: number;
   tmpDir: string;
   outPath: string;
   outName: string;
@@ -107,34 +118,103 @@ export interface Job {
   log: string[];
 }
 
-const MAX_RUNNING = 2; // concurrent ffmpeg exports
-// Survives dev-server module reloads; caps the terminal backlog.
-const { jobs, runningCount, retire } = createJobRegistry<Job>("__veditorJobs");
+const MAX_RUNNING = 2; // concurrent ffmpeg exports; extra exports queue behind them
+// Survives dev-server module reloads; caps the terminal backlog. Queued jobs
+// are active work, not backlog, so they are exempt from eviction.
+const { jobs, runningCount, retire } = createJobRegistry<Job>("__veditorJobs", {
+  isTerminal: (j) => j.status === "done" || j.status === "error",
+});
+
+// Export jobs waiting for a running slot, oldest first. Held on globalThis so a
+// dev-server module reload doesn't strand a queued render. Preview proxies never
+// queue — they run when a slot is free and are rejected otherwise.
+interface Pending {
+  job: Job;
+  spec: ExportSpec;
+}
+const g = globalThis as unknown as { __veditorPending?: Pending[] };
+const pending: Pending[] = (g.__veditorPending ??= []);
+
+/** Promote queued exports into free running slots, oldest first. Called after
+ * every enqueue and every settle, so the queue always drains to capacity. */
+function pump() {
+  while (runningCount() < MAX_RUNNING && pending.length > 0) {
+    const next = pending.shift()!;
+    if (next.job.status !== "queued") continue; // canceled while waiting
+    startRun(next.job, next.spec);
+  }
+}
+
+/** Move a job from queued to running and drive its ffmpeg render. Its settle
+ * frees the slot and pumps the queue. */
+function startRun(job: Job, spec: ExportSpec) {
+  job.status = "running";
+  job.startedAt = Date.now();
+  void runExport(job, spec)
+    .catch((err: unknown) => {
+      job.status = "error";
+      job.error = err instanceof Error ? err.message : String(err);
+      void rm(job.outPath, { force: true }); // no half-written files in exports/
+    })
+    .finally(() => {
+      void rm(job.tmpDir, { recursive: true, force: true }); // overlay tmp, win or lose
+      retire(job);
+      pump();
+    });
+}
 
 export function getJob(id: string) {
   return jobs.get(id);
 }
 
-/** Running and recently-settled export jobs for a project, so a client that
- * reopened (or reloaded) can reconnect to an export still in flight. */
+/** One export job's dock view: enough for the client to show progress, elapsed,
+ * queue position, and the finished file's actions. Previews stay internal. */
+function jobView(j: Job) {
+  return {
+    id: j.id,
+    projectId: j.projectId,
+    projectName: j.projectName,
+    status: j.status,
+    progress: j.progress,
+    outName: j.outName || undefined,
+    error: j.error,
+    createdAt: j.createdAt,
+    startedAt: j.startedAt,
+  };
+}
+
+/** Export jobs (queued, running, or recently settled) for one project. */
 export function listJobsForProject(projectId: string) {
   return [...jobs.values()]
     .filter((j) => j.projectId === projectId && j.target !== "preview")
-    .map((j) => ({
-      id: j.id,
-      status: j.status,
-      progress: j.progress,
-      outName: j.outName,
-      error: j.error,
-    }));
+    .map(jobView);
+}
+
+/** Every export job for the requesting account, across all its projects — the
+ * source of truth the app-wide exports dock reflects, so it shows the same set
+ * in every tab. Scoped to the account so a shared Mac never crosses feeds. */
+export function listAllJobs() {
+  const user = currentCutUser();
+  return [...jobs.values()]
+    .filter((j) => j.target !== "preview" && j.user === user)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(jobView);
 }
 
 export function cancelJob(id: string) {
   const job = jobs.get(id);
-  if (job?.proc && job.status === "running") {
+  if (!job) return;
+  if (job.status === "running" && job.proc) {
     job.proc.kill("SIGKILL");
     job.status = "error";
     job.error = "Export canceled.";
+    retire(job);
+  } else if (job.status === "queued") {
+    // Never started: drop it from the queue and settle it so the dock clears.
+    job.status = "error";
+    job.error = "Export canceled.";
+    const i = pending.findIndex((p) => p.job.id === id);
+    if (i >= 0) pending.splice(i, 1);
     retire(job);
   }
 }
@@ -172,14 +252,23 @@ export async function createJob(form: FormData): Promise<Job> {
   assertLocalRuntime();
   const spec = JSON.parse(String(form.get("spec"))) as ExportSpec;
   const id = crypto.randomUUID().slice(0, 12);
+  const user = currentCutUser();
   const preview = spec.target === "preview";
-  if (runningCount() >= MAX_RUNNING) {
+
+  // Previews are best-effort hover proxies: they take a free slot or bow out,
+  // never queueing. Queued exports already hold every slot (pump keeps the
+  // registry full while any wait), so this cap check also stops a preview from
+  // jumping the export queue.
+  if (preview && runningCount() >= MAX_RUNNING) {
     const job: Job = {
       id,
+      user,
       projectId: spec.projectId,
-      target: preview ? "preview" : "export",
+      projectName: "",
+      target: "preview",
       status: "error",
       progress: 0,
+      createdAt: Date.now(),
       tmpDir: "",
       outPath: "",
       outName: "",
@@ -190,22 +279,27 @@ export async function createJob(form: FormData): Promise<Job> {
     retire(job);
     return job;
   }
+
   const job: Job = {
     id,
+    user,
     projectId: spec.projectId,
+    projectName: "",
     target: preview ? "preview" : "export",
-    status: "running",
+    status: "queued",
     progress: 0,
+    createdAt: Date.now(),
     tmpDir: "",
     outPath: "",
     outName: "",
     log: [],
   };
-  jobs.set(id, job); // reserve the concurrency slot before the first await
+  jobs.set(id, job);
 
   try {
     const doc = await readProject(spec.projectId);
     if (!doc) throw new Error("Project not found.");
+    job.projectName = doc.name;
     if (preview) job.outName = "preview.mp4";
     else await claimExportName(job, doc.name);
     job.outPath = path.join(
@@ -220,16 +314,20 @@ export async function createJob(form: FormData): Promise<Job> {
         await writeFile(path.join(job.tmpDir, path.basename(key)), Buffer.from(await value.arrayBuffer()));
       }
     }
-    void runExport(job, spec)
-      .catch((err: unknown) => {
+    if (preview) {
+      // Re-check the slot: it may have been taken during the prep above. A
+      // dropped preview just refreshes later, so bow out instead of racing.
+      if (runningCount() < MAX_RUNNING) startRun(job, spec);
+      else {
         job.status = "error";
-        job.error = err instanceof Error ? err.message : String(err);
-        void rm(job.outPath, { force: true }); // no half-written files in exports/
-      })
-      .finally(() => {
-        void rm(job.tmpDir, { recursive: true, force: true }); // overlay tmp, win or lose
+        job.error = "Another export is already running — wait for it to finish.";
+        void rm(job.tmpDir, { recursive: true, force: true });
         retire(job);
-      });
+      }
+    } else {
+      pending.push({ job, spec });
+      pump();
+    }
   } catch (err) {
     job.status = "error";
     job.error = err instanceof Error ? err.message : String(err);

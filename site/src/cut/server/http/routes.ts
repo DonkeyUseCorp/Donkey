@@ -71,6 +71,7 @@ export const CUT_ROUTES: CutRoute[] = [
   { method: "GET", path: "/api/cut/library/media/:file", handler: (req, p) => libraryApi.serveMedia(req, { file: p.file }) },
   { method: "DELETE", path: "/api/cut/library/:id", handler: (req, p) => libraryApi.remove(req, { id: p.id }) },
 
+  { method: "GET", path: "/api/cut/export-jobs", handler: () => exportApi.activeAll() },
   { method: "POST", path: "/api/cut/export", handler: (req) => exportApi.create(req) },
   { method: "GET", path: "/api/cut/export/:jobId", handler: (req, p) => exportApi.status(req, { jobId: p.jobId }) },
   { method: "DELETE", path: "/api/cut/export/:jobId", handler: (req, p) => exportApi.cancel(req, { jobId: p.jobId }) },
