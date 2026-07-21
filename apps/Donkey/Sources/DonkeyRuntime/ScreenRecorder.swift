@@ -29,7 +29,7 @@ public struct ScreenRecordingConfiguration: Sendable {
         capturesMicrophone: Bool = false,
         microphoneDeviceID: String? = nil,
         showsCursor: Bool = true,
-        frameRate: Int = 60,
+        frameRate: Int = 30,
         excludedWindowIDs: [CGWindowID] = [],
         outputURL: URL
     ) {

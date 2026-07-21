@@ -66,7 +66,11 @@ public final class SCRecordingScreenRecorder: ScreenRecording {
         let recordingConfig = SCRecordingOutputConfiguration()
         recordingConfig.outputURL = configuration.outputURL
         recordingConfig.outputFileType = .mov
-        recordingConfig.videoCodecType = .h264
+        // HEVC is ~2x more efficient than H.264 for screen content and is what QuickTime records — half
+        // the file at equal or better quality. Every macOS 15 Mac has a hardware HEVC encoder; fall back
+        // to H.264 only if the encoder can't offer HEVC for this container.
+        recordingConfig.videoCodecType =
+            recordingConfig.availableVideoCodecTypes.contains(.hevc) ? .hevc : .h264
 
         let delegate = RecorderDelegate()
         delegate.owner = self
