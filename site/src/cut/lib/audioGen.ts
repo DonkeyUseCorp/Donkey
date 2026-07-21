@@ -88,7 +88,9 @@ export async function synthesizeMusic(
   };
   const out = gen.outputs?.find((o) => o.dataBase64) ?? gen.outputs?.find((o) => o.url);
 
-  const label = opts?.name?.trim() || musicName(prompt);
+  // Cap whatever the label comes from — a caller-supplied name (the user's own
+  // words when the prompt was composed from references) or the prompt itself.
+  const label = musicName(opts?.name?.trim() || prompt);
   const fileName = `ai-${slug(label)}.mp3`;
   let file: File;
   if (out?.dataBase64) {

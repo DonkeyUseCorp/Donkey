@@ -27,6 +27,7 @@ import { baseClips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, 
 import { buildAiContext } from "./aiContext";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { synthesizeMusic } from "./audioGen";
+import { composeMusicPrompt } from "./composeGen";
 import { stockAssetInDoc } from "./genvideo/docWriter";
 import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
 import { DUCK_DEFAULT, generateSubtitlesReadout } from "./voiceover";
@@ -1278,10 +1279,25 @@ export async function runAiTool(
       const variant = input.length === "song" ? "song" : "clip";
       // Default to a vocal-free bed; the model opts into a sung song explicitly.
       const instrumental = input.instrumental !== false;
+      // References ("match this audio", "the tone of this video"): the music
+      // model reads only text, so a multimodal pass listens to/looks at each
+      // reference and folds a description of its sound into the prompt. A failed
+      // compose falls back to the raw prompt so the render still happens. Keep
+      // the user's own words as the track name — the composed prompt is verbose.
+      const refs = resolveMusicRefs(input.reference_asset_ids);
+      let sent = prompt;
+      if (refs.length > 0) {
+        const composed = await composeMusicPrompt(prompt, refs);
+        if (composed) sent = composed;
+      }
       // Captured before synthesis: the track files under the chat that asked,
       // even if the user switches threads while it renders.
       const chatId = chatOwner();
-      const asset = await synthesizeMusic(projectId, prompt, { variant, instrumental });
+      const asset = await synthesizeMusic(projectId, sent, {
+        variant,
+        instrumental,
+        ...(sent !== prompt ? { name: prompt } : {}),
+      });
       const cur = useEditor.getState();
       // The render can outlast the open project: if the user switched away while
       // it ran, save it into the project it was made for — never the one now on
@@ -1682,6 +1698,20 @@ function resolveRefAssets(ids: unknown): AssetRef[] {
       throw new ToolError(`No project asset with id ${String(raw)} — see media in the editor state.`);
     if (asset.type === "audio")
       throw new ToolError(`"${asset.name}" is audio — visual references must be images or videos.`);
+    return refFromAsset(asset);
+  });
+}
+
+/** Map music-reference ids to project asset refs. Music takes any media as a
+ * style reference — an audio track to match, or video/images for tone — so
+ * unlike the visual generators, audio resolves here too. */
+function resolveMusicRefs(ids: unknown): AssetRef[] {
+  if (ids === undefined || ids === null) return [];
+  const s = useEditor.getState();
+  return (Array.isArray(ids) ? ids : [ids]).map((raw) => {
+    const asset = s.assets.find((a) => a.id === String(raw));
+    if (!asset)
+      throw new ToolError(`No project asset with id ${String(raw)} — see media in the editor state.`);
     return refFromAsset(asset);
   });
 }
