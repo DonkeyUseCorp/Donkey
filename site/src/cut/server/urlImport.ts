@@ -20,6 +20,7 @@ let active = 0;
 
 interface YtMeta {
   title?: string;
+  description?: string;
   uploader?: string;
   upload_date?: string;
   webpage_url?: string;
@@ -28,11 +29,31 @@ interface YtMeta {
 /** What a finished download hands its consumer: the media files (inside a
  * temp dir the wrapper deletes afterwards — one for yt-dlp's merged output,
  * one per photo for a photo tweet) plus what the extractor knew about them.
- * `text` is the full post text when the URL was a tweet. */
+ * `text` is the source's own words — a tweet's body, or a video's title and
+ * description — shown in the chat beside the media it came with. */
 interface Downloaded {
   files: { file: string; title: string }[];
   source: LibrarySource;
   text?: string;
+}
+
+// A video's own words for the chat: its title and description joined, capped so
+// a long YouTube description (link dumps, chapter lists) can't flood the chat.
+// TikTok/Instagram often repeat the caption as both fields, so drop a
+// description that just restates the title.
+const MAX_SOURCE_TEXT = 2000;
+function sourceTextFromMeta(meta: YtMeta): string | undefined {
+  const title = (meta.title || "").trim();
+  const desc = (meta.description || "").trim();
+  const body =
+    desc && desc !== title && !desc.startsWith(title)
+      ? title
+        ? `${title}\n\n${desc}`
+        : desc
+      : title || desc;
+  const text = body.trim();
+  if (!text) return undefined;
+  return text.length > MAX_SOURCE_TEXT ? `${text.slice(0, MAX_SOURCE_TEXT).trimEnd()}…` : text;
 }
 
 /** Run one guarded download and hand the files to `consume` before the temp
@@ -125,6 +146,7 @@ async function downloadMedia(url: string, tmp: string): Promise<Downloaded> {
       uploader: meta.uploader,
       uploadDate: meta.upload_date,
     },
+    text: sourceTextFromMeta(meta),
   };
 }
 

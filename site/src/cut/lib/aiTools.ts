@@ -980,7 +980,7 @@ export async function runAiTool(
           kind: asset.type,
           duration: round2(asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration),
         })),
-        ...(text ? { postText: text } : {}),
+        ...(text ? { sourceText: text } : {}),
       };
     }
 

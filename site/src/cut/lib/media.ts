@@ -243,7 +243,7 @@ export async function importStockMusic(
  * through the engine's bundled downloader and register what came back — one
  * asset for a video, one per photo for a photo tweet — without placing
  * anything on the timeline. Callers choose where assets land. `text` is the
- * post text when the URL was a tweet. */
+ * source's own words — a tweet's body, or a video's title and description. */
 export async function importUrlMedia(
   projectId: string,
   url: string

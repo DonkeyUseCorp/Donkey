@@ -1210,6 +1210,12 @@ const MessageView = memo(function MessageView({
     .map((part) => part as unknown as { state: string; output?: unknown })
     .filter((p) => p.state === "output-available")
     .map((p) => p.output);
+  // The source's own words for anything the turn pulled off the web (a tweet's
+  // body, a video's title/description). It renders as a quote beside the media
+  // — straight from the tool output, so the model never has to retype it.
+  const sourceTexts = toolOutputs
+    .map((o) => (o && typeof o === "object" ? (o as { sourceText?: unknown }).sourceText : undefined))
+    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
   return (
     <div className="ai-msg-assistant group mb-3 flex min-w-0 flex-col gap-1.5">
       {message.parts.map((part, i) => {
@@ -1292,6 +1298,16 @@ const MessageView = memo(function MessageView({
         }
         return null;
       })}
+      {/* The imported post's own text, quoted above its media so the two read
+          as one thing — the tweet body, or the video's title and description. */}
+      {sourceTexts.map((t, i) => (
+        <blockquote
+          key={`src-${i}`}
+          className="border-l-2 border-border pl-3 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
+        >
+          {t}
+        </blockquote>
+      ))}
       {/* Everything the turn generated, in one left-to-right row (images and
           clips flow and wrap; audio and documents take their own line). It
           stays in the chat until the user drags it out or files it away. */}

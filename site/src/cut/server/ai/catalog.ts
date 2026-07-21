@@ -393,7 +393,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "import_url",
     description:
-      "Download a media URL — TikTok, YouTube, Instagram Reels, an X/Twitter post, or a direct video/audio/image link — with the bundled downloader and import it into the project. An X post yields its video, or every photo plus the post text (postText). Free and local. Each asset lands on a card in this chat, and the user drags it from there to the timeline, Media, or the Library; place it yourself (add_clip) only when they asked for it in the cut. A short clip downloads in seconds; a long video can take a couple of minutes.",
+      "Download a media URL — TikTok, YouTube, Instagram Reels, an X/Twitter post, or a direct video/audio/image link — with the bundled downloader and import it into the project. Free and local. Each asset lands on a card in this chat, and the source's own text (a tweet's body, a video's title and description; returned as sourceText) is quoted for the user beside the media automatically — don't retype it in your reply. The user drags a card to the timeline, Media, or the Library; place it yourself (add_clip) only when they asked for it in the cut. A short clip downloads in seconds; a long video can take a couple of minutes.",
     inputSchema: obj({ url: str("The page or media URL to download") }, ["url"]),
   },
   {
@@ -783,7 +783,7 @@ Project media (\`media\` in editor_state) is every file in the open project. The
 The Library is shared across every project: folders, reusable assets, and templates — a template is a saved arrangement (clips, overlays, titles, captions, by reference) that comes back editable.
 - library_list browses it; library_add copies an asset into the project (the import step "library"-scope attachments need); template_add re-materializes a template; save_template saves timeline items as one.
 - library_organize handles folders (create/rename/delete), filing (move_asset), and deletes (permanent — explicit ask only).
-- import_url downloads a media URL (TikTok, YouTube, Instagram, direct links) into the project as a card in the chat; the user drags it to the timeline, Media, or the Library. Place it with add_clip only when they asked for it in the cut.
+- import_url downloads a media URL (TikTok, YouTube, Instagram, direct links) into the project as a card in the chat, with the source's own text quoted beside it; the user drags it to the timeline, Media, or the Library. Place it with add_clip only when they asked for it in the cut.
 Attachments: media files dropped on the chat import into project media by themselves; library attachments wait for library_add.`,
 
   "publish-and-export": `# Publish & export
