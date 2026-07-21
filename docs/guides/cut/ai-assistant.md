@@ -64,7 +64,7 @@ Deciding what the user wants is prompt text, executed by the model. The prompt o
 
 Tool calls execute in the open tab against the same store the user is editing — same state, same selection, same undo history.
 
-- **Readable failure, then retry.** Tools validate and clamp their inputs and throw human-readable errors ("No clip with that id — call get_state for current ids"), which return to the model as tool errors it can recover from.
+- **Readable failure, then retry.** Tools validate and clamp their inputs and throw human-readable errors ("No clip with that id — call get_state for current ids"), which return to the model as tool errors it can recover from. A dropped bridge is separate from a bad request: the idempotent tool listing retries on a momentary engine hiccup so the model never lands with an empty tool set, and an "unreachable" call is one the model quietly re-issues rather than a dead end that tells the user to reconnect.
 - **One undo step per turn.** History batches while the assistant is busy, so ⌘Z reverts the whole turn rather than one call at a time.
 - **Small results.** Tools return ids and rounded numbers, plus a short note when behavior surprised ("that spot was taken — slid right").
 - **Frames become images.** A tool result's `image`/`images` data URLs leave the JSON and reach the model as real images on every path — the engine bridge emits MCP image blocks after the data text, and the Gemini loop rides the first on the function response and the rest as image parts. Watching happens in whatever model the user is chatting with; there is no side model.
