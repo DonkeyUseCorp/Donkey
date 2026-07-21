@@ -150,6 +150,11 @@ export interface EditorState {
   /** Add a video clip from an asset onto video track 0 — at `start` (sliding
    * to the track's next free slot), or appended at the end when omitted. */
   addClipFromAsset: (assetId: string, start?: number) => void;
+  /** Drop a video/still onto base track 0 at pointer-time `t`: inserts at the
+   * drop and ripples later clips right, so a drop into a leading gap or between
+   * clips lands there instead of sliding to the end (the drop gesture's
+   * placement, distinct from `addClipFromAsset`'s slide-to-end). */
+  dropClipFromAsset: (assetId: string, t: number) => void;
   /** Add a soundtrack clip from an audio asset at `start` (default: the
    * playhead). `opts.duck` marks it a voiceover that lowers everything else
    * to that gain while it plays; `opts.lane` picks the audio track it lands
@@ -409,6 +414,30 @@ export function nextFreeStart(spans: { start: number; end: number }[], t: number
  * shape, so they share this instead of re-deriving `start + clipLen` inline. */
 export function footprints(items: (VideoClip | AudioClip)[]): { start: number; end: number }[] {
   return items.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+}
+
+/** Where a `len`-long clip dropped at pointer-time `t` lands on the base row,
+ * and how the clips after it slide to open room. The drop-at-pointer companion
+ * to `nextFreeStart` (which only ever appends): clips whose center sits left of
+ * the drop hold their place; the rest shift right as one run, so a clip dropped
+ * into a leading gap or between two others inserts there instead of piling up at
+ * the end when it is longer than the gap. */
+export function rippleInsertBase(
+  base: VideoClip[],
+  t: number,
+  len: number
+): { start: number; shifts: { id: string; start: number }[] } {
+  const items = base
+    .map((c) => ({ id: c.id, start: c.start, len: clipLen(c) }))
+    .sort((a, b) => a.start - b.start);
+  const center = t + len / 2;
+  const before = items.filter((c) => c.start + c.len / 2 <= center);
+  const after = items.filter((c) => c.start + c.len / 2 > center);
+  const floor = before.reduce((m, c) => Math.max(m, c.start + c.len), 0);
+  const start = Math.max(t, floor);
+  const delta = after.length ? Math.max(0, start + len - after[0].start) : 0;
+  const shifts = delta > 0 ? after.map((c) => ({ id: c.id, start: c.start + delta })) : [];
+  return { start, shifts };
 }
 
 /** POST a transcribe spec and poll the job to completion. Returns the cues, or
@@ -889,6 +918,24 @@ export const useEditor = create<EditorState>((set, get) => {
       };
       set((s) => ({
         clips: [...s.clips, clip].sort((a, b) => a.start - b.start),
+        ...sole({ kind: "clip", id: clip.id }),
+      }));
+    },
+
+    dropClipFromAsset: (assetId, t) => {
+      const asset = get().assets.find((a) => a.id === assetId);
+      if (!asset || (asset.type !== "video" && asset.type !== "image")) return;
+      push();
+      const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
+      const len = Math.max(MIN_LEN, out);
+      const { start, shifts } = rippleInsertBase(baseClips(get().clips), Math.max(0, t), len);
+      const move = new Map(shifts.map((sh) => [sh.id, sh.start]));
+      const clip: VideoClip = { id: uid(), assetId, track: 0, start, in: 0, out, muted: false };
+      set((s) => ({
+        clips: [
+          ...s.clips.map((c) => (move.has(c.id) ? { ...c, start: move.get(c.id)! } : c)),
+          clip,
+        ].sort((a, b) => a.start - b.start),
         ...sole({ kind: "clip", id: clip.id }),
       }));
     },

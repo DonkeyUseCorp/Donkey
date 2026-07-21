@@ -32,7 +32,7 @@ import {
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
-import { baseClips, clipLen, clipSpeed, getClipSpans, nextFreeStart, overlayLayers, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { baseClips, clipLen, clipSpeed, getClipSpans, overlayLayers, projectDuration, rippleInsertBase, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -216,8 +216,11 @@ export function Timeline() {
   const contentW = heldContentW.current;
 
   // Drop preview while dragging a media asset onto video track 0: where the
-  // pointer is and how long the clip would run.
-  const [assetDrop, setAssetDrop] = useState<{ t: number; len: number } | null>(null);
+  // clip would land, how long it runs, and a poster frame so the preview reads
+  // as the segment itself sliding along the row rather than an empty slot.
+  const [assetDrop, setAssetDrop] = useState<{ t: number; len: number; thumb?: string } | null>(
+    null
+  );
   // Kind of external media being dragged over the timeline (audio vs video).
   const [dropType, setDropType] = useState<"video" | "audio" | null>(null);
   // A video clip is being dragged (internal or external): reveals the track
@@ -504,7 +507,9 @@ export function Timeline() {
     const s = useEditor.getState();
     if (isClipMedia(type)) {
       if (place.kind === "insert") s.addVideoFromAsset(assetId, place, t);
-      else s.addClipFromAsset(assetId, t);
+      // Drop at the pointer, rippling later clips right — so a drop into a
+      // leading gap or between clips lands there instead of sliding to the end.
+      else s.dropClipFromAsset(assetId, t);
     } else {
       const used = [...new Set(s.audioClips.map((a) => a.lane ?? 0))].sort((a, b) => a - b);
       const lane =
@@ -675,6 +680,8 @@ export function Timeline() {
         // stock drags carry their own shape since they aren't in the project yet.
         let type: "video" | "audio" | "image" | undefined;
         let duration = 0;
+        // Poster frame for the on-track ghost, when the source can offer one.
+        let thumb: string | undefined;
         if (isLib) {
           const lib = draggingLibrary();
           type = lib?.type;
@@ -693,6 +700,7 @@ export function Timeline() {
           const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
           type = asset?.type;
           duration = asset?.type === "image" ? STILL_SECONDS : asset?.duration ?? 0;
+          thumb = asset?.type === "image" ? asset.url : asset?.thumbs?.[0];
         }
         // A still rides the video tracks: reveal their guides and new-track rows.
         setDropType(isClipMedia(type) ? "video" : type ?? null);
@@ -720,15 +728,12 @@ export function Timeline() {
           return;
         }
         setOverlayDrop(null);
-        // Preview the true landing spot: the drop slides past occupied
-        // stretches to the next free slot, so the dashed box must too — a
-        // box under the pointer that lands minutes away is a lie.
+        // Preview the true landing spot: a drop at the pointer inserts here,
+        // rippling later clips right, so the ghost sits where the segment will
+        // actually land — a box under the pointer that lands minutes away lies.
         const cur = useEditor.getState();
-        const taken = baseClips(cur.clips).map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
-        setAssetDrop({
-          t: nextFreeStart(taken, dropTimeAt(e.clientX), duration),
-          len: duration,
-        });
+        const { start } = rippleInsertBase(baseClips(cur.clips), dropTimeAt(e.clientX), duration);
+        setAssetDrop({ t: start, len: duration, thumb });
       }}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -969,7 +974,10 @@ export function Timeline() {
             onPointerDown={deselectIfSelf}
           >
             {spans.length > 0 && laneRail(VIDEO_H - 2)}
-            {videoDragActive && trackGuide(TRACK_ZERO)}
+            {/* An external asset drag previews as an on-track segment ghost
+                (below), so the base row skips the full-width dashed guide that
+                would otherwise cover it; an internal clip move still shows it. */}
+            {videoDragging && trackGuide(TRACK_ZERO)}
             {trackSlot(TRACK_ZERO, VIDEO_H - 4)}
             {laneDrag?.kind === "clip" && !laneDrag.away && (
               <LaneSlot
@@ -981,15 +989,30 @@ export function Timeline() {
               />
             )}
             {assetDrop && (
+              // The dragged clip as a floating segment: the poster fills it and
+              // it rides above the row's clips (z-20), so a drag reads as a
+              // placed segment sliding to its landing spot, not a hole to fill.
               <div
-                className="tl-asset-drop-slot pointer-events-none absolute top-0.5 flex items-center justify-center rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10 text-[#0a84ff] transition-[left] duration-150 ease-out"
+                className="tl-asset-drop-slot pointer-events-none absolute top-0.5 z-20 overflow-hidden rounded-lg bg-neutral-200 opacity-90 shadow-2xl ring-[1.5px] ring-[#0a84ff]/70 transition-[left] duration-100 ease-out"
                 style={{
                   left: assetDrop.t * pps,
                   width: Math.max(10, assetDrop.len * pps - CLIP_GAP),
                   height: VIDEO_H - 4,
                 }}
               >
-                <Plus className="size-4" />
+                {assetDrop.thumb && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={assetDrop.thumb}
+                    alt=""
+                    draggable={false}
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                )}
+                <span className="absolute top-1 left-1 flex items-center gap-0.5 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] tabular-nums text-white">
+                  <Plus className="size-2.5" />
+                  {assetDrop.len.toFixed(1)}s
+                </span>
               </div>
             )}
             {spans.map((span, i) => (

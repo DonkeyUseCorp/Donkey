@@ -143,6 +143,21 @@ export function setCardDragImage(e: React.DragEvent, el: HTMLElement) {
   setTimeout(() => clone.remove(), 0);
 }
 
+/** A small chip as the drag image, so the cursor carries a compact marker
+ * instead of the full card snapshot that blankets the timeline track. The
+ * timeline renders its own on-track segment ghost for where the clip lands; the
+ * chip is just the "I'm holding something" cursor. A solid div paints
+ * synchronously (no image-load race), so it works the first drag too. */
+export function setChipDragImage(e: React.DragEvent) {
+  const chip = document.createElement("div");
+  chip.style.cssText =
+    "position:absolute;top:-1000px;left:-1000px;width:60px;height:34px;border-radius:6px;" +
+    "background:#e5e5e5;box-shadow:0 6px 16px rgba(0,0,0,0.35),inset 0 0 0 1.5px rgba(10,132,255,0.7);";
+  document.body.appendChild(chip);
+  e.dataTransfer.setDragImage(chip, 30, 17);
+  setTimeout(() => chip.remove(), 0);
+}
+
 /** Clear the in-flight ids; call on `dragend` and after a drop. */
 export function clearAssetDrag() {
   inFlightAssetId = null;

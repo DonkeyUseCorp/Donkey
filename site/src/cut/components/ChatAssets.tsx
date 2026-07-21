@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import type React from "react";
 import { Copy, ExternalLink, FileText, Film, Loader2, Maximize2, Plus } from "lucide-react";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import { clearAssetDrag, setAssetDragData, setChipDragImage } from "@/cut/lib/assetDrag";
 import {
   projectRefs,
   refFromAsset,
@@ -158,6 +158,9 @@ const dragProps = (item: AssetRef, asset?: MediaAsset) => ({
     // either way so composers and creators accept the drag too.
     if (asset) setAssetDragData(e, asset.id);
     else setRefDragData(e, item);
+    // A small cursor chip instead of the full-card snapshot, so dragging a clip
+    // onto the timeline doesn't blanket the track it's aiming for.
+    setChipDragImage(e);
   },
   onDragEnd: clearAssetDrag,
 });
