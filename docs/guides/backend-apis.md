@@ -178,10 +178,10 @@ unless a database rate overrides them. The fallbacks mirror current public
 provider prices, mark them up by the supported margin, and round up to the
 nearest credit micro. Token models charge per million provider tokens; hidden
 reasoning or output tokens are billed as output when the provider's
-`totalTokens` exceeds visible input plus output. ElevenLabs speech and sound
-effects bill by the provider's returned units; music bills by request duration
-when the request fixes its length. Keep rate overrides and per-user limits in
-backend-owned data, not the Mac app.
+`totalTokens` exceeds visible input plus output. Speech bills by the provider's
+returned units; a music render bills flat per generated clip, since the render is
+a fixed-length interaction that carries no per-second usage. Keep rate overrides
+and per-user limits in backend-owned data, not the Mac app.
 
 **Usage rows store units, never content.** They may keep sanitized provider
 usage metadata and normalized billable units. They must not keep prompts,
