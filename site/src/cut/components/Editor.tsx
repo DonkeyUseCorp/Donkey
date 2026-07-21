@@ -373,10 +373,10 @@ export function Editor({
         s.addOverlay();
       } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !controlFocused) {
         e.preventDefault();
-        // While playing, arrows skip in 2s jumps and playback rolls on (seek
+        // While playing, arrows skip in 1s jumps and playback rolls on (seek
         // never pauses); paused, they step a frame — 1s with Shift — for
         // precise editing.
-        const step = s.playing ? 2 : e.shiftKey ? 1 : 1 / 30;
+        const step = s.playing ? 1 : e.shiftKey ? 1 : 1 / 30;
         s.seek(s.currentTime + (e.key === "ArrowLeft" ? -step : step));
       } else if (e.key === "Escape") {
         s.select(null);
