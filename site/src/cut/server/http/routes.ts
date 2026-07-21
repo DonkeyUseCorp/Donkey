@@ -52,7 +52,6 @@ export const CUT_ROUTES: CutRoute[] = [
   { method: "POST", path: "/api/cut/projects/:id/audio", handler: (req, p) => projectsApi.audio(req, { id: p.id }) },
   { method: "POST", path: "/api/cut/projects/:id/duplicate", handler: (req, p) => projectsApi.duplicate(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/preview", handler: (req, p) => projectsApi.servePreview(req, { id: p.id }) },
-  { method: "GET", path: "/api/cut/projects/:id/export-jobs", handler: (req, p) => exportApi.activeForProject(req, { id: p.id }) },
 
   { method: "GET", path: "/api/cut/library", handler: () => libraryApi.list() },
   { method: "POST", path: "/api/cut/library", handler: (req) => libraryApi.upload(req) },

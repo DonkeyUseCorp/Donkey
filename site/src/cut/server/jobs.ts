@@ -183,13 +183,6 @@ function jobView(j: Job) {
   };
 }
 
-/** Export jobs (queued, running, or recently settled) for one project. */
-export function listJobsForProject(projectId: string) {
-  return [...jobs.values()]
-    .filter((j) => j.projectId === projectId && j.target !== "preview")
-    .map(jobView);
-}
-
 /** Every export job for the requesting account, across all its projects — the
  * source of truth the app-wide exports dock reflects, so it shows the same set
  * in every tab. Scoped to the account so a shared Mac never crosses feeds. */
