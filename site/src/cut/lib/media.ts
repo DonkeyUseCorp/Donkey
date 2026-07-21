@@ -142,7 +142,16 @@ export async function importFileToProject(
     asset.width = dims.width;
     asset.height = dims.height;
   } else {
-    asset.duration = await loadAudioDuration(url);
+    // Decode for a sample-exact duration (HTMLAudioElement overestimates MP3s,
+    // leaving a placed clip running past its real audio) and reuse the same
+    // decode for the waveform, so enrichAsset has nothing left to do.
+    const audio = await decodeAudio(url);
+    if (audio && audio.duration > 0) {
+      asset.duration = audio.duration;
+      asset.peaks = peaksFromChannel(audio.getChannelData(0));
+    } else {
+      asset.duration = await loadAudioDuration(url);
+    }
   }
   return asset;
 }
@@ -202,6 +211,28 @@ export async function importStockVideo(
   if (!asset) throw new Error("Could not add the video.");
   asset.name = video.name;
   // Like a stock image, it lands where the caller places it, not in Media.
+  asset.origin = "stock";
+  useEditor.getState().addAsset(asset);
+  void enrichAsset(asset);
+  return asset;
+}
+
+/** Store a bundled stock-music bed in the project's media as a regular audio
+ * asset and register it, without placing it on the timeline — callers choose
+ * where it lands (the soundtrack). Tagged "stock" so it stays out of Media. */
+export async function importStockMusic(
+  projectId: string,
+  music: { url: string; name: string }
+): Promise<MediaAsset> {
+  const dl = await fetch(music.url);
+  if (!dl.ok) throw new Error("Could not read the music.");
+  const blob = await dl.blob();
+  const file = new File([blob], music.url.split("/").pop() || "music.mp3", {
+    type: blob.type || "audio/mpeg",
+  });
+  const asset = await importFileToProject(projectId, file);
+  if (!asset) throw new Error("Could not add the music.");
+  asset.name = music.name;
   asset.origin = "stock";
   useEditor.getState().addAsset(asset);
   void enrichAsset(asset);
@@ -466,28 +497,45 @@ function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
 
 const PEAK_BUCKETS = 1600;
 
-async function makePeaks(url: string): Promise<number[]> {
-  const buf = await (await fetch(url)).arrayBuffer();
-  const AC: typeof AudioContext =
-    window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const ctx = new AC();
+/** Decode an audio URL to a buffer, or null on any failure (a bad/undecodable
+ * file). The decoded buffer's duration is sample-exact — the source of truth for
+ * an audio clip's length, unlike HTMLAudioElement.duration, which overestimates
+ * MP3s and would leave a placed clip running past its real audio. */
+async function decodeAudio(url: string): Promise<AudioBuffer | null> {
   try {
-    const audio = await ctx.decodeAudioData(buf);
-    const data = audio.getChannelData(0);
-    const bucketSize = Math.max(1, Math.floor(data.length / PEAK_BUCKETS));
-    const peaks: number[] = [];
-    for (let i = 0; i < PEAK_BUCKETS; i++) {
-      let max = 0;
-      const from = i * bucketSize;
-      const to = Math.min(data.length, from + bucketSize);
-      for (let j = from; j < to; j += 8) {
-        const v = Math.abs(data[j]);
-        if (v > max) max = v;
-      }
-      peaks.push(max);
+    const buf = await (await fetch(url)).arrayBuffer();
+    const AC: typeof AudioContext =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AC();
+    try {
+      return await ctx.decodeAudioData(buf);
+    } finally {
+      void ctx.close();
     }
-    return peaks;
-  } finally {
-    void ctx.close();
+  } catch {
+    return null;
   }
+}
+
+/** Normalized 0..1 waveform peaks from a decoded buffer's first channel. */
+function peaksFromChannel(data: Float32Array): number[] {
+  const bucketSize = Math.max(1, Math.floor(data.length / PEAK_BUCKETS));
+  const peaks: number[] = [];
+  for (let i = 0; i < PEAK_BUCKETS; i++) {
+    let max = 0;
+    const from = i * bucketSize;
+    const to = Math.min(data.length, from + bucketSize);
+    for (let j = from; j < to; j += 8) {
+      const v = Math.abs(data[j]);
+      if (v > max) max = v;
+    }
+    peaks.push(max);
+  }
+  return peaks;
+}
+
+async function makePeaks(url: string): Promise<number[]> {
+  const audio = await decodeAudio(url);
+  return audio ? peaksFromChannel(audio.getChannelData(0)) : [];
 }

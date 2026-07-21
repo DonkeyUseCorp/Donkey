@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { fetchLibrary, libraryMediaUrl, type LibraryAsset } from "./library";
-import type { StockImage, StockVideo } from "./stock";
+import { stockTitle, type StockImage, type StockMusic, type StockVideo } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
 import { getClipSpans, useEditor } from "./store";
@@ -81,6 +81,15 @@ export const refFromStockVideo = (v: StockVideo): AssetRef => ({
   kind: "video",
   url: v.file,
   duration: v.duration,
+});
+
+export const refFromStockMusic = (m: StockMusic): AssetRef => ({
+  scope: "stock",
+  id: m.id,
+  name: stockTitle(m.id),
+  kind: "audio",
+  url: m.file,
+  duration: m.duration,
 });
 
 /** A ref for a text file dropped from the desktop: the contents ride inline

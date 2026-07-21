@@ -31,7 +31,7 @@ import {
 } from "@/cut/lib/library";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
-import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
+import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
 import { baseClips, clipLen, clipSpeed, getClipSpans, nextFreeStart, overlayLayers, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
@@ -132,6 +132,14 @@ function draggingStockVideo(e: React.DragEvent): AssetRef | null {
   if (!hasRefDrag(e)) return null;
   const ref = draggingRef();
   return ref?.scope === "stock" && ref.kind === "video" ? ref : null;
+}
+
+/** The stock-music ref being dragged (a sample-library card), null otherwise. On
+ * the soundtrack it imports into the project and lands as an audio clip. */
+function draggingStockMusic(e: React.DragEvent): AssetRef | null {
+  if (!hasRefDrag(e)) return null;
+  const ref = draggingRef();
+  return ref?.scope === "stock" && ref.kind === "audio" ? ref : null;
 }
 
 export function Timeline() {
@@ -644,7 +652,8 @@ export function Timeline() {
         const isLib = hasLibraryDrag(e);
         const still = draggingStill(e);
         const stockVideo = draggingStockVideo(e);
-        if (!hasAssetDrag(e) && !isLib && !still && !stockVideo) return;
+        const stockMusic = draggingStockMusic(e);
+        if (!hasAssetDrag(e) && !isLib && !still && !stockVideo && !stockMusic) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
         // Preview where a video would land; audio drops free-form. Library and
@@ -655,6 +664,9 @@ export function Timeline() {
           const lib = draggingLibrary();
           type = lib?.type;
           duration = lib?.duration ?? 0;
+        } else if (stockMusic) {
+          type = "audio";
+          duration = stockMusic.duration ?? 0;
         } else if (stockVideo) {
           type = "video";
           duration = stockVideo.duration ?? 0;
@@ -726,6 +738,7 @@ export function Timeline() {
         const libId = draggedLibraryId(e);
         const still = draggingStill(e);
         const stockVideo = draggingStockVideo(e);
+        const stockMusic = draggingStockMusic(e);
         const tpl = draggingTemplate();
         const projectId = useEditor.getState().projectId;
         clearAssetDrag();
@@ -748,6 +761,16 @@ export function Timeline() {
           e.preventDefault();
           const asset = useEditor.getState().assets.find((a) => a.id === id);
           if (asset) placeAssetAt(id, asset.type, t, audioRow, videoPlace);
+          return;
+        }
+
+        // A stock-music sample imports as an audio asset and lands on the
+        // hovered soundtrack lane.
+        if (stockMusic && projectId) {
+          e.preventDefault();
+          void importStockMusic(projectId, { url: stockMusic.url, name: stockMusic.name })
+            .then((asset) => placeAssetAt(asset.id, "audio", t, audioRow))
+            .catch(() => {});
           return;
         }
 

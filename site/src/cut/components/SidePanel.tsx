@@ -66,7 +66,9 @@ import { TemplateCard } from "./TemplateCard";
 import { GenerateVideoPanel } from "./GeneratePanel";
 import { ImageGenPanel } from "./ImageGenPanel";
 import { StockImagesPanel } from "./StockImagesPanel";
+import { SampleLibrary } from "./StockMusicPanel";
 import { StockVideosPanel } from "./StockVideosPanel";
+import { STOCK_MUSIC } from "@/cut/lib/stockMusicManifest";
 import { STOCK_VIDEOS } from "@/cut/lib/stockVideoManifest";
 import { LibraryCard } from "./LibraryView";
 
@@ -98,6 +100,13 @@ export function SidePanel({
 }) {
   const [tab, setTab] = useLocalPref<Tab>("cut-side-tab", "media", (v) =>
     TABS.some((t) => t.id === v)
+  );
+  // The Audio tab's Voice/Music sub-tab lives here so the Music sub-tab can lay
+  // out as two columns — the generator plus the sample library — like Image/Video.
+  const [audioSub, setAudioSub] = useLocalPref<"voice" | "music">(
+    "cut-audio-subtab",
+    "voice",
+    (v) => v === "voice" || v === "music"
   );
   // Rail tiles as drop targets: a Library card (asset or template) dropped on
   // Media joins the project; a Media card dropped on Library saves it there.
@@ -249,13 +258,35 @@ export function SidePanel({
             {tab === "image" ? <StockImagesPanel /> : <StockVideosPanel />}
           </div>
         </>
+      ) : tab === "audio" ? (
+        // Music is two columns like the generate tabs — the generator on the
+        // left, the sample library on the right; Voice is a single column.
+        <>
+          <div
+            className={cn(
+              "flex w-[264px] min-h-0 shrink-0 flex-col",
+              audioSub === "music" && STOCK_MUSIC.length > 0 && "border-r border-border"
+            )}
+          >
+            <AudioPanel
+              projectId={projectId}
+              importing={importing}
+              sub={audioSub}
+              onSub={setAudioSub}
+            />
+          </div>
+          {audioSub === "music" && STOCK_MUSIC.length > 0 && (
+            <div className="flex w-[340px] min-h-0 shrink-0 flex-col">
+              <SampleLibrary projectId={projectId} />
+            </div>
+          )}
+        </>
       ) : (
         <div className="flex w-[264px] min-h-0 shrink-0 flex-col">
           {tab === "media" && (
             <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
           )}
           {tab === "library" && <LibraryPanel projectId={projectId} />}
-          {tab === "audio" && <AudioPanel projectId={projectId} importing={importing} />}
           {tab === "subtitles" && <SubtitlesPanel />}
           {tab === "publish" && <PublishPanel />}
         </div>

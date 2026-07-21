@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Info,
   Loader2,
+  Music,
   Pause,
   Play,
   Plus,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DictationControl } from "@/cut/components/MicDictation";
+import { PillSelect } from "@/cut/components/PillSelect";
 import { SectionTitle } from "@/cut/components/SectionTitle";
 import {
   DropdownMenu,
@@ -36,13 +38,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { LiveElapsed } from "@/cut/components/Elapsed";
-import { clearAssetDrag, setAssetDragData, setLibraryDragData } from "@/cut/lib/assetDrag";
-import {
-  addLibraryAssetToProject,
-  fetchLibrary,
-  libraryMediaUrl,
-  type LibraryAsset,
-} from "@/cut/lib/library";
+import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import { MUSIC_VARIANTS, synthesizeMusic, type MusicVariant } from "@/cut/lib/audioGen";
+import { draggingRef, hasRefDrag } from "@/cut/lib/assetRef";
+import { useMusicGen } from "@/cut/lib/musicGen";
+import { STOCK_MUSIC } from "@/cut/lib/stockMusicManifest";
+import { stockAssetInDoc } from "@/cut/lib/genvideo/docWriter";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { genPulseOverlay, useGenNotify } from "@/cut/lib/genNotify";
 import { enrichAsset } from "@/cut/lib/media";
@@ -50,6 +51,7 @@ import { usePreviewAudio } from "@/cut/lib/previewAudio";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
 import { NoCreditsError, synthesizeSpeech } from "@/cut/lib/tts";
+import { useLocalPref } from "@/cut/lib/uiState";
 import { DUCK_DEFAULT } from "@/cut/lib/voiceover";
 import { useSpeakerVoice, useSpeechLanguage, VoicePicker } from "@/cut/components/VoicePicker";
 import { GeneratedAssetMenu } from "@/cut/components/GeneratedAssetMenu";
@@ -68,15 +70,22 @@ const DIRECTION_PRESETS: { label: string; text: string }[] = [
   { label: "Bedtime story", text: "Read slowly and gently, like a bedtime story" },
 ];
 
-/** The Audio tab: AI voiceover on top, then the project's and library's audio
- * as playable rows that drop onto the soundtrack at the playhead. Audio files
- * come in through the Media tab or a drop onto the timeline. */
+/** The Audio tab: Voice generates an AI voiceover, Music an instrumental bed;
+ * each lists what it made as playable rows that drop onto the soundtrack at the
+ * playhead, over the shared audio library. Audio files come in through the Media
+ * tab or a drop onto the timeline. */
 export function AudioPanel({
   projectId,
   importing,
+  sub,
+  onSub,
 }: {
   projectId: string;
   importing: boolean;
+  /** The active sub-tab, lifted to SidePanel so it can lay out the Music tab as
+   * two columns (this panel + the sample library) like the Image/Video tabs. */
+  sub: "voice" | "music";
+  onSub: (v: "voice" | "music") => void;
 }) {
   // The app-wide preview player: starting a clip stops the last one, here or
   // on a chat audio card. Leaving the tab silences only this panel's own
@@ -97,21 +106,268 @@ export function AudioPanel({
 
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center pl-4">
-        <span className="text-sm font-semibold tracking-tight">Generate audio</span>
+      <div className="shrink-0 px-3.5 pt-4 pb-3">
+        <AudioSubTabs value={sub} onChange={onSub} />
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3.5 pb-4">
-        <VoiceGenerator projectId={projectId} />
-        <ProjectAudio
-          projectId={projectId}
-          importing={importing}
-          onTogglePlay={togglePlay}
-          playingUrl={playingUrl}
-        />
-        <LibraryAudio projectId={projectId} onTogglePlay={togglePlay} playingUrl={playingUrl} />
+        {sub === "voice" ? (
+          <>
+            <VoiceGenerator projectId={projectId} />
+            <ProjectAudio
+              projectId={projectId}
+              importing={importing}
+              onTogglePlay={togglePlay}
+              playingUrl={playingUrl}
+            />
+          </>
+        ) : (
+          <>
+            <MusicGenerator projectId={projectId} />
+            <ProjectMusic projectId={projectId} onTogglePlay={togglePlay} playingUrl={playingUrl} />
+          </>
+        )}
       </div>
     </>
+  );
+}
+
+/** Voice / Music segmented toggle at the top of the Audio tab. */
+function AudioSubTabs({
+  value,
+  onChange,
+}: {
+  value: "voice" | "music";
+  onChange: (v: "voice" | "music") => void;
+}) {
+  const tabs: { id: "voice" | "music"; label: string }[] = [
+    { id: "voice", label: "Voice" },
+    { id: "music", label: "Music" },
+  ];
+  return (
+    <div className="flex rounded-lg bg-muted p-0.5 text-[11.5px]">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => onChange(t.id)}
+          className={cn(
+            "flex-1 rounded-md px-3 py-0.5 font-medium transition-colors",
+            value === t.id
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The Music generator: describe a mood, pick a length and how many takes, and
+ * each generated instrumental lands under "Generated music" to drag onto the
+ * soundtrack. Mirrors VoiceGenerator's shape — several syntheses can run at
+ * once, so the button stays live and a status row counts them. */
+function MusicGenerator({ projectId }: { projectId: string }) {
+  // Prompt + vocals mode live in a store so a dragged/clicked sample can seed
+  // them for remixing (see musicGen.ts). Lyria sings by default; a bed under
+  // narration usually wants no vocals, so the toggle defaults to instrumental.
+  const prompt = useMusicGen((s) => s.prompt);
+  const setPrompt = useMusicGen((s) => s.setPrompt);
+  const instrumental = useMusicGen((s) => s.instrumental);
+  const setInstrumental = useMusicGen((s) => s.setInstrumental);
+  const [variant, setVariant] = useLocalPref<MusicVariant>(
+    "cut-music-variant",
+    "clip",
+    (v) => v === "clip" || v === "song"
+  );
+  const [takes, setTakes] = useLocalPref<number>(
+    "cut-music-takes",
+    1,
+    (v) => typeof v === "number" && v >= 1 && v <= 4
+  );
+  const [pending, setPending] = useState(0);
+  // A sample dragged from the library onto the prompt box loads its prompt.
+  const [dropActive, setDropActive] = useState(false);
+  const droppedSample = (e: React.DragEvent) => {
+    if (!hasRefDrag(e)) return undefined;
+    const ref = draggingRef();
+    if (ref?.scope !== "stock" || ref.kind !== "audio") return undefined;
+    return STOCK_MUSIC.find((s) => s.id === ref.id);
+  };
+  const [error, setError] = useState<{ text: string; credits?: boolean } | null>(null);
+  const fail = (e: unknown, fallback: string) =>
+    setError(
+      e instanceof Error
+        ? { text: e.message, credits: e instanceof NoCreditsError }
+        : { text: fallback }
+    );
+  // Music runs on the user's Donkey account, like image/video/voiceover.
+  const signedOut = useSignedIn() === false;
+
+  /** Generate `takes` tracks at once; each registers as a generated audio asset
+   * that lists below and drops onto the soundtrack. */
+  const generate = async () => {
+    const text = prompt.trim();
+    if (!text) return;
+    setError(null);
+    const n = takes;
+    setPending((p) => p + n);
+    await Promise.all(
+      Array.from({ length: n }, async () => {
+        try {
+          const asset = await synthesizeMusic(projectId, text, { variant, instrumental });
+          // A render can outlast the open project — the user may switch away
+          // while it's in flight. Stock it into the project it was made for, not
+          // whatever is on screen now; only the open project touches the store.
+          if (useEditor.getState().projectId !== projectId) {
+            void stockAssetInDoc(projectId, asset).catch(() => {});
+            return;
+          }
+          // The Audio tab badges its own rail icon when a track finishes while
+          // the user stepped away (landed() no-ops while this tab is watched).
+          useGenNotify.getState().landed("audio", asset.id);
+          useEditor.getState().addAsset(asset);
+          void enrichAsset(asset);
+        } catch (e) {
+          fail(e, "Music generation failed.");
+        } finally {
+          setPending((p) => p - 1);
+        }
+      })
+    );
+  };
+
+  const variantLabel = MUSIC_VARIANTS.find((v) => v.id === variant) ?? MUSIC_VARIANTS[0];
+
+  return (
+    <div className="music-generator flex flex-col gap-3.5">
+      <div className="flex flex-col gap-2">
+        <SectionTitle>Describe the music</SectionTitle>
+        <div
+          className={cn(
+            "relative rounded-lg border border-input focus-within:border-ring",
+            dropActive && "border-[#0a84ff] ring-2 ring-[#0a84ff]/30 ring-inset"
+          )}
+          onDragOver={(e) => {
+            if (!droppedSample(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            setDropActive(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropActive(false);
+          }}
+          onDrop={(e) => {
+            const s = droppedSample(e);
+            setDropActive(false);
+            if (!s) return;
+            e.preventDefault();
+            useMusicGen.getState().load({ prompt: s.prompt, instrumental: s.category !== "Songs" });
+          }}
+        >
+          <textarea
+            className="music-prompt min-h-[88px] w-full resize-y rounded-lg bg-transparent px-2.5 py-2 pr-9 text-[12.5px] leading-relaxed outline-none"
+            placeholder="Warm acoustic guitar and soft piano, calm and hopeful — or describe a song to sing"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+          <DictationControl
+            text={prompt}
+            onResult={setPrompt}
+            buttonClassName="absolute right-1.5 bottom-2 bg-background/70 backdrop-blur-sm"
+          />
+        </div>
+        <div className="flex gap-2">
+          <PillSelect
+            className="h-7 flex-1"
+            title="Length"
+            value={variant}
+            display={variantLabel.label}
+            options={MUSIC_VARIANTS.map((v) => ({ value: v.id, label: `${v.label} · ${v.hint}` }))}
+            onChange={setVariant}
+          />
+          <PillSelect
+            className="h-7 flex-1"
+            title="Takes"
+            value={String(takes)}
+            display={`${takes} take${takes > 1 ? "s" : ""}`}
+            options={[1, 2, 3, 4].map((n) => ({
+              value: String(n),
+              label: `${n} take${n > 1 ? "s" : ""}`,
+            }))}
+            onChange={(v) => setTakes(Number(v))}
+          />
+        </div>
+        <div className="flex rounded-lg bg-muted p-0.5 text-[11.5px]">
+          {([["song", "Song"], ["instrumental", "Instrumental"]] as const).map(([val, label]) => {
+            const active = (val === "instrumental") === instrumental;
+            return (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setInstrumental(val === "instrumental")}
+                title={val === "song" ? "Let the model write and sing lyrics" : "No vocals — a background bed"}
+                className={cn(
+                  "flex-1 rounded-md px-3 py-0.5 font-medium transition-colors",
+                  active
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <Button
+          className="music-generate w-full"
+          disabled={!prompt.trim() || signedOut}
+          title={!prompt.trim() ? "Describe the music above to generate" : undefined}
+          onClick={() => void generate()}
+        >
+          <Music data-icon="inline-start" />
+          Generate music
+        </Button>
+        {pending > 0 && (
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+            {pending === 1 ? "Generating…" : `Generating ${pending}…`}
+            <LiveElapsed />
+          </div>
+        )}
+      </div>
+
+      {signedOut ? (
+        <p className="music-signin text-[11px] leading-relaxed text-muted-foreground">
+          Music runs on your Donkey account.{" "}
+          <a className="font-medium text-blue-600 hover:underline dark:text-blue-400" href={signInUrl()}>
+            Sign in
+          </a>{" "}
+          to continue.
+        </p>
+      ) : (
+        error && (
+          <p className="music-error text-[11px] leading-relaxed text-red-600">
+            {error.text}
+            {error.credits && (
+              <>
+                {" "}
+                <a
+                  className="font-medium underline hover:no-underline"
+                  href={creditsUrl()}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Add credits
+                </a>
+              </>
+            )}
+          </p>
+        )
+      )}
+    </div>
   );
 }
 
@@ -651,7 +907,7 @@ function ProjectAudio({
   );
 }
 
-function LibraryAudio({
+function ProjectMusic({
   projectId,
   onTogglePlay,
   playingUrl,
@@ -660,34 +916,51 @@ function LibraryAudio({
   onTogglePlay: (url: string) => void;
   playingUrl: string | null;
 }) {
-  const [assets, setAssets] = useState<LibraryAsset[]>([]);
-  useEffect(() => {
-    let alive = true;
-    fetchLibrary()
-      .then((d) => alive && setAssets(d.assets.filter((a) => a.type === "audio")))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
-  if (assets.length === 0) return null;
+  const assets = useEditor((s) => s.assets);
+  // Generated instrumentals only — voiceovers list under the Voice tab, and any
+  // non-null origin keeps them out of the Media panel.
+  const audio = assets.filter((a) => a.type === "audio" && a.origin === "generated");
+  const pulsing = useGenNotify((s) => s.pulsing.audio);
   return (
     <div className="flex flex-col gap-1.5">
-      <SectionTitle>Library</SectionTitle>
+      <SectionTitle>Generated music</SectionTitle>
+      {audio.length === 0 && (
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          No generated music yet — describe a mood above and generate one.
+        </p>
+      )}
       <div className="flex flex-col gap-1.5">
-        {assets.map((a) => (
+        {audio.map((a) => (
           <AudioRow
             key={a.id}
             name={a.name}
             duration={a.duration}
-            url={libraryMediaUrl(a.fileName)}
-            playing={playingUrl === libraryMediaUrl(a.fileName)}
+            url={a.url}
+            peaks={a.peaks}
+            playing={playingUrl === a.url}
+            pulse={pulsing.includes(a.id)}
             onTogglePlay={onTogglePlay}
-            onAdd={() => void addLibraryAssetToProject(projectId, a)}
-            onDragStart={(e) => setLibraryDragData(e, a)}
+            onAdd={() => useEditor.getState().addAudioFromAsset(a.id)}
+            menu={
+              <GeneratedAssetMenu
+                asset={a}
+                projectId={projectId}
+                triggerClassName={scrimIconButton}
+                after={
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => useEditor.getState().removeAsset(a.id)}
+                  >
+                    <Trash2 /> Delete
+                  </DropdownMenuItem>
+                }
+              />
+            }
+            onDragStart={(e) => setAssetDragData(e, a.id)}
           />
         ))}
       </div>
     </div>
   );
 }
+

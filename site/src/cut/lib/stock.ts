@@ -46,6 +46,38 @@ export interface StockVideo {
   duration: number;
 }
 
+/** Pregenerated background-music beds (Gemini/Lyria), bundled under
+ * public/cut-stock-music with the manifest in stockMusicManifest.ts. Regenerate
+ * or extend the set with `bun scripts/generate-stock-music.ts`. */
+export interface StockMusic {
+  id: string;
+  category: StockMusicCategory;
+  /** The generation prompt, saved verbatim — the editable starting point. */
+  prompt: string;
+  /** Mood/genre/instrument keywords the search box matches beyond the prompt. */
+  tags: string[];
+  /** Site-relative mp3 URL (under /cut-stock-music/) — preview and timeline. */
+  file: string;
+  /** Rendered length in seconds. */
+  duration: number;
+  /** Normalized 0..1 waveform peaks for the card, precomputed at generation. */
+  peaks: number[];
+}
+
+export const STOCK_MUSIC_CATEGORIES = [
+  "Songs",
+  "Cinematic",
+  "Ambient",
+  "Acoustic",
+  "Electronic",
+  "Upbeat",
+  "Chill",
+  "Corporate",
+  "Piano",
+] as const;
+
+export type StockMusicCategory = (typeof STOCK_MUSIC_CATEGORIES)[number];
+
 export const STOCK_CATEGORIES = [
   "Business",
   "Nature",
