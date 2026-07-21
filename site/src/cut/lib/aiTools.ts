@@ -3,7 +3,7 @@
 import { apiFetch, apiJson } from "./api";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { chatOwner, tagChatAsset } from "./chatAssets";
-import { useGenerate, type VideoAttempt, type VideoGenOptions } from "./generate";
+import { applyOwnership, useGenerate, type VideoAttempt, type VideoGenOptions } from "./generate";
 import { useGenScene } from "./genScene";
 import { anchorRefused } from "./genvideo/shotAttempts";
 import {
@@ -1314,6 +1314,10 @@ export async function runAiTool(
       // it ran, save it into the project it was made for — never the one now on
       // screen — and don't touch the current store.
       if (cur.projectId !== projectId) {
+        // Stamp chat ownership before persisting — the render outlived the open
+        // project, but it still belongs to the thread that asked, exactly as the
+        // still-open path tags it (and as generate.ts persists chat renders).
+        applyOwnership(asset, chatId);
         void stockAssetInDoc(projectId, asset).catch(() => {});
         return {
           assetId: asset.id,
@@ -1342,11 +1346,18 @@ export async function runAiTool(
       const sel = useEditor.getState().selection;
       const clipId = sel?.kind === "audio" ? sel.id : null;
       if (clipId) useEditor.getState().updateAudio(clipId, { volume });
+      // Report where the clip actually landed: addAudioFromAsset slides it to the
+      // next free slot on the soundtrack when the requested start overlaps
+      // existing audio, so `start` is not necessarily where it sits.
+      const placed = clipId
+        ? useEditor.getState().audioClips.find((c) => c.id === clipId)
+        : undefined;
+      const placedStart = placed?.start ?? start;
       return {
         assetId: asset.id,
         name: asset.name,
         audioClipId: clipId,
-        start: round2(start),
+        start: round2(placedStart),
         duration: round2(asset.duration),
         volume,
         addedToTimeline: true,
