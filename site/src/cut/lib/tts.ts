@@ -3,7 +3,6 @@
 import { geminiModels } from "@/lib/inference/gemini-models";
 import { bytesFromBase64 } from "./bytes";
 import { hostedPost } from "./hosted";
-import { useGenNotify } from "./genNotify";
 import { importFileToProject } from "./media";
 import type { MediaAsset } from "./types";
 import {
@@ -440,9 +439,10 @@ export async function speechClipToAsset(
   asset.name = label;
   asset.origin = "voiceover";
   if (language) asset.language = language;
-  // Every committed voiceover funnels through here (the panel, the subtitles
-  // readout, the AI tool), so this is where a finished one gets its badge.
-  useGenNotify.getState().landed("audio", asset.id);
+  // No Audio-tab badge here: this is the shared commit path (the panel, the
+  // subtitles readout, the chat tools, the scene narration). Only the Audio
+  // panel's own generator badges its tab — a chat- or run-made voiceover is
+  // announced in the chat, never on the tab. The panel calls landed() itself.
   return asset;
 }
 

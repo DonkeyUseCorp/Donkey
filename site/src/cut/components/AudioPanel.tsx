@@ -157,6 +157,11 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
         language,
         name: `AI voice — ${lead}`,
       });
+      // The Audio tab is the only surface that badges its own rail icon: a
+      // voiceover the user generated here, finishing while they stepped away,
+      // rides a count. Chat- and scene-made voiceovers never badge — the chat
+      // card is their indicator. (landed() no-ops while this tab is watched.)
+      useGenNotify.getState().landed("audio", asset.id);
       const cur = useEditor.getState();
       cur.addAsset(asset);
       cur.addAudioFromAsset(asset.id, playhead, {
