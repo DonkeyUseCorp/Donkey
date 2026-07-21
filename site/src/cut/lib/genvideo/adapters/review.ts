@@ -104,7 +104,7 @@ The benchmark sheet — the artist to match:`,
       });
       if (!res.ok) throw new Error("The review model is unavailable.");
       const body = (await res.json()) as { output_text?: string };
-      const parsed = JSON.parse(body.output_text ?? "") as Record<string, unknown>;
+      const parsed = JSON.parse(body.output_text ?? "{}") as Record<string, unknown>;
       const ok = parsed.ok !== false;
       const note = typeof parsed.note === "string" ? parsed.note.trim() : "";
       return { ok, ...(note ? { note } : {}) };
@@ -227,7 +227,7 @@ The timeline slot needs ${input.slotSec.toFixed(1)}s of this take.`,
       });
       if (!res.ok) throw new Error("The review model is unavailable.");
       const body = (await res.json()) as { output_text?: string };
-      const parsed = JSON.parse(body.output_text ?? "") as Record<string, unknown>;
+      const parsed = JSON.parse(body.output_text ?? "{}") as Record<string, unknown>;
       // The wrong-world check is deterministic: the judge CLASSIFIES what it
       // sees — an easier ask than remembering to fail — and code compares. A
       // take whose medium differs from the approved opening frame's never
