@@ -11,9 +11,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useElapsed } from "@/cut/hooks/useElapsed";
-import { EXPORT_PRESETS, originalSettings, presetSettings } from "@/cut/lib/exportClient";
+import {
+  EXPORT_PRESETS,
+  estimateExportBytes,
+  formatSizeEstimate,
+  originalSettings,
+  presetSettings,
+} from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
-import { useEditor } from "@/cut/lib/store";
+import { projectDuration, useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
 
 export function ExportDialog() {
@@ -21,6 +27,11 @@ export function ExportDialog() {
   const aspect = useEditor((s) => s.aspect);
   const clips = useEditor((s) => s.clips);
   const assets = useEditor((s) => s.assets);
+  const audioClips = useEditor((s) => s.audioClips);
+  const duration = useMemo(
+    () => projectDuration({ clips, audioClips }),
+    [clips, audioClips]
+  );
   const status = useExport((s) => s.status);
   const ratio = useExport((s) => s.ratio);
   const startedAt = useExport((s) => s.startedAt);
@@ -87,14 +98,19 @@ export function ExportDialog() {
                   role="radio"
                   aria-checked={presetId === p.id}
                   className={cn(
-                    "flex flex-col items-start rounded-lg border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-input",
+                    "flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-input",
                     presetId === p.id && "border-primary bg-primary/10"
                   )}
                   onClick={() => setPresetId(p.id)}
                 >
-                  <span className="text-sm font-medium">{p.label}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {p.settings.width} × {p.settings.height} · {p.detail}
+                  <span className="flex min-w-0 flex-col items-start">
+                    <span className="text-sm font-medium">{p.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {p.settings.width} × {p.settings.height} · {p.detail}
+                    </span>
+                  </span>
+                  <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {formatSizeEstimate(estimateExportBytes(p.settings, duration))}
                   </span>
                 </button>
               ))}

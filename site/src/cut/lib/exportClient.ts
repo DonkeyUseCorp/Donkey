@@ -78,6 +78,31 @@ export function originalSettings(
   return { width: even(base.w), height: even(base.h), fps: 30, crf: 19, preset: "medium" };
 }
 
+/**
+ * Rough output size for a preset, in bytes. The encoder is CRF (variable
+ * bitrate), so this is a heuristic: it models H.264 bits-per-pixel as halving
+ * every +6 CRF from a ~0.08 bpp anchor at CRF 23, scaled by frame area and fps,
+ * plus the fixed 192 kbps AAC audio. Busy footage runs larger and flat footage
+ * smaller, so the dialog shows it as an approximation, not a promise.
+ */
+export function estimateExportBytes(settings: ExportSettings, durationSec: number): number {
+  if (durationSec <= 0) return 0;
+  const pixelsPerSec = settings.width * settings.height * settings.fps;
+  const bpp = 0.08 * 2 ** ((23 - settings.crf) / 6);
+  const videoBps = pixelsPerSec * bpp;
+  const audioBps = 192_000;
+  return ((videoBps + audioBps) * durationSec) / 8;
+}
+
+/** Human-readable size estimate matching the finished-export MB display. */
+export function formatSizeEstimate(bytes: number): string {
+  if (bytes <= 0) return "";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1) return "~1 MB";
+  if (mb < 1000) return `~${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  return `~${(mb / 1024).toFixed(1)} GB`;
+}
+
 /** Reveal a rendered export in Finder (local engine only). */
 export async function revealExport(projectId: string, file: string) {
   await apiFetch(
