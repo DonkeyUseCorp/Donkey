@@ -44,6 +44,18 @@ export const geminiTtsModels = {
 
 export type GeminiTtsModel = (typeof geminiTtsModels)[keyof typeof geminiTtsModels];
 
+// Generative music (Gemini/Lyria) over the Interactions API: a text prompt in,
+// an instrumental clip out — the background bed for a cut. `clip` renders a
+// fixed ~30s clip; `pro` a full-length (~2min) track. These are the legacy
+// Lyria interaction models, which run on our Vertex path (unlike Lyria RealTime,
+// the live WebSocket API, which Vertex rejects). Bump here to adopt a newer Lyria.
+export const geminiMusicModels = {
+  clip: "lyria-3-clip-preview",
+  pro: "lyria-3-pro-preview",
+} as const;
+
+export type GeminiMusicModel = (typeof geminiMusicModels)[keyof typeof geminiMusicModels];
+
 // Semantic roles map a job to the model we run for it. Prefer referencing a
 // role over a bare constant so intent stays explicit at the call site.
 export const geminiModelRoles = {

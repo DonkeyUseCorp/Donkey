@@ -25,6 +25,11 @@ import { InferenceProviderError } from "@/lib/inference/providers";
 
 export const dynamic = "force-dynamic";
 
+// Music generation (Gemini/Lyria) polls its render to completion in-request, so
+// the handler can stay open longer than the platform default. Image, video, and
+// speech return well inside this; it is a ceiling, not a delay.
+export const maxDuration = 120;
+
 export const POST = withDonkeyAuth(async (request) => {
   const client = requireInferenceClientId(request.donkey.clientId);
   if (!client.ok) {

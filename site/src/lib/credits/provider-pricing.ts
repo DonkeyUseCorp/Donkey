@@ -8,9 +8,11 @@ import {
 } from "@/lib/inference/elevenlabs-models";
 import {
   geminiModels,
+  geminiMusicModels,
   geminiOmniModels,
   geminiTtsModels,
   type GeminiModel,
+  type GeminiMusicModel,
   type GeminiOmniModel,
   type GeminiTtsModel,
 } from "@/lib/inference/gemini-models";
@@ -56,6 +58,10 @@ export function providerCreditPricing(
   // Omni video ids are hardcoded (gemini-models.ts); a clip bills flat at submit.
   if (normalizedProvider === "gemini-omni") {
     return geminiOmniCreditPricing(normalizedModel);
+  }
+  // Lyria music ids are hardcoded (gemini-models.ts); a clip bills flat per render.
+  if (normalizedProvider === "gemini-music") {
+    return geminiMusicCreditPricing(normalizedModel);
   }
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
@@ -318,6 +324,29 @@ const geminiOmniModelPricing: Record<GeminiOmniModel, ProviderCreditPricing> = {
 
 function geminiOmniCreditPricing(model: string): ProviderCreditPricing | undefined {
   return geminiOmniModelPricing[model as GeminiOmniModel];
+}
+
+// Generative music (Gemini/Lyria) bills flat per rendered clip: the render is a
+// fixed-length interaction that carries no per-second usage, so a clip charges
+// generationCount = 1 at completion. Rates are Lyria 3's published per-request
+// prices ($0.04 clip, $0.08 full song); usdWithMargin adds the 1.3x. The Record
+// is keyed by GeminiMusicModel, so adding a Lyria id without a price fails the build.
+const geminiMusicModelPricing: Record<GeminiMusicModel, ProviderCreditPricing> = {
+  [geminiMusicModels.clip]: { generationCostMicros: usdWithMargin("0.04") },
+  [geminiMusicModels.pro]: { generationCostMicros: usdWithMargin("0.08") },
+};
+
+function geminiMusicCreditPricing(model: string): ProviderCreditPricing | undefined {
+  const exact = geminiMusicModelPricing[model as GeminiMusicModel];
+  if (exact) {
+    return exact;
+  }
+  for (const [id, pricing] of Object.entries(geminiMusicModelPricing)) {
+    if (modelMatches(model, id)) {
+      return pricing;
+    }
+  }
+  return undefined;
 }
 
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {

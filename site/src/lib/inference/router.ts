@@ -1,6 +1,6 @@
-import { createAudioAssetProvider } from "@/lib/inference/adapters/audio-studio";
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
 import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
+import { createGeminiMusicAssetProvider } from "@/lib/inference/adapters/gemini-music";
 import { createGeminiSpeechAssetProvider } from "@/lib/inference/adapters/gemini-speech";
 import { createGeminiOmniVideoAssetProvider } from "@/lib/inference/adapters/gemini-omni-video";
 import { createHostedResponsesProvider } from "@/lib/inference/adapters/hosted-responses";
@@ -225,10 +225,12 @@ export function createProviderRegistry() {
     createGeminiOmniVideoAssetProvider(),
     // Gemini TTS serves kind="speech" (voiceovers, subtitle read-alouds).
     createGeminiSpeechAssetProvider(),
-    // ElevenLabs serves kind="music" (the brief-to-video music bed). It gates
-    // itself on ELEVENLABS_API_KEY: with no key it reports unconfigured and is
-    // never selected, so kind="music" 503s and the pipeline assembles bedless.
-    createAudioAssetProvider(),
+    // Gemini/Lyria is the sole kind="music" provider — the Audio-tab generator,
+    // generate_music, and the brief-to-video bed. It runs on the always-hosted
+    // Vertex service account, so music never falls back to another provider. The
+    // adapter picks the clip or the longer pro model from the requested length so
+    // a bed can still span a longer video (see gemini-music.ts).
+    createGeminiMusicAssetProvider(),
     createGeminiComputerUseProvider(),
     createHostedResponsesProvider(),
   ]);
