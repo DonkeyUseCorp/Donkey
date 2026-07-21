@@ -85,12 +85,15 @@ export function TopNav({
             </PillButton>
           ) : signedOutAuth ? (
             <>
-              <Link
+              {/* Auth pages sit outside the "/" → "/cut" landing rewrite, which
+                  App Router soft-navigation can't cross; a plain anchor does the
+                  full-page navigation the sign-in route needs. */}
+              <a
                 href={signedOutAuth.logInHref}
                 className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
               >
                 Log in
-              </Link>
+              </a>
               <PillButton
                 href={signedOutAuth.signUpHref}
                 variant="primary"

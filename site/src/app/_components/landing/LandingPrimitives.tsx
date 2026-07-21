@@ -9,6 +9,15 @@ function isInternalHref(href: string) {
   return href.startsWith("/") && !href.startsWith("//");
 }
 
+// The auth pages (/sign-in, /sign-up) are proxy passthrough routes that live
+// outside the "/" → "/cut" rewrite the proxy uses to serve the landing on
+// donkeycut.com. App Router soft-navigation can't cross that rewrite boundary —
+// a next/link click flips the URL but never renders the auth screen — so links
+// to these routes must be plain anchors that trigger a full-page navigation.
+function isAuthPassthroughHref(href: string) {
+  return href.startsWith("/sign-in") || href.startsWith("/sign-up");
+}
+
 type ButtonVariant = "primary" | "dark" | "secondary";
 type ButtonSize = "sm" | "md" | "lg";
 
@@ -147,7 +156,7 @@ export function PillButton({
   };
 
   if (href && !disabled && !onClick) {
-    if (isInternalHref(href)) {
+    if (isInternalHref(href) && !isAuthPassthroughHref(href)) {
       return (
         <Link aria-label={ariaLabel} href={href} style={sharedStyle}>
           {children}
