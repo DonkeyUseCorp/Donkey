@@ -66,7 +66,6 @@ import {
 } from "@/cut/lib/assetRef";
 import {
   creditsUrl,
-  signInUrl,
   useGenerate,
   useSignedIn,
 } from "@/cut/lib/generate";
@@ -92,7 +91,9 @@ import { useMicTranscription } from "@/cut/lib/micTranscribe";
 // tiles, timeline clips, the preview) or as @name mentions in the message.
 
 interface ModelsInfo {
-  providers: Record<string, { available: boolean; note: string }>;
+  // `installed` false hides the provider's whole group; a provider that is
+  // installed but unavailable (e.g. signed out) still lists with its note.
+  providers: Record<string, { available: boolean; note: string; installed?: boolean }>;
 }
 
 /** A saved chat thread, persisted per project in localStorage. */
@@ -180,6 +181,11 @@ function writeThreads(projectId: string, list: ChatThread[]) {
 
 const MODEL_KEY = "cut-ai-model";
 const FAVS_KEY = "cut-ai-favs";
+// A fresh user starts on Gemini — it runs on their signed-in Donkey account, so
+// it works without a local CLI. Claude/Codex show up automatically once the
+// engine probes them installed. The choice persists, so this is first-run only.
+const DEFAULT_MODEL =
+  AI_MODELS.find((m) => m.provider === "gemini" && !m.hidden)?.id ?? "gemini";
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",
@@ -217,8 +223,8 @@ export function AiPanel({
   const signedIn = useSignedIn();
   const [model, setModel] = useState<string>(() =>
     typeof window === "undefined"
-      ? "claude-fable-5"
-      : (localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"),
+      ? DEFAULT_MODEL
+      : (localStorage.getItem(MODEL_KEY) ?? DEFAULT_MODEL),
   );
   // One chat is active at a time; every past chat lives in the Threads panel.
   // The id persists so closing and reopening the panel resumes the same chat.
@@ -292,8 +298,8 @@ export function AiPanel({
         ...info.providers,
         gemini:
           signedIn === false
-            ? { available: false, note: "sign in to Donkey to chat" }
-            : (info.providers.gemini ?? { available: true, note: "" }),
+            ? { available: false, note: "sign in to Donkey to chat", installed: true }
+            : (info.providers.gemini ?? { available: true, note: "", installed: true }),
       },
     };
   }, [info, signedIn]);
@@ -667,14 +673,22 @@ function ChatSession({
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, busy]);
 
+  const [sendError, setSendError] = useState<string | null>(null);
   const send = (text: string) => {
     // Inline @mentions attach their assets alongside the dropped chips. The
     // message keeps the raw tokens — they render as interactive chips and the
     // model reads the handle↔asset mapping from <attached_assets>.
     const body = text.trim();
     const { refs: all } = collectRefs(body, attachments, candidates);
-    if ((!body && all.length === 0) || busy || !currentAvailable) return;
+    if ((!body && all.length === 0) || busy) return;
+    // An unavailable provider surfaces as an error in the thread at send time
+    // rather than a standing footer note: say why nothing sent, then stop.
+    if (!currentAvailable) {
+      setSendError(unavailableMessage());
+      return;
+    }
     clearError();
+    setSendError(null);
     pinnedRef.current = true;
     void sendMessage({
       text: body,
@@ -687,6 +701,22 @@ function ChatSession({
   const currentAvailable = info
     ? info.providers[provider(model)]?.available !== false
     : true;
+  const unavailableMessage = (): string => {
+    const p = provider(model);
+    if (p === "gemini") return "Sign in to your Donkey account to chat with Gemini.";
+    const note = info?.providers[p]?.note?.trim();
+    return note ? `${PROVIDER_LABEL[p]}: ${note}` : `${PROVIDER_LABEL[p]} isn't available.`;
+  };
+  // The saved model's provider may be uninstalled — its group is hidden from
+  // the picker, so fall back to the first installed provider rather than sit on
+  // a selection the user can no longer see or change.
+  useEffect(() => {
+    if (!info || info.providers[provider(model)]?.installed !== false) return;
+    const fallback = AI_MODELS.find(
+      (m) => !m.hidden && info.providers[provider(m.id)]?.installed !== false,
+    );
+    if (fallback && fallback.id !== model) onModelChange(fallback.id);
+  }, [info, model, onModelChange]);
   const outOfCredits = useOutOfCredits((s) => s.out);
   useCreditsRecheck();
 
@@ -752,11 +782,15 @@ function ChatSession({
               <LiveElapsed />
             </div>
           )}
-          {error && (
+          {(error || (sendError && !currentAvailable)) && (
             <div className="ai-error mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11.5px] leading-relaxed text-red-700">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
               <span>
-                <HostedErrorText error={error.message} link={false} />
+                {error ? (
+                  <HostedErrorText error={error.message} link={false} />
+                ) : (
+                  sendError
+                )}
               </span>
             </div>
           )}
@@ -854,10 +888,7 @@ function ChatSession({
                       size="sm"
                       className="ai-send"
                       title="Send (Enter)"
-                      disabled={
-                        (!input.trim() && attachments.length === 0) ||
-                        !currentAvailable
-                      }
+                      disabled={!input.trim() && attachments.length === 0}
                       onClick={() => send(input)}
                     >
                       <ArrowUp className="size-3.5" />
@@ -875,25 +906,6 @@ function ChatSession({
             {mic.error}
           </p>
         )}
-        {info &&
-          !currentAvailable &&
-          (provider(model) === "gemini" ? (
-            <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-muted-foreground">
-              Gemini chats on your Donkey account.{" "}
-              <a
-                className="font-medium text-blue-600 hover:underline dark:text-blue-400"
-                href={signInUrl()}
-              >
-                Sign in
-              </a>{" "}
-              to continue.
-            </p>
-          ) : (
-            <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">
-              {PROVIDER_LABEL[provider(model)]}:{" "}
-              {info.providers[provider(model)]?.note}
-            </p>
-          ))}
       </div>
     </div>
   );
@@ -1348,12 +1360,16 @@ function ModelSelector({
     "codex",
     "gemini",
     ...(showTest ? ["test"] : []),
-  ].map((p) => ({
-    provider: p,
-    models: models.filter((m) => m.provider === p),
-    available: info?.providers[p]?.available ?? true,
-    note: info?.providers[p]?.note ?? "",
-  }));
+  ]
+    .map((p) => ({
+      provider: p,
+      models: models.filter((m) => m.provider === p),
+      installed: info?.providers[p]?.installed !== false,
+    }))
+    // The picker lists every installed provider and lets any of them be picked;
+    // a provider whose CLI isn't installed drops out entirely, and any other
+    // problem (signed out, etc.) surfaces as a chat error when the user sends.
+    .filter((group) => group.models.length > 0 && group.installed);
   const flat = groups.flatMap((group) => group.models);
   const currentLabel = models.find((m) => m.id === model)?.label ?? model;
 
@@ -1386,16 +1402,10 @@ function ModelSelector({
               {gi > 0 && <DropdownMenuSeparator />}
               <DropdownMenuLabel className="flex items-center gap-1.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
                 <Sparkles className="size-3" /> {PROVIDER_LABEL[group.provider]}
-                {!group.available && (
-                  <span className="ml-1 font-normal normal-case text-amber-700">
-                    · {group.note}
-                  </span>
-                )}
               </DropdownMenuLabel>
               {group.models.map((m) => (
                 <DropdownMenuItem
                   key={m.id}
-                  disabled={!group.available}
                   className="ai-model-item gap-2"
                   onClick={() => onSelect(m.id)}
                 >
