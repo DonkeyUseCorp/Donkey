@@ -8,11 +8,12 @@
  * bridge's `importMedia` has nothing left to do.
  *
  * Two shaping choices matter for the assembled cut:
- * - Video is NOT audio-native here: the model can't lip-sync our narration
- *   track, and every shot rides under a separate narration spine. We let the
- *   model generate whatever audio it wants and handle it locally — the placed
- *   clip is muted, so its audio never competes — rather than asking the model to
- *   suppress audio (a knob many models reject, which just fails the render).
+ * - Video is NOT audio-native here: the model renders each shot's audio itself
+ *   from the prompt (which states the shot's line), and there is no way to feed
+ *   it our own track. In a generated scene that burned-in narration is the point
+ *   — the orchestrator places the clip unmuted and lays no separate voice track.
+ *   In a provided-audio scene the user's audio is the spine, so the orchestrator
+ *   mutes the clip's own audio instead.
  * - Cast identity is anchored per shot, strongest signal first (see the ladder
  *   in shotAttempts.ts): the shot's keyframe — already rendered with the cast's
  *   reference images, so it IS the cast — seeds the render as its literal
@@ -85,7 +86,8 @@ export function makeImageRole(projectId: string, chatId?: string): ImageRole {
 
 export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
   return {
-    // The model isn't given our narration track, so it never lip-syncs to it.
+    // The model renders its own audio from the prompt; it takes no audio input,
+    // so it never lip-syncs to an external track.
     audioNative: false,
     async generate(input) {
       // The identity ladder: each rung renders from a weaker identity anchor,
@@ -173,6 +175,9 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
   };
 }
 
+/** The scene voice capability. Retained in the suite and the model-swap
+ * registry, but the current orchestrator no longer places a voice track — a
+ * generated scene's narration is burned into each shot by the video model. */
 export function makeVoiceRole(projectId: string, chatId?: string): VoiceRole {
   return {
     async speak(input) {

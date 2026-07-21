@@ -7,11 +7,12 @@
  * is the only thing that mutates it, and it re-asserts the coverage invariant
  * (`coverage.ts`) after every mutation.
  *
- * A run has one audio spine — either audio the user dropped in, or audio the
- * pipeline generates from a brief (a spoken script plus a music bed). Shots
- * tile that spine, and each shot's video is lip-synced to its slice, so the
- * two entry points ("animate this audio" and "make me a video of X") share the
- * same machinery.
+ * A run has one audio spine. In provided mode it is audio the user dropped in:
+ * shots tile it and each shot's video is lip-synced to its slice. In generated
+ * mode the shots ARE the spine — the video model burns each shot's slice of the
+ * scripted line in from the prompt (no separate voice track), a music bed under
+ * it. The two entry points ("animate this audio" and "make me a video of X")
+ * share the planning, coverage, and placement machinery.
  *
  * Units: the plan reasons in whole frames, never seconds. Frame boundaries are
  * integers, so "shot i ends exactly where shot i+1 begins" holds by
@@ -32,7 +33,7 @@ export interface RefAsset {
 
 /** One beat of a generated script — a shot's worth of screen time. */
 export interface ScriptBeat {
-  dialogue: string; // spoken line (drives the voiceover and the lip-sync)
+  dialogue: string; // spoken line the video model burns into the shot's audio
   action: string; // what happens on screen
   characters: string[];
   location: string;
@@ -82,9 +83,9 @@ export interface Shot {
   location: string; // location asset id ("" = unspecified)
   framing: string;
   startKeyframe?: string; // media asset id
-  /** The beat voiceover this shot lip-syncs to (generated mode). The voice is
-   * placed once per beat; a shot spans a slice of it (voiceFromSec..voiceToSec,
-   * relative to the beat start), so a line longer than one clip is never cut. */
+  /** Legacy: a per-shot voiceover slice from the old generated-mode voice
+   * spine. Generated mode no longer synthesizes a voice (the video burns its
+   * own narration in); these are read only from plans persisted before that. */
   voiceAssetId?: string;
   voiceFromSec?: number;
   voiceToSec?: number;
@@ -101,15 +102,14 @@ export interface Shot {
   error?: string;
 }
 
-/** One beat's voiceover placed on the soundtrack — the unit the spine is
- * placed in, so a video regeneration never restacks narration. */
+/** One beat's frame span — the beat→timeline map a re-cut reads to synthesize
+ * the words heard across a range. The voice ids are legacy: generated mode no
+ * longer places a voice spine, so they ride only on plans persisted before the
+ * video model burned each shot's narration in itself. */
 export interface BeatVoice {
-  /** The voiced clip's asset id. Absent while the plan is still on estimated
-   * lengths (pre-approval); set once the beat is voiced. */
   voiceAssetId?: string;
   startFrame: number;
   durationFrames: number;
-  /** The placed soundtrack clip id, once on the timeline (idempotent placement). */
   voiceClipId?: string;
 }
 
@@ -127,7 +127,7 @@ export interface VideoProject {
   /** Provided mode: the dropped audio clip + its asset. */
   audioClipId?: string;
   audioAssetId?: string;
-  /** Generated mode: the written script, the voiced spine, and the music bed. */
+  /** Generated mode: the written script, the beat→frame map, and the music bed. */
   script?: ScriptPlan;
   beatVoices?: BeatVoice[];
   musicAssetId?: string;

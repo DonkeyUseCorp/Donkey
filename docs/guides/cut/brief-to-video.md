@@ -24,16 +24,18 @@ never replanned from scratch to change part of it.
 brief
   │  script — beats with arc, camera framing, dialogue
   ▼
+shot plan — the script cut into shots (user approves before money is spent)
+  ▼
 style bible — one look + a sheet per character and location
   │  (reference images minted once, from the user's references)
   ▼
-voicing — narration spine + music bed; shots rescale to real lengths
-  ▼            (user approves the plan before money is spent)
 keyframes — each shot's opening frame, rendered from the sheets
   ▼
-shots — video seeded from the keyframe, laddered down on failure
+shots — video seeded from the keyframe, laddered down on failure; the
+  │      model speaks the shot's line, so its audio is the narration
   ▼
-timeline — clips trimmed to their slice under the narration
+timeline — each clip trimmed to its slice, playing its own narration, a
+            music bed underneath
 ```
 
 The written plan decides *what* every shot is; the render steps decide only
@@ -75,9 +77,9 @@ instead — the same fixed words every shot:
 
 ## Where it's going
 
-Audio follows the same principles later: the narration spine generalizes to a
-music-driven spine with sparse on-screen caption beats instead of wall-to-wall
-narration, and pacing cut to the beat. Longer arcs (multi-scene episodes) are
+Audio follows the same principles later: wall-to-wall narration generalizes to
+a music-driven cut with sparse on-screen caption beats instead, and pacing cut
+to the beat. Longer arcs (multi-scene episodes) are
 the same plan data at larger scale — the sheets are what make a cast hold for
 thirty minutes, so they, not the shots, are the durable asset. The assistant
 already controls the whole editor and the bundled ffmpeg, so every post step —

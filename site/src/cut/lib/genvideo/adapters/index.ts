@@ -10,11 +10,12 @@
  * browser-only generation modules and the node self-test can keep importing the
  * fakes from it.
  *
- * No `lipSync` role: v1 has no hosted lip-sync, and `video.audioNative` is
- * false, so the orchestrator places each shot as b-roll under a separate
- * narration spine. `music` is always present but best-effort — it degrades to
- * no bed when no music backend is configured. `review` is the dailies check:
- * every take is watched against its plan before it places.
+ * No `lipSync` role: there is no hosted lip-sync, and `video.audioNative` is
+ * false, so a provided-audio scene places each shot as muted b-roll under the
+ * user's spine, while a generated scene lets each shot's burned-in narration
+ * play. `music` is always present but best-effort — it degrades to no bed when
+ * no music backend is configured. `review` is the dailies check: every take is
+ * watched against its plan before it places.
  */
 
 import type { ModelSuite } from "../capabilities";
