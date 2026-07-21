@@ -333,13 +333,12 @@ function DocCard({ item, asset }: ChatCardProps) {
       <div className="flex items-center gap-1.5 border-b border-border px-2.5 py-1.5">
         <FileText className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{item.name}</span>
-        <button
-          title="Expand"
-          className={cn(scrimButton, "opacity-0 transition-opacity group-hover:opacity-100")}
-          onClick={() => expandRef(item, asset)}
-        >
-          <Maximize2 className="size-3" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 has-data-popup-open:opacity-100">
+          <button title="Expand" className={scrimButton} onClick={() => expandRef(item, asset)}>
+            <Maximize2 className="size-3" />
+          </button>
+          {asset && <ChatCardMenu asset={asset} triggerClassName={scrimButton} />}
+        </div>
       </div>
       <div className="relative max-h-44 overflow-hidden px-2.5 py-2 text-[11px] leading-relaxed">
         {failed ? (
