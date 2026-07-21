@@ -6,12 +6,18 @@
 // origin, so the https page may call it; the engine grants the hosted origin
 // CORS (see src/proxy.ts).
 //
-// The engine is found by probing its health endpoint across candidate ports:
-// the downloadable engine's dedicated port first, then the dev server's 3000.
-// The first healthy origin wins and is remembered for the session.
+// The mapping is fixed, with no fallback. A hosted page reaches exactly one
+// engine — the release app's, on its loopback port — by health-probing that
+// single origin; it never tries another port. A local page stays same-origin,
+// so its own dev server answers in-process. A dev Donkey app runs its engine on
+// its own port (DonkeyCutEnginePort) for that local surface, never reached from
+// the hosted page. The resolved origin is remembered for the session.
 import { DEFAULT_ENGINE_PORT } from "./ports";
 
-const ENGINE_PORTS = [DEFAULT_ENGINE_PORT, 3000];
+// The one engine the hosted page talks to: the release app's, on this Mac's
+// loopback. No probe list and no override — the page reaches this engine or
+// fails visibly, never silently binding a different one.
+const RELEASE_ENGINE_ORIGIN = `http://127.0.0.1:${DEFAULT_ENGINE_PORT}`;
 const PROBE_TIMEOUT_MS = 1200;
 // A first-ever loopback fetch from the hosted page hangs on the browser's
 // local-network permission prompt until the user answers it; the connect
@@ -61,12 +67,6 @@ export function engineLost() {
   window.dispatchEvent(new Event(ENGINE_LOST_EVENT));
 }
 
-function candidates(): string[] {
-  // Manual override for unusual setups, e.g. an engine on a custom port.
-  const saved = localStorage.getItem("cut-engine-origin");
-  return [...(saved ? [saved] : []), ...ENGINE_PORTS.map((p) => `http://127.0.0.1:${p}`)];
-}
-
 async function probe(origin: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   try {
     const res = await fetch(`${origin}/api/cut/engine/health`, {
@@ -88,11 +88,9 @@ export async function engineConnect(): Promise<boolean> {
     resolvedOrigin = "";
     return true;
   }
-  for (const c of candidates()) {
-    if (await probe(c, CONNECT_TIMEOUT_MS)) {
-      resolvedOrigin = c;
-      return true;
-    }
+  if (await probe(RELEASE_ENGINE_ORIGIN, CONNECT_TIMEOUT_MS)) {
+    resolvedOrigin = RELEASE_ENGINE_ORIGIN;
+    return true;
   }
   return false;
 }
@@ -107,11 +105,9 @@ export function engineProbe(): Promise<string> {
       resolvedOrigin = "";
       return "";
     }
-    for (const c of candidates()) {
-      if (await probe(c)) {
-        resolvedOrigin = c;
-        return c;
-      }
+    if (await probe(RELEASE_ENGINE_ORIGIN)) {
+      resolvedOrigin = RELEASE_ENGINE_ORIGIN;
+      return RELEASE_ENGINE_ORIGIN;
     }
     throw new Error("No Donkey Cut engine is reachable on this Mac.");
   })().finally(() => {
