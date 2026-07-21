@@ -14,6 +14,11 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let checkForUpdates: () -> Void
     private let installUpdate: () -> Void
+    /// The "Record Screen" menu item's title and glyph, or `nil` to omit it (pre-macOS 15). Read on
+    /// each menu open so the item reflects whether a recording is in progress.
+    private let screenRecordingMenuItem: () -> (title: String, symbolName: String)?
+    /// Opens the recording control bar, or stops an in-progress recording.
+    private let toggleScreenRecording: () -> Void
 
     /// Latest update-checker state; drives the update section of the menu. Setting it while the menu
     /// is open refreshes the update row in place, so a user-triggered check spins and resolves without
@@ -28,10 +33,14 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
 
     init(
         checkForUpdates: @escaping () -> Void,
-        installUpdate: @escaping () -> Void
+        installUpdate: @escaping () -> Void,
+        screenRecordingMenuItem: @escaping () -> (title: String, symbolName: String)? = { nil },
+        toggleScreenRecording: @escaping () -> Void = {}
     ) {
         self.checkForUpdates = checkForUpdates
         self.installUpdate = installUpdate
+        self.screenRecordingMenuItem = screenRecordingMenuItem
+        self.toggleScreenRecording = toggleScreenRecording
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -55,7 +64,15 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
     /// The shared item set — Go to App, the update section, and Quit. The status-item menu is
     /// exactly this; the app main menu appends it after About.
     func populateMenuItems(in menu: NSMenu) {
-        menu.addItem(makeItem(title: "Go to App", action: #selector(goToAppAction)))
+        menu.addItem(makeItem(title: "Go to App", action: #selector(goToAppAction), image: Self.donkeyMenuIcon()))
+
+        if let recording = screenRecordingMenuItem() {
+            menu.addItem(makeItem(
+                title: recording.title,
+                action: #selector(recordScreenAction),
+                image: Self.recordMenuIcon(symbolName: recording.symbolName)
+            ))
+        }
 
         menu.addItem(.separator())
         menu.addItem(updateItem())
@@ -64,10 +81,34 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(makeItem(title: "Quit Donkey", action: #selector(quitAction), keyEquivalent: "q"))
     }
 
-    private func makeItem(title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
+    private func makeItem(
+        title: String,
+        action: Selector,
+        keyEquivalent: String = "",
+        image: NSImage? = nil
+    ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
         item.target = self
+        item.image = image
         return item
+    }
+
+    /// The donkey glyph sized for a menu row, as a template so the menu recolors it for light/dark.
+    private static func donkeyMenuIcon() -> NSImage {
+        let glyph = loadGlyph()
+        glyph.size = NSSize(width: 16, height: 16)
+        glyph.isTemplate = true
+        return glyph
+    }
+
+    /// A red record/stop SF Symbol for the "Record Screen" row. Not a template, so the red shows.
+    private static func recordMenuIcon(symbolName: String) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.systemRed]))
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        image?.isTemplate = false
+        return image
     }
 
     /// The update section's single item, following the checker state: "Check for Updates" at rest,
@@ -125,6 +166,10 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
         default:
             checkForUpdates()
         }
+    }
+
+    @objc private func recordScreenAction(_ sender: Any?) {
+        toggleScreenRecording()
     }
 
     @objc private func goToAppAction(_ sender: Any?) {

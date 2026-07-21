@@ -30,6 +30,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Runs the Donkey Cut engine (the local server behind cut.donkeyuse.com) for the app's
     /// lifetime. Cut is free and standalone, so this starts regardless of sign-in state.
     private var cutEngineSupervisor: DonkeyCutEngineSupervisor?
+    /// The QuickTime-style screen recorder: a menu bar toggle, a center-bottom control bar, and the
+    /// region/window pickers. Free and standalone like Cut, so it installs regardless of sign-in.
+    private var screenRecordingController: ScreenRecordingController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ManualCaptureDebugLaunchHandler.shouldHandle(arguments: CommandLine.arguments) {
@@ -56,6 +59,8 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.onboardingWindowController?.close()
         }
         registerAuthCallbackHandler()
+        // Build the recorder before the status item so its menu can drive the "Record Screen" item.
+        self.screenRecordingController = ScreenRecordingController()
         installMainMenu()
         installStatusItem()
         startUpdateChecker()
@@ -174,6 +179,12 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             installUpdate: { [weak self] in
                 self?.updateChecker?.installAvailableUpdate()
+            },
+            screenRecordingMenuItem: { [weak self] in
+                self?.screenRecordingController?.menuItem
+            },
+            toggleScreenRecording: { [weak self] in
+                self?.screenRecordingController?.handleMenuItemClicked()
             }
         )
     }
