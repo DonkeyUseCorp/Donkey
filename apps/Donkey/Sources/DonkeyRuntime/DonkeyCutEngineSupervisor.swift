@@ -16,8 +16,17 @@ import Foundation
 ///
 /// Cut is free and standalone, so the engine runs regardless of Donkey sign-in state.
 public final class DonkeyCutEngineSupervisor: @unchecked Sendable {
-    /// The port the Cut client probes (see the site's engine discovery).
-    private static let port = 41417
+    /// The loopback port this build's engine binds, probes, and evicts stale engines on. The dev
+    /// app sets DonkeyCutEnginePort in its Info.plist (scripts/run-donkey-dev.sh) so its engine
+    /// and a release engine coexist instead of killing each other; the release build omits the
+    /// key and takes the default, which matches the hosted client's target (DEFAULT_ENGINE_PORT
+    /// in site/src/cut/lib/ports.ts).
+    private static let port: Int = {
+        let raw = Bundle.main.object(forInfoDictionaryKey: "DonkeyCutEnginePort")
+        if let n = raw as? Int { return n }
+        if let s = raw as? String, let n = Int(s) { return n }
+        return 41417
+    }()
 
     /// All mutable state is confined to this queue.
     private let queue = DispatchQueue(label: "donkey.cut-engine-supervisor")
@@ -129,6 +138,7 @@ public final class DonkeyCutEngineSupervisor: @unchecked Sendable {
         var environment = DonkeyCommandBackends.shellEnvironment()
         environment["DONKEY_CUT_ENGINE"] = "1"
         environment["DONKEY_CUT_VERSION"] = Self.appVersion
+        environment["DONKEY_CUT_PORT"] = String(Self.port)
         environment["DONKEY_CUT_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         if let tools = DonkeyCommandBackends.bundledToolsDirectory {
             environment["DONKEY_CUT_TOOLS_DIR"] = tools.path

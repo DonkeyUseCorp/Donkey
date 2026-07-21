@@ -21,6 +21,10 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 APP_ICON_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey.icns"
 APP_ICONSET_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey.iconset"
 AUTH_CALLBACK_SCHEME="${DONKEY_AUTH_CALLBACK_SCHEME:-donkey-dev}"
+# The dev engine binds its own loopback port (baked into the dev Info.plist below,
+# read by DonkeyCutEngineSupervisor) so it coexists with an installed release's
+# engine on 41417 instead of the two supervisors killing each other's engine.
+DEV_CUT_ENGINE_PORT="${DONKEY_DEV_CUT_ENGINE_PORT:-41418}"
 LAUNCH_APP="${DONKEY_LAUNCH_APP:-1}"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 SITE_PID=""
@@ -409,6 +413,8 @@ write_info_plist() {
   <true/>
   <key>DonkeyWebBaseURL</key>
   <string>$escaped_web_base_url</string>
+  <key>DonkeyCutEnginePort</key>
+  <integer>$DEV_CUT_ENGINE_PORT</integer>
   <key>DonkeyAuthCallbackScheme</key>
   <string>$escaped_callback_scheme</string>
   <key>DonkeyDevOverlayConfigPath</key>
@@ -485,11 +491,11 @@ create_debug_app_bundle() {
 
   # Build and stage the Donkey Cut engine so the app supervises a current copy — no separate
   # manual build step. Non-fatal: a Cut build hiccup shouldn't block Donkey dev (the app just
-  # runs without Cut). Set DONKEY_BUILD_CUT_ENGINE=0 to skip.
+  # runs without Cut).
   cut_engine_arch="$(uname -m)"
   [ "$cut_engine_arch" = "x86_64" ] && cut_engine_arch="x64"
   cut_engine="$ROOT_DIR/site/dist/cut-engine/donkey-cut-engine-$cut_engine_arch"
-  if [ "${DONKEY_BUILD_CUT_ENGINE:-1}" != "0" ] && [ -d "$ROOT_DIR/site" ]; then
+  if [ -d "$ROOT_DIR/site" ]; then
     echo "Building Donkey Cut engine..."
     bash "$ROOT_DIR/site/scripts/build-cut-engine.sh" ||
       echo "Warning: Cut engine build failed; running Donkey without Cut." >&2
