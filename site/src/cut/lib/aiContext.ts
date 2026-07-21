@@ -1,5 +1,6 @@
 "use client";
 
+import { chatOwner } from "./chatAssets";
 import { useGenerate } from "./generate";
 import { getClipSpans, overlayLayers, totalDuration, useEditor } from "./store";
 import { laneCues, subtitleLaneCount } from "./subtitles";
@@ -32,10 +33,25 @@ function transitionToNext(sp: ClipSpan, index: number, spans: ClipSpan[]) {
  * it off (a long transcript would inflate every turn's token cost, even ones
  * that never touch captions); the get_state tool passes it so the model can
  * pull every cue on demand.
+ *
+ * Each chat is independent: it sees the shared project, the Media panel, and
+ * the Library, but never another chat's private media or renders. `chatId`
+ * scopes that to the asking thread — an explicit id, else the live turn's (or
+ * open panel's) owner. Media and jobs a *different* chat still owns are left
+ * out; once media is placed on the timeline, filed into Media, or copied to
+ * the Library it stops being chat-private and shows to every chat.
  */
-export function buildAiContext(opts?: { fullCues?: boolean }) {
+export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | null }) {
   const s = useEditor.getState();
   const cueCap = opts?.fullCues ? Infinity : 60;
+  const chatId = opts?.chatId !== undefined ? opts.chatId : chatOwner();
+  const placed = new Set([...s.clips, ...s.audioClips].map((c) => c.assetId));
+  // An asset still owned by another chat: chat-made, tagged to a different
+  // thread, and not yet moved onto the timeline. Placed media is project
+  // content, so it stays visible even when a chat made it.
+  const ownedByOtherChat = (a: { origin?: string; chatId?: string; id: string }) =>
+    a.origin === "chat" && !!a.chatId && a.chatId !== chatId && !placed.has(a.id);
+  const visibleAssets = s.assets.filter((a) => !ownedByOtherChat(a));
   const spans = getClipSpans(s.clips, s.assets);
   const duration = totalDuration(s.clips);
   const assetById = new Map(s.assets.map((a) => [a.id, a]));
@@ -97,23 +113,31 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
     skimmer: s.skimTime === null ? null : r(s.skimTime),
     playing: s.playing,
     selection,
-    // Every project asset, timeline-placed or not. `origin` marks Cut-made
+    // Every project asset visible to this chat, timeline-placed or not (media
+    // another chat still owns is filtered out above). `origin` marks Cut-made
     // media (generated/voiceover/recording/stock/freeze); no origin = a user
     // import shown in the Media panel.
-    media: s.assets.slice(0, cueCap).map((a) => ({
+    media: visibleAssets.slice(0, cueCap).map((a) => ({
       id: a.id,
       name: a.name,
       type: a.type,
       duration: r(a.duration),
       ...(a.origin ? { origin: a.origin } : {}),
     })),
-    mediaTruncated: s.assets.length > cueCap,
+    mediaTruncated: visibleAssets.length > cueCap,
     // AI video renders for this project, live from the job store — what
     // "rendering" claims must be grounded in. A done render names the asset
     // it landed as (already in `media`); a failed one carries its error.
+    // Renders another chat launched stay out; chat-less panel renders show to
+    // every chat as shared project activity.
     renders: useGenerate
       .getState()
-      .jobs.filter((j) => j.kind === "video" && j.projectId === s.projectId)
+      .jobs.filter(
+        (j) =>
+          j.kind === "video" &&
+          j.projectId === s.projectId &&
+          !(j.chatId && j.chatId !== chatId)
+      )
       .slice(0, 8)
       .map((j) => ({
         jobId: j.id,
