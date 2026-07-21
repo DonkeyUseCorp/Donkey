@@ -4,10 +4,12 @@ import { isHostedRuntime } from "@/cut/server/local-only";
 // (src/cut/server/http/routes.ts) — the same one the packaged engine mounts.
 //
 // Cut is local-only: on a hosted deploy every Cut API 404s. The 404 is returned
-// here, before the dynamic import that pulls the router, so the engine's module
-// graph — including the ~220MB Claude Agent SDK CLI binary that ai.ts imports —
-// never loads on hosted. next.config's outputFileTracingExcludes then drops that
-// binary from the deployed function so it fits Vercel's size limit.
+// here, before the dynamic import that pulls the router, so the engine never
+// runs on hosted. Turbopack still *traces* that import, though, and the engine's
+// module graph reaches cwd-rooted file operations it can't statically scope — so
+// on hosted builds next.config aliases "@/cut/server/http/next" to a 404 stub,
+// keeping the engine (and the ~220MB SDK CLI binary it would otherwise sweep in)
+// out of the deployed function so it fits Vercel's size limit.
 export const runtime = "nodejs";
 
 async function handle(req: Request): Promise<Response> {

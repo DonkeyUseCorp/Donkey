@@ -13,14 +13,22 @@ const nextConfig: NextConfig = {
     serverActions: { bodySizeLimit: "4gb" },
     proxyClientMaxBodySize: "4gb",
   },
-  // Cut is local-only, so /api/cut/* 404s on a hosted deploy and never spawns the
-  // Claude Agent SDK. Its platform CLI binary (~220MB, and unusable on Vercel's
-  // runtime anyway) otherwise gets traced into the function and blows past
-  // Vercel's 250MB limit. Drop the whole SDK binary family from every function's
-  // trace; the /api/cut route returns 404 before the SDK is ever imported.
-  outputFileTracingExcludes: {
-    "/*": ["./node_modules/@anthropic-ai/claude-agent-sdk-*/**/*"],
-  },
+  // Cut is local-only: /api/cut/* 404s on a hosted deploy and never runs the
+  // engine. But Turbopack's file tracer still follows the route's import of the
+  // engine router, and that graph reaches cwd-rooted file operations it can't
+  // statically scope — so it sweeps local media, committed stock video, and the
+  // ~220MB Claude Agent SDK CLI binary into the serverless function, past
+  // Vercel's 250MB limit. (outputFileTracingExcludes can't help: it's a no-op
+  // under Turbopack builds.) On hosted builds only, alias the engine entry to a
+  // 404 stub so the engine graph is never traced; local builds keep the real
+  // router, so `next dev`/`next start` serve Cut normally.
+  turbopack: process.env.VERCEL
+    ? {
+        resolveAlias: {
+          "@/cut/server/http/next": "./src/cut/server/http/hosted-stub.ts",
+        },
+      }
+    : undefined,
 };
 
 const withMDX = createMDX({
