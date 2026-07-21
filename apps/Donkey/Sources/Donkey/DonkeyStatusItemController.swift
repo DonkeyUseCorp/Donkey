@@ -101,13 +101,13 @@ final class DonkeyStatusItemController: NSObject, NSMenuDelegate {
         return glyph
     }
 
-    /// A red record/stop SF Symbol for the "Record Screen" row. Not a template, so the red shows.
+    /// A record/stop SF Symbol for the "Record Screen" row, as a template so the menu draws it white
+    /// on the dark menu (and black on light) like the other rows, rather than a standout red.
     private static func recordMenuIcon(symbolName: String) -> NSImage? {
         let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [.systemRed]))
         let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration)
-        image?.isTemplate = false
+        image?.isTemplate = true
         return image
     }
 
