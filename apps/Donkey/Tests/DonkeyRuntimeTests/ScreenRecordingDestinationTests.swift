@@ -4,12 +4,13 @@ import Testing
 
 @Suite
 struct ScreenRecordingDestinationTests {
-    private static let referenceDate = Date(timeIntervalSince1970: 1_753_100_645) // 2025-07-21 in UTC
-
     @Test
     func fileNameFollowsQuickTimeShape() {
+        // fileName(for:) formats in the machine's local time zone (QuickTime names
+        // a recording by the user's wall clock), so build the instant in that same
+        // zone — otherwise the expected time drifts with the runner's zone.
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        calendar.timeZone = TimeZone.current
         let date = calendar.date(from: DateComponents(year: 2026, month: 7, day: 21, hour: 15, minute: 24, second: 5))!
 
         let name = ScreenRecordingDestination.fileName(for: date)
