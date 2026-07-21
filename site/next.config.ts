@@ -13,6 +13,14 @@ const nextConfig: NextConfig = {
     serverActions: { bodySizeLimit: "4gb" },
     proxyClientMaxBodySize: "4gb",
   },
+  // Cut is local-only, so /api/cut/* 404s on a hosted deploy and never spawns the
+  // Claude Agent SDK. Its platform CLI binary (~220MB, and unusable on Vercel's
+  // runtime anyway) otherwise gets traced into the function and blows past
+  // Vercel's 250MB limit. Drop the whole SDK binary family from every function's
+  // trace; the /api/cut route returns 404 before the SDK is ever imported.
+  outputFileTracingExcludes: {
+    "/*": ["./node_modules/@anthropic-ai/claude-agent-sdk-*/**/*"],
+  },
 };
 
 const withMDX = createMDX({
