@@ -17,7 +17,14 @@ import { hostedPost } from "../../hosted";
 import { captureVideoFrames } from "../../visualFrames";
 import { findRunAsset } from "../docWriter";
 import { imagePart } from "./refImages";
-import type { FrameCheckInput, ReviewInput, ReviewRole, ReviewVerdict } from "../capabilities";
+import type {
+  FrameCheckInput,
+  ReviewInput,
+  ReviewRole,
+  ReviewVerdict,
+  StoryboardInput,
+  StoryboardVerdict,
+} from "../capabilities";
 
 const MAX_FRAMES = 8;
 /** Aim for one frame every ~1s of take. */
@@ -40,6 +47,15 @@ Rules:
 const IDENTITY_INSTRUCTIONS = `You compare character designs for a production.
 Reply with JSON only: {"sameDesign": boolean, "drift": string}
 The first image is the canonical design sheet. The frames after it show a character in a rendered shot — possibly at a distance, in motion, or seen from behind. Judge STRUCTURE, not rendering detail: head and hair silhouette, face shape and eye style when visible, body proportions, and the outfit with its exact colors — except attire the stated shot plan changes (a uniform, swimwear, a costume): that outfit is the plan's, not drift, so judge everything but the clothes. Distance or motion blur losing fine detail is fine; a DIFFERENT design is not — a rounder or simplified head, different hair silhouette, or a redesigned face means sameDesign false, as does a changed outfit the plan did not call for. Seen only from behind or far away, judge silhouette (and outfit, when the plan keeps it) — and silhouette includes head shape: a round or bean-shaped head where the sheet has an angular or spiky-haired one is a DIFFERENT design at any distance. drift, when false, is one short retake direction naming the difference ("a bean-headed chibi with dot eyes — match the sheet's spiky-haired detailed anime boy").`;
+
+const STORYBOARD_INSTRUCTIONS = `You are a director reviewing a storyboard before it goes to camera. The images are the ordered opening frames of consecutive shots in ONE continuous short video; judge them as a sequence that must tell the logline's story.
+Reply with JSON only: {"panels": [{"ok": boolean, "note": string}]} — exactly one entry per panel, in the order given.
+Rules:
+- ok is whether this panel earns its place in the story: it depicts its own beat AND moves the story forward from the panel before it. A frame that shows the wrong subject or action for its beat, merely repeats the previous panel without progressing, or is generic filler any beat could use, is not ok.
+- Continuity between panels is part of the story: a recurring character and their wardrobe, a named prop the story carries, the location, and the time of day stay consistent from panel to panel unless a beat itself changes them. A panel that silently drops a carried prop, restyles a character, or teleports the setting is not ok.
+- Judge story and continuity, NOT drawing polish — a separate art pass handles technique. Forgive small rendering detail, camera choice, and pose.
+- note, when ok is false, is one short retake direction for THAT frame naming what to change so it carries the story ("show the boy still holding the red kite from the last panel, now running toward the shore"). Empty string when ok is true.
+- Return one entry per panel in order. A panel that works is {"ok": true, "note": ""}.`;
 
 const FRAME_INSTRUCTIONS = `You are a production's art director signing off one drawn frame against the production's benchmark sheet.
 Reply with JSON only: {"ok": boolean, "note": string}
@@ -94,6 +110,61 @@ The benchmark sheet — the artist to match:`,
       return { ok, ...(note ? { note } : {}) };
     },
 
+    async storyboard(input: StoryboardInput): Promise<StoryboardVerdict> {
+      const allOk = (): StoryboardVerdict => ({
+        notes: input.panels.map((p) => ({ shotId: p.shotId, ok: true })),
+      });
+      // Only panels whose frame resolves ride to the model — a missing frame
+      // has nothing to judge and passes. Numbered contiguously so the panel
+      // order the model replies in maps straight back to these shots.
+      const seen: { shotId: string; part: { data: string; mimeType: string } }[] = [];
+      const content: Record<string, unknown>[] = [
+        {
+          text: `Review this storyboard as one continuous short video, frames in order.
+The story (logline): ${input.logline || "(none written)"}
+The look: ${input.style || "(none)"}`,
+        },
+      ];
+      for (const p of input.panels) {
+        const asset = p.frameMediaId ? await findRunAsset(projectId, p.frameMediaId) : null;
+        const part = asset ? await imagePart(asset.url) : null;
+        if (!part) continue;
+        seen.push({ shotId: p.shotId, part });
+        content.push({
+          text: `Panel ${seen.length}${p.intent ? ` — purpose: ${p.intent}` : ""}: ${
+            p.action || "(no action written)"
+          }${p.narration ? ` — narration: "${p.narration}"` : ""}`,
+        });
+        content.push({ type: "input_image", dataBase64: part.data, mimeType: part.mimeType });
+      }
+      // Nothing to compare in isolation — a lone frame can't fail continuity.
+      if (seen.length < 2) return allOk();
+      const res = await hostedPost("/api/inference/responses", {
+        donkeyProvider: "gemini",
+        model: geminiModelRoles.review,
+        instructions: STORYBOARD_INSTRUCTIONS,
+        response_format: { type: "json_object" },
+        input: [{ role: "user", content }],
+      });
+      if (!res.ok) throw new Error("The review model is unavailable.");
+      const body = (await res.json()) as { output_text?: string };
+      const parsed = JSON.parse(body.output_text ?? "{}") as Record<string, unknown>;
+      const verdicts = Array.isArray(parsed.panels) ? parsed.panels : [];
+      const bySeen = new Map<string, StoryboardVerdict["notes"][number]>();
+      seen.forEach((s, i) => {
+        const v = (verdicts[i] ?? {}) as Record<string, unknown>;
+        const ok = v.ok !== false;
+        const note = typeof v.note === "string" ? v.note.trim() : "";
+        bySeen.set(s.shotId, { shotId: s.shotId, ok, ...(!ok && note ? { note } : {}) });
+      });
+      // Every panel gets a verdict; the ones with no frame default to ok.
+      return {
+        notes: input.panels.map(
+          (p) => bySeen.get(p.shotId) ?? { shotId: p.shotId, ok: true }
+        ),
+      };
+    },
+
     async watch(input: ReviewInput): Promise<ReviewVerdict> {
       // The take resolves wherever the run's project lives — store when open,
       // persisted doc when the user switched away mid-render.
@@ -115,7 +186,7 @@ The benchmark sheet — the artist to match:`,
       const content: Record<string, unknown>[] = [
         {
           text: `Review this take, shown as frames sampled along its ${clipSec.toFixed(1)}s.
-Planned action: ${input.action || "(none written — judge against the narration)"}
+${input.logline ? `The video's story: ${input.logline}\n` : ""}${input.intent ? `This shot's job in that story: ${input.intent}\n` : ""}Planned action: ${input.action || "(none written — judge against the narration)"}
 The plan's look: ${input.style || "(none — judge content only)"}
 Narration heard over the shot: ${input.narration ? `"${input.narration}"` : "(none)"}
 The timeline slot needs ${input.slotSec.toFixed(1)}s of this take.`,

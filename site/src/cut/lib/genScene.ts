@@ -343,6 +343,7 @@ function phaseActivity(phase: VideoPhase): string | undefined {
     case "voicing": return "Voicing the narration…";
     case "style": return "Designing the look, cast, and places…";
     case "keyframes": return "Drawing each shot's opening frame…";
+    case "storyboard": return "Storyboard ready — review the frames before rendering.";
     case "generating": return "Rendering shots…";
     case "polish": return "Assembling the final cut…";
     default: return undefined;
@@ -457,10 +458,11 @@ function statusFor(p: VideoProject): SceneStatus {
   if (p.phase === "failed") return "failed";
   if (p.phase === "done") return "done";
   if (p.breakdownApproved) return "generating";
-  // Unapproved: at the gate only once the plan exists. A run persisted
-  // mid-planning must hydrate as planning — an Approve button with no shot
-  // list behind it would render paid shots through a gate nobody reviewed.
-  return p.shots.length > 0 ? "awaiting_approval" : "planning";
+  // Unapproved: the approval gate opens only at the storyboard phase, once the
+  // frames are drawn and story-checked. Anything earlier (writing, designing,
+  // drawing frames) is still planning — an Approve button before the frames
+  // exist would offer to render a storyboard nobody has seen.
+  return p.phase === "storyboard" ? "awaiting_approval" : "planning";
 }
 
 /** Reconstruct the feed a reload lost: the assets the run already made, in
@@ -742,10 +744,21 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
   },
 
   regenerateShot: (n, note) => {
-    // After a reload the finished run has no live orchestrator — rebuild it
-    // from the persisted plan before deciding the scene "isn't done".
     const openId = useEditor.getState().projectId;
     if (!openId) return { ok: false, message: "Open a project first." };
+    // At the storyboard gate, "redo" re-draws the opening frame only — the
+    // cheap image, no take — and the run stays parked for approval. A note
+    // ("at night", "wider") rides into the frame and the shot's plan.
+    const gateRun = get().run;
+    if (gateRun && gateRun.projectId === openId && gateRun.status === "awaiting_approval") {
+      const orch = orchestrators.get(openId);
+      const id = orch?.shotIdByNumber(n);
+      if (!orch || !id) return { ok: false, message: `This scene has no shot ${n}.` };
+      orch.reviseStoryboardFrame(id, note).catch(() => {});
+      return { ok: true, message: note ? `Redrawing shot ${n} (${note})…` : `Redrawing shot ${n}…` };
+    }
+    // After a reload the finished run has no live orchestrator — rebuild it
+    // from the persisted plan before deciding the scene "isn't done".
     if (!orchestrators.get(openId) || !get().run) resumeDoneRun();
     const run = get().run;
     const orch = orchestrators.get(openId);

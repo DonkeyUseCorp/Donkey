@@ -11,6 +11,10 @@
  *
  *   brief → ingest → breakdown → (confirm) → style → keyframes → generating → polish → done
  *
+ * The keyframes phase closes with a storyboard read: the minted frames are
+ * judged as one ordered sequence and any that fail to carry the story forward
+ * are reworked before generation, so drift is caught while it is still cheap.
+ *
  * A run has one audio spine. In provided mode it is the user's dropped-in
  * audio: shots tile it, their own audio muted, each lip-synced to its slice
  * (inline for an audio-native model, else a lip-sync pass). In generated mode
@@ -97,16 +101,31 @@ export class VideoOrchestrator {
   async run(): Promise<VideoProject> {
     if (this.project.phase === "failed" || this.project.phase === "done") return this.project;
     return this.failLoudly(async () => {
-      const phases = [this.brief, this.ingest, this.breakdown];
-      for (const phase of phases) {
+      // Plan all the way to the storyboard: script/segment the shots, design the
+      // look and cast, draw every opening frame, then read the frames as one
+      // sequence and rework the ones that don't carry the story. The sheets and
+      // keyframes are cheap images; the expensive video is what waits behind the
+      // gate. Skipped once already past the gate (an approve or a resume of an
+      // approved run re-enters here).
+      if (!this.project.breakdownApproved && this.project.phase !== "storyboard") {
+        const plan = [this.brief, this.ingest, this.breakdown, this.style, this.keyframes];
+        for (const phase of plan) {
+          if (this.aborted) return this.project;
+          await phase.call(this);
+        }
         if (this.aborted) return this.project;
-        await phase.call(this);
+        // Park at the storyboard gate for the user to approve or edit the frames.
+        if (!this.project.breakdownApproved) {
+          this.setPhase("storyboard");
+          await this.save();
+          return this.project;
+        }
       }
-      if (!this.project.breakdownApproved) return this.project; // wait for confirmation
-      // Past the gate: the shots the user approved render as planned. Generated
-      // mode voices nothing — each shot's video carries its own narration — so
-      // the only spend beyond this point is the sheets, keyframes, and takes.
-      const paid = [this.style, this.keyframes, this.generateAndPlaceAll, this.polish];
+      if (!this.project.breakdownApproved) return this.project; // still parked at the gate
+      // Past the gate: the approved storyboard renders. Generated mode voices
+      // nothing — each shot's video carries its own narration — so the only
+      // spend beyond here is the takes and the music bed.
+      const paid = [this.generateAndPlaceAll, this.polish];
       for (const phase of paid) {
         if (this.aborted) return this.project;
         await phase.call(this);
@@ -137,12 +156,14 @@ export class VideoOrchestrator {
    * placed shots — so only the missing work re-bills. */
   async retryFailed(): Promise<VideoProject> {
     if (this.project.phase !== "failed") return this.project;
-    this.setPhase(this.project.breakdownApproved ? "style" : "brief");
+    // An approved run failed in generation — pick back up there; an unapproved
+    // one failed in planning, so re-plan to the storyboard gate.
+    this.setPhase(this.project.breakdownApproved ? "generating" : "brief");
     await this.save();
     return this.run();
   }
 
-  /** The user confirmed the shot list — continue the run. */
+  /** The user approved the storyboard — the shots render from here. */
   async approveBreakdown(): Promise<VideoProject> {
     this.project.breakdownApproved = true;
     // The approval gate is the last moment the user can set the project shape;
@@ -200,6 +221,7 @@ export class VideoOrchestrator {
           audioText: lines[pi] ?? "",
           dialogue: lines[pi] ?? "",
           action: beat.action,
+          ...(beat.intent ? { intent: beat.intent } : {}),
           characters: beat.characters,
           location: beat.location,
           framing: beat.framing,
@@ -307,7 +329,7 @@ export class VideoOrchestrator {
     this.deps.emit({ type: "asset", label: `Designed ${asset.name}`, mediaId: asset.mediaId, key: asset.id });
   }
 
-  // ── Phase D: keyframes (cheap, run in parallel) ──────────────────────────
+  // ── Phase D: keyframes (cheap, parallel) + storyboard coherence pass ─────
   private async keyframes(): Promise<void> {
     this.setPhase("keyframes");
     const need = this.project.shots.filter((s) => !s.startKeyframe && s.status !== "placed");
@@ -315,6 +337,64 @@ export class VideoOrchestrator {
     // Failures are fine here — a shot with no keyframe still gets a still sourced
     // in placeFallback, so nothing swallowed leaves a hole.
     await fanOut(need, (shot) => this.makeKeyframes(shot), this.poolOpts(1));
+    await this.save();
+    // The frames are a storyboard now: read them as one sequence and rework the
+    // ones that don't carry the story, BEFORE any of them seeds a paid render.
+    await this.reviewStoryboard();
+  }
+
+  /** Read the minted keyframes as an ordered storyboard and re-mint every frame
+   * that fails to carry the story forward — a wrong beat, a repeat, a dropped
+   * prop, a teleported setting — each with the reviewer's note. Best-effort and
+   * story-only (the same-artist gate already held every frame to the look): a
+   * reviewer outage, or a plan with only one frame, leaves the board as drawn.
+   * Runs once per keyframe pass, before generation, so the fix is cheap. */
+  private async reviewStoryboard(): Promise<void> {
+    if (this.aborted) return;
+    const storyboard = this.deps.suite.review?.storyboard;
+    if (!storyboard) return;
+    const board = this.project.shots.filter((s) => s.startKeyframe && s.status !== "placed");
+    if (board.length < 2) return;
+    let verdict;
+    try {
+      verdict = await storyboard({
+        logline: this.project.script?.logline?.trim() || this.project.brief,
+        style: this.project.style,
+        panels: board.map((s) => ({
+          shotId: s.id,
+          frameMediaId: s.startKeyframe,
+          action: s.action,
+          narration: (s.dialogue ?? s.audioText).trim(),
+          ...(s.intent ? { intent: s.intent } : {}),
+        })),
+      });
+    } catch {
+      return; // the board goes to camera unread — a gate, not a blocker
+    }
+    const flagged = verdict.notes.filter((n) => !n.ok && n.note);
+    if (flagged.length === 0) return;
+    this.deps.emit({
+      type: "log",
+      message: `Reworking ${flagged.length} storyboard frame${flagged.length > 1 ? "s" : ""} to carry the story.`,
+    });
+    await fanOut(
+      flagged,
+      async (note) => {
+        const shot = this.project.shots.find((s) => s.id === note.shotId);
+        if (!shot || this.aborted) return;
+        // Release the flagged frame only once its replacement exists — a failed
+        // re-mint restores it rather than leaving the shot frame-less.
+        const prior = shot.startKeyframe;
+        shot.startKeyframe = undefined;
+        try {
+          await this.makeKeyframes(shot, note.note);
+        } catch {
+          /* restored below */
+        }
+        shot.startKeyframe = shot.startKeyframe ?? prior;
+      },
+      this.poolOpts(0)
+    );
     await this.save();
   }
 
@@ -325,7 +405,7 @@ export class VideoOrchestrator {
     // The image model has no negative-prompt parameter, so the bans ride as
     // avoid-text — a letterboxed or off-medium keyframe seeds a bad video.
     const prompt = `${buildPrompt(shot, this.project)} Avoid: ${buildNegative(this.project)}.${
-      note ? ` Note from the last take's review: ${note}` : ""
+      note ? ` Note from the review: ${note}` : ""
     }`;
     shot.startKeyframe = await this.screenedImage(`${prompt} Opening frame.`, refs, shot.action);
     this.updateShot(shot, { status: "pending" });
@@ -470,6 +550,10 @@ export class VideoOrchestrator {
       return await this.deps.suite.review!.watch({
         videoMediaId: clip,
         action: shot.action,
+        // The story spine, so the take is judged as this beat of the video —
+        // not an action stranded from what it is for.
+        logline: this.project.script?.logline?.trim() || this.project.brief || undefined,
+        ...(shot.intent ? { intent: shot.intent } : {}),
         style: this.project.style,
         keyframeMediaId: shot.startKeyframe,
         // Identity is judged against the canonical sheets, not the keyframe —
@@ -639,6 +723,28 @@ export class VideoOrchestrator {
     return this.regenerateShots([id], (shot) => {
       shot.action = shot.action ? `${shot.action} ${note}`.trim() : note;
     });
+  }
+
+  /** Re-draw one shot's opening frame at the storyboard gate, before any video
+   * spends. A note nudges it ("at night", "wider") and becomes part of the
+   * shot's plan; with none, the frame is simply re-rolled. Only the cheap
+   * keyframe is remade — the run stays parked at the gate. A no-op once the plan
+   * is approved (from there `regenerateShots` re-renders the take). A failed
+   * re-mint leaves the prior frame in place. */
+  async reviseStoryboardFrame(id: string, note?: string): Promise<VideoProject> {
+    if (this.aborted || this.project.breakdownApproved) return this.project;
+    const shot = this.project.shots.find((s) => s.id === id);
+    if (!shot) return this.project;
+    if (note) shot.action = shot.action ? `${shot.action} ${note}`.trim() : note;
+    try {
+      // The nudge already rides `action` (buildPrompt carries it), so the
+      // re-mint needs no separate review note.
+      await this.makeKeyframes(shot);
+    } catch {
+      this.updateShot(shot, { status: "pending" }); // clear the spinner; the prior frame stands
+    }
+    await this.save();
+    return this.project;
   }
 
   /** Re-cut a contiguous span of shots against the same audio: the segmenter

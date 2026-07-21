@@ -154,9 +154,13 @@ async function run(): Promise<void> {
     const project = baseProject({ audioMode: "provided", audioClipId: "audio-clip", audioAssetId: "audio-asset", durationFrames: DURATION_FRAMES });
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
-    check("run pauses at breakdown", project.phase === "breakdown");
+    check("run pauses at the storyboard gate", project.phase === "storyboard");
     check("nothing placed before approval", editor.placed.length === 0);
-    project.shots[2].action = `${FAIL} a broken shot`; // dooms BOTH its keyframe and its video
+    // Doom the shot AT the gate: its opening frame was drawn during planning, so
+    // clear it too — the marker then fails both its re-mint and its video, and
+    // the shot must still fill its slot from a neighbor's frame.
+    project.shots[2].action = `${FAIL} a broken shot`;
+    project.shots[2].startKeyframe = undefined;
     await orch.approveBreakdown();
     check("run reaches done", project.phase === "done");
     check("no holes — every shot on the timeline", project.shots.every((s) => !!s.timelineClipId));
@@ -467,12 +471,14 @@ async function run(): Promise<void> {
     const { d } = deps(editor, { audioNative: true, failStyle: true });
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
-    await orch.run();
+    // Style now runs during planning (before the storyboard gate), so a failed
+    // design fails the run there — the gate never opens on a broken bible.
     let error = "";
-    await orch.approveBreakdown().catch((e: unknown) => {
+    await orch.run().catch((e: unknown) => {
       error = String(e);
     });
     check("a failed style design rejects the run", error.includes("fake style design failed"));
+    check("the run is marked failed", project.phase === "failed");
     check("no stand-in bible is installed", project.characters.length === 0);
     check("nothing rendered under a missing bible", project.shots.every((s) => s.status !== "placed"));
   }

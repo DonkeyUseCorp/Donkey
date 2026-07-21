@@ -38,6 +38,10 @@ export interface ScriptBeat {
   characters: string[];
   location: string;
   framing: string;
+  /** The beat's job in the arc — "establish the world", "the turn", "the
+   * payoff" — or a one-line director's note. Grounds the render and every
+   * judgment call in what the shot is FOR, not just what it depicts. */
+  intent?: string;
   approxSeconds: number;
 }
 
@@ -79,6 +83,10 @@ export interface Shot {
   dialogue?: string;
   /** What happens on screen — the motion, the beat. Text, never refs. */
   action: string;
+  /** The shot's job in the story (from its script beat) — grounds the render
+   * prompt and the storyboard/dailies judgment in what the shot is FOR. Absent
+   * in provided-audio mode, where shots come from a segmenter, not a script. */
+  intent?: string;
   characters: string[]; // character asset ids
   location: string; // location asset id ("" = unspecified)
   framing: string;
@@ -181,6 +189,10 @@ export type VideoPhase =
   | "breakdown"
   | "style"
   | "keyframes"
+  /** Planning is complete — the storyboard is drawn and story-checked — and the
+   * run is parked at the approval gate. The user approves or edits the frames
+   * here; no video spends until then. */
+  | "storyboard"
   | "generating"
   | "review"
   | "polish"

@@ -148,6 +148,11 @@ export interface ReviewInput {
   videoMediaId: string;
   /** What the plan wanted on screen. */
   action: string;
+  /** The video's one-line story, so the reviewer judges the take as this beat
+   * of that story — not as an isolated action divorced from what it is for. */
+  logline?: string;
+  /** This shot's job in the arc (its beat's intent) — the same grounding. */
+  intent?: string;
   /** The plan's look — the reviewer judges the medium against it strictly. */
   style?: string;
   /** The shot's approved opening frame — the take must match its rendering
@@ -191,12 +196,50 @@ export interface FrameCheckInput {
   subject: string;
 }
 
+/** One frame of the storyboard: a shot's opening keyframe and what it is for. */
+export interface StoryboardPanel {
+  /** The shot this frame opens — the verdict is keyed back to it. */
+  shotId: string;
+  /** The frame image to judge; absent panels are skipped (nothing to see). */
+  frameMediaId?: string;
+  /** What the beat depicts, what is heard over it, and its job in the arc. */
+  action: string;
+  narration: string;
+  intent?: string;
+}
+
+export interface StoryboardInput {
+  /** The video's one-line story the ordered frames must tell. */
+  logline: string;
+  style?: string;
+  /** The shots' opening frames, in timeline order. */
+  panels: StoryboardPanel[];
+}
+
+/** A per-frame verdict on whether it earns its place in the story. */
+export interface StoryboardNote {
+  shotId: string;
+  ok: boolean;
+  /** Retake direction for a frame that doesn't carry the story — carried into
+   * the frame's re-mint prompt. */
+  note?: string;
+}
+
+export interface StoryboardVerdict {
+  notes: StoryboardNote[];
+}
+
 export interface ReviewRole {
   /** Watch a rendered take against its plan — the dailies check. */
   watch(input: ReviewInput): Promise<ReviewVerdict>;
   /** Judge one minted frame against the production's benchmark BEFORE it seeds
    * a paid render — the same-artist gate. Optional; absent means no gate. */
   frame?(input: FrameCheckInput): Promise<ReviewVerdict>;
+  /** Read the whole storyboard as one sequence BEFORE any video spends, and
+   * flag every frame that doesn't carry the story forward — a wrong beat, a
+   * repeat, a dropped prop, a teleported setting. Optional; absent means the
+   * frames go to camera unread as a sequence. */
+  storyboard?(input: StoryboardInput): Promise<StoryboardVerdict>;
 }
 
 /** One model choice per role — what the orchestrator runs against. */

@@ -115,11 +115,12 @@ const distinct = (xs: string[]): string[] => Array.from(new Set(xs.filter(Boolea
 const SCRIPT_INSTRUCTIONS = `You are a short-video writer. Turn the brief into a spoken video plan.
 Reply with JSON only:
 {"logline": string, "style": string, "beats": [
-  {"dialogue": string, "action": string, "characters": ["char:1"], "location": "loc:1", "framing": string, "approxSeconds": number}
+  {"dialogue": string, "action": string, "characters": ["char:1"], "location": "loc:1", "framing": string, "intent": string, "approxSeconds": number}
 ]}
 Rules:
 - dialogue is the narration/spoken line for that beat (one or two sentences), action is what is shown on screen.
-- Shape the beats as a story, not a list: open by establishing the world, turn on a small surprise or decision, and end on a payoff image that resolves it.
+- logline is one sentence naming the whole video's story — the throughline every beat serves. intent is that beat's job in the story in a few words ("establish the world", "the turn", "the payoff", "raise the stakes"), so a shot rendered on its own still knows what it is FOR.
+- Shape the beats as a story, not a list: open by establishing the world, turn on a small surprise or decision, and end on a payoff image that resolves it. Every beat must move the story from the one before it — never a repeat or a generic filler image any beat could use.
 - framing is real camera language fit to the genre, varied beat to beat — wide establishing, close-up, insert of a telling detail (a sign, hands, an object), POV, follow shot, over-the-shoulder, aerial, macro, low angle, whatever the story calls for. Never the same framing twice in a row, and never treat this list as a quota.
 - action carries continuity: name the wardrobe items and props the story repeats (the book, the earbuds, the bag) in every beat where they appear, so shots rendered independently still match.
 - A shot cannot be trusted to render readable text: no signs, labels, charts, graphic overlays, or lettering beyond a single short word — information the viewer must read goes in the dialogue instead.
@@ -127,27 +128,71 @@ Rules:
 - Keep the whole thing near the requested length; each beat is about 4–8 seconds of narration.
 - style is a short reusable look for the whole video (medium, lighting, palette, mood), described by its visual traits — never a real brand, franchise, show, or artist name, even one the brief uses (a generator rejects trademarked names).`;
 
+/** One raw beat object → a validated ScriptBeat. Shared by the first draft and
+ * the coverage revision so both coerce identically (intent included). */
+function toBeat(b: unknown): ScriptBeat {
+  const beat = (b ?? {}) as Record<string, unknown>;
+  return {
+    dialogue: str(beat.dialogue),
+    action: str(beat.action),
+    characters: idList(beat.characters),
+    location: str(beat.location) || "loc:1",
+    framing: str(beat.framing) || "medium shot",
+    ...(str(beat.intent) ? { intent: str(beat.intent) } : {}),
+    approxSeconds: Math.max(2, Math.min(8, num(beat.approxSeconds, 6))),
+  };
+}
+
 function parseScript(o: Record<string, unknown>): ScriptPlan | null {
   const rawBeats = Array.isArray(o.beats) ? o.beats : [];
-  const beats: ScriptBeat[] = rawBeats
-    .map((b): ScriptBeat => {
-      const beat = (b ?? {}) as Record<string, unknown>;
-      return {
-        dialogue: str(beat.dialogue),
-        action: str(beat.action),
-        characters: idList(beat.characters),
-        location: str(beat.location) || "loc:1",
-        framing: str(beat.framing) || "medium shot",
-        approxSeconds: Math.max(2, Math.min(8, num(beat.approxSeconds, 6))),
-      };
-    })
-    .filter((b) => b.dialogue || b.action);
+  const beats: ScriptBeat[] = rawBeats.map(toBeat).filter((b) => b.dialogue || b.action);
   if (beats.length === 0) return null;
   return {
     logline: str(o.logline),
     beats,
     style: typeof o.style === "string" && o.style.trim() ? o.style.trim() : undefined,
   };
+}
+
+// ── brief-coverage self-check ────────────────────────────────────────────────
+
+const COVERAGE_INSTRUCTIONS = `You are a script editor checking a drafted shot plan against its brief before it goes into production.
+Reply with JSON only:
+{"missing": [string], "beats": [
+  {"dialogue": string, "action": string, "characters": ["char:1"], "location": "loc:1", "framing": string, "intent": string, "approxSeconds": number}
+]}
+Rules:
+- missing lists every concrete thing the brief explicitly asks to see or say that the drafted beats do not — a named subject, object, action, place, or event. Judge only what the brief actually calls for; invent no new requirements.
+- If nothing is missing, return {"missing": [], "beats": []} and change nothing.
+- Otherwise return a COMPLETE revised beats array: keep the beats that work, and add or repair beats so every missing element lands on screen or in the narration. Stay near the same number of beats and total length, reuse the same char:/loc: ids, and keep the story shape (establish, turn, payoff) with each beat advancing the one before it.
+- Every rule the draft followed still holds: dialogue is the spoken line, action is what the camera sees, intent is the beat's job in the story, framing is real camera language varied beat to beat, no on-screen text, and no real brand, franchise, show, or artist names.`;
+
+/** Second pass: verify the draft covers everything the brief asks for, and
+ * revise it in place when it doesn't. Best-effort — a failure (or an
+ * unparseable revision) keeps the draft, so coverage never blocks a run that
+ * already has a usable script. Skipped when there is no brief to check against. */
+async function reviseForCoverage(brief: string, plan: ScriptPlan): Promise<ScriptPlan> {
+  const drafted = plan.beats
+    .map((b, i) => `${i + 1}. [${b.intent || "—"}] ${b.action}${b.dialogue ? ` — "${b.dialogue}"` : ""}`)
+    .join("\n");
+  const user = `Brief: ${brief}
+
+Drafted beats:
+${drafted}
+
+List anything the brief asks for that these beats miss. If nothing is missing, return empty arrays; otherwise return a full revised beats array that covers it.`;
+  try {
+    const revised = await llmJson(COVERAGE_INSTRUCTIONS, user, (o) => {
+      const rawBeats = Array.isArray(o.beats) ? o.beats : [];
+      const beats = rawBeats.map(toBeat).filter((b) => b.dialogue || b.action);
+      // Never null: an empty array is the valid "nothing missing" answer, and
+      // llmJson would otherwise retry a correct verdict as unusable.
+      return { beats } as { beats: ScriptBeat[] };
+    });
+    return revised.beats.length ? { ...plan, beats: revised.beats } : plan;
+  } catch {
+    return plan; // the draft stands — the check is an enhancement, not a gate
+  }
 }
 
 export function makeScriptRole(): ScriptRole {
@@ -161,7 +206,11 @@ export function makeScriptRole(): ScriptRole {
       const user = `Write a spoken video plan for this brief. Aim for about ${targetSeconds} seconds total across roughly ${beatCount} beats.
 ${refNote}
 Brief: ${input.brief}`;
-      return llmJson(SCRIPT_INSTRUCTIONS, user, parseScript);
+      const plan = await llmJson(SCRIPT_INSTRUCTIONS, user, parseScript);
+      // A one-shot draft can silently drop something the brief asked for; the
+      // coverage pass catches that at the source, before any style, sheet,
+      // keyframe, or render spends against a story that doesn't match.
+      return input.brief.trim() ? reviseForCoverage(input.brief.trim(), plan) : plan;
     },
   };
 }

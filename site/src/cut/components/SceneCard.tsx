@@ -34,7 +34,7 @@ import { RefThumb } from "./AssetRefs";
 
 const STATUS_LABEL: Record<SceneRun["status"], string> = {
   planning: "Planning",
-  awaiting_approval: "Ready to render",
+  awaiting_approval: "Storyboard ready",
   generating: "Rendering",
   done: "Done",
   failed: "Failed",
@@ -141,7 +141,13 @@ export function SceneCard({ threadId }: { threadId: string }) {
               )}
             </button>
 
-            {open && <ShotStrip run={run} redoable={run.status === "done"} />}
+            {open && (
+              <ShotStrip
+                run={run}
+                redoable={run.status === "done" || run.status === "awaiting_approval"}
+                atGate={run.status === "awaiting_approval"}
+              />
+            )}
           </div>
         ) : (
           // Nothing rendered yet (planning, at the gate, or a run that died
@@ -246,7 +252,15 @@ export function SceneCard({ threadId }: { threadId: string }) {
  * Numbered placeholders with the planned description stand in while the frames
  * are still being cut, so the same grid carries the run from plan through
  * render without changing shape. */
-function ShotStrip({ run, redoable }: { run: SceneRun; redoable: boolean }) {
+function ShotStrip({
+  run,
+  redoable,
+  atGate,
+}: {
+  run: SceneRun;
+  redoable: boolean;
+  atGate: boolean;
+}) {
   const assets = useEditor((s) => s.assets);
   const aspect = useEditor((s) => s.aspect);
   const baseRatio = aspect === "9:16" ? 9 / 16 : 16 / 9;
@@ -260,6 +274,7 @@ function ShotStrip({ run, redoable }: { run: SceneRun; redoable: boolean }) {
           assets={assets}
           baseRatio={baseRatio}
           redoable={redoable}
+          atGate={atGate}
         />
       ))}
     </div>
@@ -268,22 +283,24 @@ function ShotStrip({ run, redoable }: { run: SceneRun; redoable: boolean }) {
 
 /** One grid tile: the shot's take once placed, else its opening frame, else a
  * numbered placeholder over the planned description — so a shot reads before it
- * has a frame. Click opens whatever exists in the lightbox; once the run is done
- * the hover redo button re-renders just this shot (the same gate the old plan
- * rows carried — a redo before then would bill an unapproved shot). Tiles are
- * borderless so the grid stays flat inside the card. */
+ * has a frame. Click opens whatever exists in the lightbox. The hover redo
+ * button works in two places: at the storyboard gate it re-draws just this
+ * frame (a cheap image, nothing rendered yet), and once the run is done it
+ * re-renders the whole shot. Tiles are borderless so the grid stays flat. */
 function ShotTile({
   shot,
   n,
   assets,
   baseRatio,
   redoable,
+  atGate,
 }: {
   shot: Shot;
   n: number;
   assets: MediaAsset[];
   baseRatio: number;
   redoable: boolean;
+  atGate: boolean;
 }) {
   const clip = shot.clip ? assets.find((a) => a.id === shot.clip) : undefined;
   const frame = shot.startKeyframe ? assets.find((a) => a.id === shot.startKeyframe) : undefined;
@@ -351,7 +368,7 @@ function ShotTile({
         {redoable && (
           <button
             type="button"
-            title="Redo this shot"
+            title={atGate ? "Redraw this frame" : "Redo this shot"}
             onClick={(e) => {
               e.stopPropagation();
               useGenScene.getState().regenerateShot(n);

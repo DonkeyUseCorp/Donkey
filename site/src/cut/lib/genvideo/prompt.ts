@@ -37,6 +37,10 @@ export function buildPrompt(shot: Shot, project: VideoProject): string {
     if (asset && !asset.mediaId) parts.push(sentence(`${asset.name}: ${asset.description}`));
   }
   if (shot.framing) parts.push(`Framing, ${shot.framing}.`);
+  // The beat's job in the story, phrased as direction — it steers the
+  // composition and motion toward what the shot is FOR, and rides late so it
+  // never outweighs the look or the action at the prompt's head.
+  if (shot.intent) parts.push(`This shot's role in the story: ${sentence(shot.intent)}`);
   parts.push(
     "One single continuous shot with fluid, continuous character motion throughout — smooth, natural movement, never held poses or stepped animation. Pure visual storytelling: no on-screen text of any kind — no captions, subtitles, speech bubbles, titles, signs, or lettering — and no split screens, panels, or storyboard collages. No baked-in editing effects: no transition frames, fades, motion-blur smears, borders, or blurred letterbox bands — the picture fills the frame edge to edge, composed upright for this frame with a level horizon; cuts and transitions are added later in the editor."
   );
