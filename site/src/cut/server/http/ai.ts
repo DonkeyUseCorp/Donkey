@@ -164,22 +164,20 @@ async function runCodex(
   signal: AbortSignal
 ) {
   const mcp = mcpCommand(base, sessionKey, user);
+  const session = body.providerSession;
   const args = ["exec"];
-  if (body.providerSession) args.push("resume", body.providerSession);
+  if (session) args.push("resume", session);
+  args.push("--json", "--skip-git-repo-check", "-m", body.model);
+  // `codex exec resume` inherits the original session's sandbox and working
+  // root, and its subcommand parser rejects --sandbox/-C. Pass those only on a
+  // fresh run; appending them to a resume exits the CLI with code 2.
+  if (!session) args.push("--sandbox", "read-only", "-C", os.tmpdir());
   args.push(
-    "--json",
-    "--skip-git-repo-check",
-    "--sandbox",
-    "read-only",
-    "-m",
-    body.model,
-    "-C",
-    os.tmpdir(),
     "-c",
     `mcp_servers.cut.command=${JSON.stringify(mcp.command)}`,
     "-c",
     `mcp_servers.cut.args=${JSON.stringify(mcp.args)}`,
-    body.providerSession ? prompt : `${systemPrompt()}\n\n${prompt}`
+    session ? prompt : `${systemPrompt()}\n\n${prompt}`
   );
 
   await new Promise<void>((resolve, reject) => {
@@ -232,8 +230,11 @@ async function runCodex(
     proc.on("close", (code) => {
       signal.removeEventListener("abort", onAbort);
       if (code !== 0 && !signal.aborted && code !== null) {
-        const tail = stderrTail.trim().split("\n").slice(-2).join(" ");
-        emit({ type: "error", errorText: `Codex exited with code ${code}. ${tail}`.trim() });
+        const lines = stderrTail.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+        // clap puts the real diagnostic on the first `error:` line; the tail is
+        // just Usage/`try '--help'` boilerplate. Surface the error line if present.
+        const detail = lines.find((l) => /^error[:\s]/i.test(l)) ?? lines.slice(-2).join(" ");
+        emit({ type: "error", errorText: `Codex exited with code ${code}. ${detail}`.trim() });
       }
       resolve();
     });
