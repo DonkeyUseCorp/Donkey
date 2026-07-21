@@ -47,17 +47,19 @@ export DONKEY_WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-http://localhost:3000}"
 # that hit the API directly (e.g. the GeminiLive smoke tests, which set
 # DONKEY_DEV_AUTH_BYPASS=1 themselves), not for normal app usage.
 
-stop_running_donkey_apps() {
-  killall Donkey >/dev/null 2>&1 || true
-  if [ "$DEV_DISPLAY_NAME" != "Donkey" ]; then
+# Stop only a prior DEV build so a rebuild (or script exit) doesn't leave two dev
+# instances running. Never touch an installed release: its process is "Donkey" from
+# "Donkey.app", while the dev build runs as "$DEV_EXECUTABLE_NAME" from
+# "$DEV_DISPLAY_NAME.app" with a separate bundle id, auth scheme, and Cut engine port,
+# so the two are meant to run side by side.
+stop_running_dev_donkey_apps() {
+  killall "$DEV_EXECUTABLE_NAME" >/dev/null 2>&1 || true
+  if [ "$DEV_DISPLAY_NAME" != "$DEV_EXECUTABLE_NAME" ]; then
     killall "$DEV_DISPLAY_NAME" >/dev/null 2>&1 || true
   fi
-  killall DonkeyUIUnderstandingSidecar >/dev/null 2>&1 || true
 
   if command -v pkill >/dev/null 2>&1; then
-    pkill -f '/Donkey\.app/Contents/MacOS/Donkey([[:space:]]|$)' >/dev/null 2>&1 || true
-    pkill -f '/Donkey Dev\.app/Contents/MacOS/Donkey([[:space:]]|$)' >/dev/null 2>&1 || true
-    pkill -f '/Donkey Dev\.app/Contents/MacOS/Donkey Dev([[:space:]]|$)' >/dev/null 2>&1 || true
+    pkill -f "/$DEV_DISPLAY_NAME\.app/Contents/MacOS/" >/dev/null 2>&1 || true
   fi
 }
 
@@ -102,7 +104,7 @@ purge_other_donkey_installs() {
 
 cleanup_child_processes() {
   if [ "$LAUNCH_APP" != "0" ] && [ "${DONKEY_KEEP_APP_ON_EXIT:-0}" != "1" ]; then
-    stop_running_donkey_apps
+    stop_running_dev_donkey_apps
   fi
   if [ -n "$LOG_PID" ] && kill -0 "$LOG_PID" >/dev/null 2>&1; then
     kill "$LOG_PID" >/dev/null 2>&1 || true
@@ -557,8 +559,8 @@ trap 'cleanup_on_signal 129' HUP
 ensure_site_server
 
 if [ "${DONKEY_STOP_APPS_BEFORE_BUILD:-1}" = "1" ]; then
-  echo "Stopping any running Donkey app..."
-  stop_running_donkey_apps
+  echo "Stopping any running Donkey Dev app..."
+  stop_running_dev_donkey_apps
 fi
 
 if [ "${DONKEY_PURGE_OTHER_INSTALLS:-1}" = "1" ]; then
