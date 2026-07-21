@@ -360,6 +360,11 @@ export function Timeline() {
     return (clientX - rect.left) / pps;
   };
 
+  // Where a dropped asset should land. An empty timeline has no arrangement to
+  // read a position against, so the drop starts the film at 0 no matter where
+  // the cursor released.
+  const dropTimeAt = (clientX: number) => (total <= 0 ? 0 : Math.max(0, timeAt(clientX)));
+
   // Scrub with auto-scroll when the pointer nears the viewport edges.
   const scrub = (e: React.PointerEvent) => {
     const s = useEditor.getState();
@@ -695,7 +700,7 @@ export function Timeline() {
           // Preview which audio row the sound would land on.
           setAudioDrop({
             row: audioRowAt(e.clientY),
-            t: Math.max(0, timeAt(e.clientX)),
+            t: dropTimeAt(e.clientX),
             len: duration,
           });
           setAssetDrop(null);
@@ -711,7 +716,7 @@ export function Timeline() {
         const place = resolveDropTrack(e.clientX, e.clientY);
         if (place.kind === "insert") {
           setAssetDrop(null);
-          setOverlayDrop({ target: place, t: Math.max(0, timeAt(e.clientX)), len: duration });
+          setOverlayDrop({ target: place, t: dropTimeAt(e.clientX), len: duration });
           return;
         }
         setOverlayDrop(null);
@@ -721,7 +726,7 @@ export function Timeline() {
         const cur = useEditor.getState();
         const taken = baseClips(cur.clips).map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
         setAssetDrop({
-          t: nextFreeStart(taken, Math.max(0, timeAt(e.clientX)), duration),
+          t: nextFreeStart(taken, dropTimeAt(e.clientX), duration),
           len: duration,
         });
       }}
@@ -741,7 +746,7 @@ export function Timeline() {
         setOverlayDrop(null);
         setAudioDrop(null);
         setDropType(null);
-        const t = Math.max(0, timeAt(e.clientX));
+        const t = dropTimeAt(e.clientX);
 
         // A library asset must be copied into the project before it can land.
         const lib = draggingLibrary();
