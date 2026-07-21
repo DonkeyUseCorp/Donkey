@@ -45,7 +45,39 @@ export interface LocalRow {
 // Jobs this tab started, so this tab (and only this tab) auto-downloads them
 // when they finish — the same one-download-per-export the single export gave.
 // Other tabs still see the job and can download it by hand from the dock.
-const ownDownloads = new Set<string>();
+// Persisted in sessionStorage (per-tab, so it never crosses tabs) so a reload
+// while an export is still rendering still auto-downloads the finished file on
+// completion, the way the old per-project reconnect did.
+const OWN_DOWNLOADS_KEY = "cut-own-exports";
+
+function loadOwnDownloads(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(OWN_DOWNLOADS_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const ownDownloads = loadOwnDownloads();
+
+function persistOwnDownloads() {
+  try {
+    sessionStorage.setItem(OWN_DOWNLOADS_KEY, JSON.stringify([...ownDownloads]));
+  } catch {
+    // Best-effort: without it, auto-download just won't survive a reload.
+  }
+}
+
+function rememberOwnDownload(id: string) {
+  ownDownloads.add(id);
+  persistOwnDownloads();
+}
+
+function forgetOwnDownload(id: string) {
+  ownDownloads.delete(id);
+  persistOwnDownloads();
+}
 
 interface ExportsState {
   /** The engine's export feed, reflected verbatim on each poll. */
@@ -82,7 +114,7 @@ export const useExports = create<ExportsState>((set, get) => ({
     }));
     try {
       const jobId = await createExportJob(projectId, doc, settings);
-      ownDownloads.add(jobId);
+      rememberOwnDownload(jobId);
       set((s) => ({ local: s.local.filter((r) => r.id !== localId) }));
       void get().refresh(); // show the queued job now, not on the next tick
     } catch (err) {
@@ -97,7 +129,7 @@ export const useExports = create<ExportsState>((set, get) => ({
 
   cancel: (id) => {
     cancelExportJob(id);
-    ownDownloads.delete(id);
+    forgetOwnDownload(id);
     set((s) => ({
       jobs: s.jobs.map((j) =>
         j.id === id ? { ...j, status: "error", error: "Export canceled." } : j
@@ -128,7 +160,7 @@ export const useExports = create<ExportsState>((set, get) => ({
       if (j.status === "done" && j.outName && ownDownloads.has(j.id)) {
         downloadExport(j.id, j.outName);
       }
-      if (settled) ownDownloads.delete(j.id);
+      if (settled) forgetOwnDownload(j.id);
     }
     set((s) => ({
       jobs: list,
