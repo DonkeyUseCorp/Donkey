@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type React from "react";
 import { Copy, ExternalLink, FileText, Film, Loader2, Maximize2, Plus } from "lucide-react";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -14,6 +14,7 @@ import {
   type AssetRefKind,
 } from "@/cut/lib/assetRef";
 import { useElapsed } from "@/cut/hooks/useElapsed";
+import { useHoverPlay } from "@/cut/hooks/useHoverPlay";
 import { useInView } from "@/cut/hooks/useInView";
 import { useGenerate } from "@/cut/lib/generate";
 import { lightboxItemFromRef, useLightbox } from "@/cut/lib/lightbox";
@@ -215,7 +216,7 @@ const scrimButton = scrimIconButton;
 /** Image / video tile: the preview fills the card at the media's own aspect,
  * sized so portrait and landscape both sit comfortably in the chat column. */
 function MediaCard({ item, asset }: ChatCardProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const { ref: videoRef, handlers: hoverPlay } = useHoverPlay();
   // Chat scrollback holds every card ever made; media loads only once the
   // card actually scrolls into view.
   const [tileRef, seen] = useInView<HTMLDivElement>();
@@ -231,25 +232,7 @@ function MediaCard({ item, asset }: ChatCardProps) {
       title={`${ref.name} — double-click to expand · drag to the timeline`}
       {...dragProps(item, asset)}
       onDoubleClick={() => expandRef(item, asset)}
-      onMouseEnter={() => {
-        const v = videoRef.current;
-        if (!v) return;
-        v.muted = false;
-        void v.play().catch(() => {
-          // Before any page interaction the browser refuses sound — keep the
-          // silent preview rather than none.
-          v.muted = true;
-          void v.play().catch(() => {});
-        });
-      }}
-      onMouseLeave={() => {
-        const v = videoRef.current;
-        if (v) {
-          v.pause();
-          v.muted = true;
-          v.currentTime = 0.1;
-        }
-      }}
+      {...(item.kind === "video" ? hoverPlay : {})}
     >
       {item.kind === "video" ? (
         // Native first frame as the poster — full-resolution, no blurry thumb.

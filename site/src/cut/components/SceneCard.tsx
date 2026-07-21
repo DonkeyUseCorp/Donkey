@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useHoverPlay } from "../hooks/useHoverPlay";
 import { refFromAsset, type AssetRef } from "../lib/assetRef";
 import { lightboxItemFromRef, useLightbox } from "../lib/lightbox";
 import { formatDuration, useGenScene, type SceneRun } from "../lib/genScene";
@@ -291,6 +292,7 @@ function ShotTile({
   const ratio = media?.width && media?.height ? media.width / media.height : baseRatio;
   const inFlight = SHOT_INFLIGHT.has(shot.status);
   const view = () => ref && useLightbox.getState().open(lightboxItemFromRef(ref));
+  const { ref: videoRef, handlers: hoverPlay } = useHoverPlay();
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div
@@ -303,12 +305,15 @@ function ShotTile({
         // The tile fills its column at the run's aspect; a tall 9:16 shot is
         // capped so two columns of a long plan stay a scannable height.
         style={{ aspectRatio: ratio, maxHeight: baseRatio < 1 ? 200 : undefined }}
+        {...(clip && ref ? hoverPlay : {})}
       >
         {clip && ref ? (
           <video
+            ref={videoRef}
             src={`${ref.url}#t=0.1`}
             preload="metadata"
             muted
+            loop
             playsInline
             className="size-full object-cover"
           />
@@ -432,6 +437,7 @@ function FeedEntry({
   pulse: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const { ref: videoRef, handlers: hoverPlay } = useHoverPlay();
   const inPlace = item?.kind === "image" || item?.kind === "video";
   const caption = (
     <span
@@ -456,12 +462,15 @@ function FeedEntry({
           style={{ width, aspectRatio: ratio }}
           title={`${item.name} — click to minimize`}
           onClick={() => setExpanded(false)}
+          {...(item.kind === "video" ? hoverPlay : {})}
         >
           {item.kind === "video" ? (
             <video
+              ref={videoRef}
               src={`${item.url}#t=0.1`}
               preload="metadata"
               muted
+              loop
               playsInline
               className="size-full object-cover"
             />
