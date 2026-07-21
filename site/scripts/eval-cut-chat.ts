@@ -592,6 +592,37 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
       },
     },
     {
+      // The screenshot regression: iterating on an existing clip ("make me a
+      // better version / closer to the original / a different take") ADDS a
+      // fresh generation and leaves the clip in place. Without an explicit
+      // "delete / replace / remove this", deleting the user's existing work
+      // to "make room" is wrong — the trap word "instead"/"version" is not a
+      // delete instruction.
+      name: "iterate-keeps-existing-clip",
+      input: () => [
+        userTurn("the beach clip feels off — make me a better version, more of a golden-hour sunset"),
+      ],
+      reply: /version|render|sunset|golden|minute|new|preview|kept|left|place/i,
+      requiredTools: ["generate_video"],
+      simulate: () => (name) => {
+        if (name === "delete_item")
+          throw new Error("delete_item — iterating is not a delete/replace; the existing clip must stay");
+        if (name === "delete_asset")
+          throw new Error("delete_asset — iterating must not remove the existing clip's media");
+        return undefined;
+      },
+      stubs: {
+        generate_video: {
+          kind: "video",
+          started: true,
+          jobId: "job-sunset",
+          addToTimeline: false,
+          note:
+            "Rendering a new take — it previews in this chat when it lands, in a minute or two. Your current clip stays put.",
+        },
+      },
+    },
+    {
       // Fast path: audio generation goes straight to voiceover_generate
       // (list_voices is a fine extra hop, more than that is a detour).
       name: "audio-ask-single-generate",
