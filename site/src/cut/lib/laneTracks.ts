@@ -358,10 +358,13 @@ export function startLaneMove<V = unknown>(
   // Clicking anywhere on the timeline pauses and moves the playhead — bars
   // included; otherwise playback rolls right past the point just picked.
   if (s.playing) s.setPlaying(false);
-  s.seek(
+  // Absolute time under the cursor at grab: it seeds the playhead, and the
+  // move gesture parts neighbors around it (below) so the point you grabbed
+  // stays the point you're pointing with.
+  const grabTime =
     (ui.visStart ?? self.start) +
-      (e.clientX - e.currentTarget.getBoundingClientRect().left) / ui.pps
-  );
+    (e.clientX - e.currentTarget.getBoundingClientRect().left) / ui.pps;
+  s.seek(grabTime);
   s.pushHistory();
 
   const start0 = self.start;
@@ -430,6 +433,7 @@ export function startLaneMove<V = unknown>(
       }
       const effDx = dx + ((scroller?.scrollLeft ?? sc0) - sc0);
       ds = Math.max(0, start0 + effDx / ui.pps);
+      const pointerTime = grabTime + effDx / ui.pps;
       const ghostY = dy - (rowEl ? rowEl.getBoundingClientRect().top - rowTop0 : 0);
 
       // Carried off its own lane set (an upper video layer headed to another
@@ -489,19 +493,21 @@ export function startLaneMove<V = unknown>(
           guide = best.px;
         }
       }
-      // Same-lane neighbors part around the slot: ones whose midpoint sits
-      // left of the ghost's center keep their spot (the slot lands after
-      // them), the rest slide right as a run to make room. A cross-dissolve
-      // is contact, not intrusion: the slot may overlap the neighbor before
-      // it by that neighbor's declared transition, and only pushes the run
-      // after it once the overlap into its first item exceeds the item's own
-      // declared transition.
+      // Same-lane neighbors part around the cursor: ones whose midpoint sits
+      // left of the pointer keep their spot (the slot lands after them), the
+      // rest slide right as a run to make room. Anchoring on the cursor rather
+      // than the ghost's geometric center lets a clip take the front as soon as
+      // you point past a neighbor's middle — a clip longer than the gap ahead
+      // could never drag its own center that far left, so it used to snap back.
+      // A cross-dissolve is contact, not intrusion: the slot may overlap the
+      // neighbor before it by that neighbor's declared transition, and only
+      // pushes the run after it once the overlap into its first item exceeds the
+      // item's own declared transition.
       const others = rest
         .filter((x) => x.view.lane === lane)
         .sort((a, b) => a.view.start - b.view.start);
-      const center = ds + len / 2;
-      const before = others.filter((x) => x.view.start + x.view.len / 2 <= center);
-      const after = others.filter((x) => x.view.start + x.view.len / 2 > center);
+      const before = others.filter((x) => x.view.start + x.view.len / 2 <= pointerTime);
+      const after = others.filter((x) => x.view.start + x.view.len / 2 > pointerTime);
       const prev = before[before.length - 1];
       const clampFloor = prev
         ? Math.max(
