@@ -822,7 +822,7 @@ export async function runAiTool(
       return {
         planned: true,
         shots: res.shotCount,
-        note: `${res.message} A plan card below lists the shots for the user, so keep your reply to one short line — don't re-describe the shots or the timing. Just ask them to confirm; when they do, call approve_scene (each shot spends credits, so don't approve on your own).`,
+        note: `${res.message} A storyboard card below shows each shot's opening frame for the user, so keep your reply to one short line — don't re-describe the shots or the timing. Ask them to review it; if they want a frame changed, call regenerate_shot (at this stage it just redraws that frame, no credits). When they approve, call approve_scene — that starts the paid video renders, so don't approve on your own.`,
       };
     }
 
