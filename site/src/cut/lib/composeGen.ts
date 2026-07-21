@@ -27,6 +27,11 @@ Reply with JSON {"prompt": string, "keepImages": number[]}:
 - keepImages lists the image numbers the model should receive: keep the ones the request edits, combines, or borrows a subject or style from; drop ones whose contribution is better said in words.
 - prompt must stand alone given only the kept images: refer to them by their content, and fold in whatever matters from the dropped references and any script or text from attached files, with the requested changes applied.`;
 
+const MUSIC_INSTRUCTIONS = `You prepare prompts for a text-to-music model that generates a track from a text description alone — it never hears or sees the references. The attachments are what the user wants the music to match: an audio track to emulate, or video/images whose mood the score should carry. Their request comes last.
+Reply with JSON {"prompt": string}:
+- prompt must fully describe the SOUND to generate so a new track can match the reference: genre, instrumentation, vocal style and gender (or that it is instrumental), mood, energy, tempo, and production feel. For an audio reference, describe what you actually hear — groove, arrangement, key feel — closely enough to recreate it; for visual references, translate their tone and pacing into music. Keep any language the lyrics should be in.
+- Describe everything by its musical traits. Never name a real artist, band, song, album, or brand — the model rejects those; state the characteristics instead.`;
+
 export interface ComposedGen {
   prompt: string;
   /** The reference pictures the generator should receive, in kept order. */
@@ -64,6 +69,35 @@ export async function composeGenPrompt(
         )
       : [];
     return { prompt: parsed.prompt.trim(), images: keep.map((n) => visuals[n - 1]) };
+  } catch {
+    return null;
+  }
+}
+
+/** Compose a music-generation prompt from the user's request and their media
+ * references. The music model reads only text, so a multimodal pass listens to
+ * each audio reference and looks at each visual one, then folds a description
+ * of the target sound into a stand-alone prompt. Null on any failure (or when
+ * no ref contributes anything) — the caller falls back to the raw prompt. */
+export async function composeMusicPrompt(
+  prompt: string,
+  refs: AssetRef[]
+): Promise<string | null> {
+  try {
+    const { parts } = await refsToParts(refs);
+    if (parts.length === 0) return null;
+    const res = await hostedPost("/api/inference/responses", {
+      donkeyProvider: "gemini",
+      model: geminiModelRoles.chat,
+      instructions: MUSIC_INSTRUCTIONS,
+      response_format: { type: "json_object" },
+      input: [{ role: "user", content: [...parts, { text: `Request: ${prompt}` }] }],
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { output_text?: string };
+    const parsed = JSON.parse(body.output_text ?? "") as { prompt?: unknown };
+    if (typeof parsed.prompt !== "string" || !parsed.prompt.trim()) return null;
+    return parsed.prompt.trim();
   } catch {
     return null;
   }
