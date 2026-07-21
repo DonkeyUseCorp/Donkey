@@ -162,10 +162,10 @@ export interface EditorState {
    * [startSec, endSec) on track 0 — exact start (no slide), muted, time-stretched
    * or trimmed to the slot — and return its id. Leaves selection untouched (the
    * run is a background process). */
-  placeGenClip: (assetId: string, startSec: number, endSec: number, opts?: { srcInSec?: number }) => string | null;
+  placeGenClip: (assetId: string, startSec: number, endSec: number, opts?: { srcInSec?: number; muted?: boolean }) => string | null;
   /** Brief-to-video placement: place a generated audio clip at startSec spanning
-   * up to durSec on the soundtrack (duck/lane optional), returning its id. */
-  placeGenAudio: (assetId: string, startSec: number, durSec: number, opts?: { duck?: number; lane?: number }) => string | null;
+   * up to durSec on the soundtrack (duck/lane/volume optional), returning its id. */
+  placeGenAudio: (assetId: string, startSec: number, durSec: number, opts?: { duck?: number; lane?: number; volume?: number }) => string | null;
   /** Remove a video clip by id (a background gen swap; leaves its slot empty). */
   removeClipById: (id: string) => void;
   /** Remove a soundtrack clip by id (background gen swap, idempotent placement). */
@@ -685,9 +685,10 @@ export const useEditor = create<EditorState>((set, get) => {
         start: Math.max(0, startSec),
         in: srcIn,
         out: srcIn + out,
-        // Muted: generated shots ride under the narration spine, so the clip's
-        // own audio (the model synthesizes some) must never compete with the voice.
-        muted: true,
+        // Muted only when the caller asks — a provided-audio scene mutes its
+        // b-roll under the user's spine, but a generated scene keeps the shot's
+        // own audio (the model burns the narration into the clip) audible.
+        muted: opts?.muted ?? true,
         ...(speed !== undefined ? { speed } : {}),
       };
       // Render-owned: no push(), and tracked so history snapshots exclude it —
@@ -709,7 +710,7 @@ export const useEditor = create<EditorState>((set, get) => {
         start: Math.max(0, startSec),
         in: 0,
         out,
-        volume: 1,
+        volume: opts?.volume ?? 1,
         ...(opts?.duck !== undefined && opts.duck < 1 ? { duck: Math.max(0, opts.duck) } : {}),
         ...(lane > 0 ? { lane } : {}),
       };

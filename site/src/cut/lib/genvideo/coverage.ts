@@ -226,7 +226,7 @@ function resplitOverMax(slices: Slice[], maxFrames: number): Slice[] {
 }
 
 /** Split text into `parts` roughly-equal word chunks (in order). */
-function sliceWords(text: string, parts: number): string[] {
+export function sliceWords(text: string, parts: number): string[] {
   if (parts <= 1) return [text];
   const words = text.split(/\s+/).filter(Boolean);
   const out: string[] = [];

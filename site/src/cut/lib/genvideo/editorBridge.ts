@@ -8,10 +8,12 @@
  *
  * Placement forwards to the store's id-returning gen actions (placeGenClip /
  * placeGenAudio / removeClipById / removeAudioById), which place at an exact
- * time without sliding, mute generated shots, and never touch the user's
- * selection — so a run populates the track in the background while the user
- * keeps editing. `importMedia` is identity: the media adapters already import
- * their output into the project, so what they return is a real asset id.
+ * time without sliding and never touch the user's selection — so a run
+ * populates the track in the background while the user keeps editing. A
+ * provided-audio scene mutes its b-roll under the user's spine; a generated
+ * scene leaves the shot's burned-in narration audible. `importMedia` is
+ * identity: the media adapters already import their output into the project, so
+ * what they return is a real asset id.
  *
  * Every mutation is scoped to the run's own project: the store holds one open
  * project at a time, and a background run whose project the user has since
@@ -96,7 +98,7 @@ export class StoreEditorBridge implements EditorBridge {
     mediaId: string,
     startFrame: number,
     endFrame: number,
-    opts?: { srcInSec?: number }
+    opts?: { srcInSec?: number; muted?: boolean }
   ): Promise<string> {
     if ((await this.mode()) === "store") {
       const id = useEditor.getState().placeGenClip(mediaId, toSec(startFrame), toSec(endFrame), opts);
@@ -105,7 +107,7 @@ export class StoreEditorBridge implements EditorBridge {
     }
     let placed: string | null = null;
     await withProjectDoc(this.projectId, (doc) => {
-      placed = docPlaceGenClip(doc, mediaId, toSec(startFrame), toSec(endFrame), opts?.srcInSec);
+      placed = docPlaceGenClip(doc, mediaId, toSec(startFrame), toSec(endFrame), opts?.srcInSec, opts?.muted ?? true);
     });
     if (!placed) throw new Error(`placeClip: no placeable asset ${mediaId}`);
     return placed;
@@ -165,11 +167,12 @@ export class StoreEditorBridge implements EditorBridge {
     mediaId: string,
     startFrame: number,
     durationFrames: number,
-    opts?: { kind?: "voice" | "music"; duck?: number; lane?: number }
+    opts?: { kind?: "voice" | "music"; duck?: number; lane?: number; volume?: number }
   ): Promise<string> {
     const audioOpts = {
       ...(opts?.duck !== undefined ? { duck: opts.duck } : {}),
       ...(opts?.lane !== undefined ? { lane: opts.lane } : {}),
+      ...(opts?.volume !== undefined ? { volume: opts.volume } : {}),
     };
     if ((await this.mode()) === "store") {
       const id = useEditor

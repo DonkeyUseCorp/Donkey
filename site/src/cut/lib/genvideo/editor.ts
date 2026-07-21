@@ -30,14 +30,16 @@ export interface EditorBridge {
   /**
    * Place a video clip on the video track so it exactly fills
    * [startFrame, endFrame). `srcInSec` starts the clip's source window there
-   * (the reviewer's chosen moment) instead of at 0. Returns the new timeline
-   * clip id.
+   * (the reviewer's chosen moment) instead of at 0. `muted` silences the clip's
+   * own audio — set for a provided-audio scene's b-roll, cleared for a generated
+   * scene whose shot carries its own burned-in narration (defaults to muted).
+   * Returns the new timeline clip id.
    */
   placeClip(
     mediaId: string,
     startFrame: number,
     endFrame: number,
-    opts?: { srcInSec?: number }
+    opts?: { srcInSec?: number; muted?: boolean }
   ): Promise<string>;
   /** Swap the media under an existing clip (regeneration), keeping its slot. */
   replaceClipMedia(clipId: string, mediaId: string): Promise<void>;
@@ -47,12 +49,13 @@ export interface EditorBridge {
   removeClip(clipId: string): Promise<void>;
   /** Add a transition from a clip into the next, in frames. */
   addTransition(clipId: string, style: string, durationFrames: number): Promise<void>;
-  /** Place audio (voiceover or a music bed) on the soundtrack. */
+  /** Place audio (voiceover or a music bed) on the soundtrack. `volume` sets its
+   * baseline gain — a music bed sits under the shots' burned-in narration. */
   placeAudio(
     mediaId: string,
     startFrame: number,
     durationFrames: number,
-    opts?: { kind?: "voice" | "music"; duck?: number; lane?: number }
+    opts?: { kind?: "voice" | "music"; duck?: number; lane?: number; volume?: number }
   ): Promise<string>;
   /** Remove a soundtrack clip, so voice/music placement stays idempotent. */
   removeAudio(clipId: string): Promise<void>;
@@ -64,6 +67,7 @@ export interface PlacedAudio {
   startFrame: number;
   durationFrames: number;
   kind: "voice" | "music";
+  volume?: number;
 }
 
 /** What the fake editor recorded for one placed clip. */
@@ -73,6 +77,7 @@ export interface PlacedClip {
   startFrame: number;
   endFrame: number;
   srcInSec?: number;
+  muted?: boolean;
   transition?: { style: string; durationFrames: number };
 }
 
@@ -100,10 +105,17 @@ export class FakeEditor implements EditorBridge {
     mediaId: string,
     startFrame: number,
     endFrame: number,
-    opts?: { srcInSec?: number }
+    opts?: { srcInSec?: number; muted?: boolean }
   ): Promise<string> {
     const clipId = `clip:${this.seq++}`;
-    this.placed.push({ clipId, mediaId, startFrame, endFrame, ...(opts?.srcInSec ? { srcInSec: opts.srcInSec } : {}) });
+    this.placed.push({
+      clipId,
+      mediaId,
+      startFrame,
+      endFrame,
+      ...(opts?.srcInSec ? { srcInSec: opts.srcInSec } : {}),
+      muted: opts?.muted ?? true,
+    });
     return clipId;
   }
 
@@ -130,10 +142,17 @@ export class FakeEditor implements EditorBridge {
     mediaId: string,
     startFrame: number,
     durationFrames: number,
-    opts?: { kind?: "voice" | "music"; duck?: number; lane?: number }
+    opts?: { kind?: "voice" | "music"; duck?: number; lane?: number; volume?: number }
   ): Promise<string> {
     const clipId = `audio:${this.seq++}`;
-    this.placedAudio.push({ clipId, mediaId, startFrame, durationFrames, kind: opts?.kind ?? "voice" });
+    this.placedAudio.push({
+      clipId,
+      mediaId,
+      startFrame,
+      durationFrames,
+      kind: opts?.kind ?? "voice",
+      ...(opts?.volume !== undefined ? { volume: opts.volume } : {}),
+    });
     return clipId;
   }
 

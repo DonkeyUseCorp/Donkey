@@ -10,8 +10,8 @@
  * load wait out in-flight writes so an open never reads a half-written doc.
  *
  * The clip/audio placement helpers mirror the store's placeGenClip /
- * placeGenAudio semantics exactly (fillSlot, muted shots, lanes) — the doc is
- * just the other end of the same contract.
+ * placeGenAudio semantics exactly (fillSlot, optional muting, lanes, volume) —
+ * the doc is just the other end of the same contract.
  */
 
 import { apiFetch, apiJson } from "../api";
@@ -102,14 +102,17 @@ export async function findRunAsset(
   return stored ? { ...stored, url: mediaUrl(projectId, stored.fileName) } : undefined;
 }
 
-/** placeGenClip against a doc: fill [startSec, endSec) exactly, muted, on
- * track 0, honoring the reviewer's source window. Returns the new clip id. */
+/** placeGenClip against a doc: fill [startSec, endSec) exactly on track 0,
+ * honoring the reviewer's source window. Muted only when asked (a provided-audio
+ * scene mutes its b-roll; a generated scene keeps the burned-in narration
+ * audible). Returns the new clip id. */
 export function docPlaceGenClip(
   doc: ProjectDoc,
   assetId: string,
   startSec: number,
   endSec: number,
-  srcInSec?: number
+  srcInSec?: number,
+  muted = true
 ): string | null {
   const asset = doc.assets.find((a) => a.id === assetId);
   if (!asset || (asset.type !== "video" && asset.type !== "image")) return null;
@@ -126,20 +129,21 @@ export function docPlaceGenClip(
     start: Math.max(0, startSec),
     in: srcIn,
     out: srcIn + out,
-    muted: true,
+    muted,
     ...(speed !== undefined ? { speed } : {}),
   };
   doc.clips = [...doc.clips, clip].sort((a, b) => a.start - b.start);
   return clip.id;
 }
 
-/** placeGenAudio against a doc — voiceover or music bed, ducked, on a lane. */
+/** placeGenAudio against a doc — voiceover or music bed, ducked, on a lane, at
+ * an optional baseline volume (a music bed sits under the burned-in narration). */
 export function docPlaceGenAudio(
   doc: ProjectDoc,
   assetId: string,
   startSec: number,
   durSec: number,
-  opts?: { duck?: number; lane?: number }
+  opts?: { duck?: number; lane?: number; volume?: number }
 ): string | null {
   const asset = doc.assets.find((a) => a.id === assetId);
   if (!asset || asset.type !== "audio") return null;
@@ -151,7 +155,7 @@ export function docPlaceGenAudio(
     start: Math.max(0, startSec),
     in: 0,
     out,
-    volume: 1,
+    volume: opts?.volume ?? 1,
     ...(opts?.duck !== undefined && opts.duck < 1 ? { duck: Math.max(0, opts.duck) } : {}),
     ...(lane > 0 ? { lane } : {}),
   };
