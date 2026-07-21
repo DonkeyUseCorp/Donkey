@@ -385,3 +385,49 @@ export async function detectSilence(
     silences.push({ start: round(open), end: round(to), duration: round(to - open) });
   return silences;
 }
+
+/** Pull a media file's audio track off as a small mono AAC stream so the
+ * assistant can hear it inline. Works for audio and video sources alike — the
+ * video image never travels, and 32 kbps keeps ~50 min under the model's
+ * inline cap. Times are absolute source seconds; an empty `to` runs to the end. */
+export function extractAudio(
+  projectId: string,
+  sourceFile: string,
+  opts: { from: number; to?: number },
+): Promise<Buffer> {
+  const { from, to } = opts;
+  return new Promise((resolve, reject) => {
+    const p = spawn("ffmpeg", [
+      "-hide_banner", "-nostats", "-loglevel", "error",
+      ...(from > 0 ? ["-ss", num(from)] : []),
+      ...(to !== undefined ? ["-t", num(to - from)] : []),
+      "-i", mediaPath(projectId, sourceFile),
+      "-vn", "-sn", "-dn",
+      "-ac", "1", "-ar", "24000", "-c:a", "aac", "-b:a", "32k",
+      "-f", "adts", "-",
+    ]);
+    const chunks: Buffer[] = [];
+    let err = "";
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      reject(new Error("Reading the audio timed out — try a shorter from/to range."));
+    }, 120_000);
+    timer.unref();
+    p.stdout.on("data", (d: Buffer) => chunks.push(d));
+    p.stderr.on("data", (d) => (err = (err + d.toString()).slice(-4000)));
+    p.on("error", (e) =>
+      reject(
+        e.message.includes("ENOENT")
+          ? new Error("ffmpeg was not found. Install it with: brew install ffmpeg")
+          : e,
+      ),
+    );
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0 && chunks.length > 0) return resolve(Buffer.concat(chunks));
+      if (/does not contain any stream|matches no streams|Cannot find a matching stream/i.test(err))
+        return reject(new Error("This file has no audio track."));
+      reject(new Error(errTail(err) || "Could not read the audio."));
+    });
+  });
+}

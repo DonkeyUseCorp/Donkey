@@ -49,6 +49,7 @@ export const CUT_ROUTES: CutRoute[] = [
   { method: "POST", path: "/api/cut/projects/:id/freeze", handler: (req, p) => projectsApi.freeze(req, { id: p.id }) },
   { method: "POST", path: "/api/cut/projects/:id/watch", handler: (req, p) => projectsApi.watch(req, { id: p.id }) },
   { method: "POST", path: "/api/cut/projects/:id/silence", handler: (req, p) => projectsApi.silence(req, { id: p.id }) },
+  { method: "POST", path: "/api/cut/projects/:id/audio", handler: (req, p) => projectsApi.audio(req, { id: p.id }) },
   { method: "POST", path: "/api/cut/projects/:id/duplicate", handler: (req, p) => projectsApi.duplicate(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/preview", handler: (req, p) => projectsApi.servePreview(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/export-jobs", handler: (req, p) => exportApi.activeForProject(req, { id: p.id }) },

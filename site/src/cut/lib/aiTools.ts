@@ -19,7 +19,7 @@ import {
   saveAssetToLibrary,
 } from "./library";
 import { enrichAsset, ensurePeaks, importImage, importStockVideo, importUrlMedia } from "./media";
-import { refToInlineAudio } from "./refMedia";
+import { blobToInlineAudio, refToInlineAudio, type InlineImage } from "./refMedia";
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
@@ -89,7 +89,7 @@ export async function runAiTool(
     case "watch_video": {
       const { projectId, asset, clip, speed, from, to } = resolveWatchRange(s, input);
       if (asset.type === "audio")
-        throw new ToolError(`"${asset.name}" is audio — detect_silence and subtitles_generate are the listening tools.`);
+        throw new ToolError(`"${asset.name}" is audio — listen_audio hears it, detect_silence finds its dead air.`);
       interface WatchBody {
         sheets: { image: string; frames: { t: number; scene?: number }[] }[];
         layout: { grid: number; margin: number; padding: number };
@@ -217,17 +217,28 @@ export async function runAiTool(
     }
 
     case "listen_audio": {
-      const asset = requireItem(s.assets, input.asset_id, "project asset");
-      if (asset.type !== "audio")
-        throw new ToolError("listen_audio is for audio assets — watch_video covers video and images.");
-      const inline = await refToInlineAudio(refFromAsset(asset));
+      const { projectId, asset, clip, from, to } = resolveWatchRange(s, input);
+      if (asset.type === "image")
+        throw new ToolError(`"${asset.name}" is an image — it has no sound. watch_video shows it.`);
+      // A whole audio asset rides its own file bytes. A video, or any trimmed
+      // range, gets its audio track pulled off by the engine first — so the
+      // muxed video never travels and a long source still fits the inline cap.
+      const wholeAudio = asset.type === "audio" && !clip && !isNum(input.from) && !isNum(input.to);
+      const inline = wholeAudio
+        ? await refToInlineAudio(refFromAsset(asset))
+        : await listenToSource(projectId, asset.fileName, from, to);
       if (!inline)
-        throw new ToolError("That audio file is too large to listen to inline (≈12MB cap).");
+        throw new ToolError(
+          "That stretch is too long to listen to inline (≈12MB cap) — pass a narrower from/to."
+        );
       // The `audio` data URL leaves the JSON in geminiChat and rides to the
       // model as an input_audio part, the way attachments do.
       return {
         name: asset.name,
         duration: round2(asset.duration),
+        ...(clip ? { clipId: clip.id } : {}),
+        ...(from > 0 ? { from: round2(from) } : {}),
+        ...(to !== undefined ? { to: round2(to) } : {}),
         audio: `data:${inline.mimeType};base64,${inline.data}`,
       };
     }
@@ -1665,6 +1676,26 @@ function resolveWatchRange(
   if (to !== undefined && to <= from)
     throw new ToolError("from/to describe an empty range of the source.");
   return { projectId, asset, clip, speed, from, to };
+}
+
+/** Pull a source's audio track off the engine (video and audio alike) and
+ * inline it for the model; null when the range clears the inline cap. */
+async function listenToSource(
+  projectId: string,
+  fileName: string,
+  from: number,
+  to: number | undefined,
+): Promise<InlineImage | null> {
+  const res = await apiFetch(`/api/cut/projects/${projectId}/audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file: fileName, from, ...(to !== undefined ? { to } : {}) }),
+  });
+  if (!res.ok) {
+    const body = await apiJson<{ error?: string }>(res).catch(() => ({ error: undefined }));
+    throw new ToolError(body.error ?? "Could not read the audio.");
+  }
+  return blobToInlineAudio(await res.blob());
 }
 
 function requireItem<T extends { id: string }>(pool: T[], id: unknown, label: string): T {

@@ -71,6 +71,20 @@ export async function blobToInline(blob: Blob): Promise<InlineImage> {
   return splitDataUrl(await blobToDataUrl(blob));
 }
 
+/** A media blob's bytes as an inline audio part, mime from the blob's own type
+ * (the engine's extractor hands back audio/aac). Null when it clears the inline
+ * cap — a longer stretch than the model can take at once. */
+export async function blobToInlineAudio(blob: Blob): Promise<InlineImage | null> {
+  if (blob.size > MAX_AUDIO_BYTES) return null;
+  const dataUrl = await blobToDataUrl(blob);
+  const comma = dataUrl.indexOf(",");
+  const labelled = dataUrl.slice(5, comma).split(";")[0];
+  return {
+    data: dataUrl.slice(comma + 1),
+    mimeType: labelled.startsWith("audio/") ? labelled : "audio/aac",
+  };
+}
+
 /** Video models take input images only as JPEG or PNG — the render rejects anything
  * else by format, killing the render after it was billed. Re-encode any other
  * picture (webp saved off the web is the common case) to PNG; jpeg and png

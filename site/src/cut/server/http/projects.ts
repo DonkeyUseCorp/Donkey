@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { ProjectDoc } from "@/cut/lib/types";
-import { detectSilence, makeContactSheets, makeFreezeFrame, probeDims, probeDuration } from "../frames";
+import { detectSilence, extractAudio, makeContactSheets, makeFreezeFrame, probeDims, probeDuration } from "../frames";
 import {
   createProject,
   createProjectFolder,
@@ -436,6 +436,25 @@ export const projectsApi = {
       return Response.json({ silences, from, to });
     } catch (e) {
       return caught(e, "Could not scan for silence.");
+    }
+  },
+
+  /** Extract a media file's audio track so the assistant can hear it (video and
+   * audio alike). Returns raw AAC bytes; the caller inlines them for the model. */
+  async audio(req: Request, { id }: { id: string }) {
+    try {
+      if (!(await readProject(id))) return err("Project not found.", 404);
+      const body = (await req.json()) as { file?: string; from?: number; to?: number };
+      if (!body.file) return err("file is required.", 400);
+      const from = Math.max(0, typeof body.from === "number" ? body.from : 0);
+      const to = typeof body.to === "number" ? body.to : undefined;
+      if (to !== undefined && !(to > from)) return err("from/to describe an empty range.", 400);
+      const audio = await extractAudio(id, body.file, { from, to });
+      return new Response(new Uint8Array(audio), {
+        headers: { "Content-Type": "audio/aac", "Content-Length": String(audio.length) },
+      });
+    } catch (e) {
+      return caught(e, "Could not read the audio.");
     }
   },
 };

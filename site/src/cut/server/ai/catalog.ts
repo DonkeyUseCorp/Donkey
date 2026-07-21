@@ -70,8 +70,13 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "listen_audio",
     description:
-      "Listen to a project audio asset with your own ears: its actual sound rides back inline (≈12MB cap) so you can answer what it says or how it sounds. Audio attached to the user's message already plays in it — this is for assets from `media`. For a clip's speech as text, subtitles_generate transcribes the cut.",
-    inputSchema: obj({ asset_id: str("Project audio asset id from `media`") }, ["asset_id"]),
+      "Listen with your own ears to a project asset's sound — an audio asset, or the audio track of a video (its speech, music, burned-in narration) — so you can answer what it says or how it sounds. The sound rides back inline (≈12MB cap). Pass clip_id for a timeline clip's source (scopes to its trim) or asset_id for the whole source; add from/to (source seconds) to hear one stretch of a long file. Audio the user attached to their message already plays in it. To WRITE a caption track, use subtitles_generate.",
+    inputSchema: obj({
+      clip_id: str("Clip id — video or soundtrack (defaults from/to to its trimmed in/out)"),
+      asset_id: str("Project asset id (audio or video) — listen to the whole source"),
+      from: num("Source start s (default: the clip's in, else 0)"),
+      to: num("Source end s (default: the clip's out, else the source's end)"),
+    }),
   },
   {
     name: "seek",
@@ -772,7 +777,7 @@ After renders land: spot-check with capture_frame or watch_video (aspect, style,
 
   "media-and-library": `# Media, Library & organizing
 Project media (\`media\` in editor_state) is every file in the open project. The Media panel shows the user's own imports — assets with no origin tag; created media (origin generated, voiceover, stock, chat, freeze, recording) lives where it was made until filed away.
-- add_clip / add_overlay_video place a project asset on the timeline; listen_audio plays an audio asset to you; watch_video is the visual sibling.
+- add_clip / add_overlay_video place a project asset on the timeline; listen_audio plays an asset's sound to you — an audio asset, or a video/clip's own track; watch_video is the visual sibling.
 - file_asset moves a created asset into Media (to:"media", clears its origin) or copies any asset into the Library (to:"library").
 - delete_asset removes an asset from the project plus its timeline clips; the media does not come back with undo, so only on an explicit ask, and say what went with it.
 The Library is shared across every project: folders, reusable assets, and templates — a template is a saved arrangement (clips, overlays, titles, captions, by reference) that comes back editable.
@@ -801,7 +806,7 @@ Rules:
 - Transcription tools write tracks the user sees — run subtitles_generate / captions_generate only when captions were asked for, never just to read the words: existing cues are in editor_state, and audio plays to you via listen_audio. Don't transcribe a video with no speech (subtitles_from_visuals narrates silent footage), and never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
 - generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud / generate_music make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. generate_music makes a music track — a vocal-free background bed by default ("add music to this video"), or a full sung song (instrumental:false); it's sung music, so a spoken narration is voiceover_generate. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this", and place project assets in the cut with add_clip when they ask for them there ("make a movie from these photos"). Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two. "Generate a video of/about X" means one generate_video clip; only when they name a narrated multi-shot production (a story, episode, narrated short) does generate_scene plan it and stop at the shot list — confirm with the user, then call approve_scene, since it renders many paid shots (regenerate_shot / recut_scene / restyle_scene revise it after).
-- You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; listen_audio plays a project audio asset; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
+- You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; listen_audio plays a source's audio — an audio asset or a video/clip's own track; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
 }
 
 export const AI_SKILL_INDEX = Object.keys(AI_SKILLS);
