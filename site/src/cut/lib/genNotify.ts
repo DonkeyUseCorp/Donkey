@@ -79,8 +79,8 @@ export function useGenPulse(tab: GenTab, assetId?: string): boolean {
  * skip the badge), and let its fresh tiles pulse for a few seconds after it
  * opens. A project switch drops everything — the tiles belong to the project
  * that made them. */
-export function useWatchGenTab(tab: string, projectId: string) {
-  const genTab = isGenTab(tab) ? tab : null;
+export function useWatchGenTab(tab: string | null, projectId: string) {
+  const genTab = tab != null && isGenTab(tab) ? tab : null;
   const pulsing = useGenNotify((s) => (genTab ? s.pulsing[genTab].length > 0 : false));
   useEffect(() => {
     useGenNotify.getState().reset();

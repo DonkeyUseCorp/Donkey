@@ -98,8 +98,10 @@ export function SidePanel({
   onImport: (files: FileList | File[]) => void;
   importing: boolean;
 }) {
-  const [tab, setTab] = useLocalPref<Tab>("cut-side-tab", "media", (v) =>
-    TABS.some((t) => t.id === v)
+  // `null` collapses the panel: clicking the active tab unselects it, leaving
+  // just the icon rail so the video canvas takes the freed width.
+  const [tab, setTab] = useLocalPref<Tab | null>("cut-side-tab", "media", (v) =>
+    v === null || TABS.some((t) => t.id === v)
   );
   // The Audio tab's Voice/Music sub-tab lives here so the Music sub-tab can lay
   // out as two columns — the generator plus the sample library — like Image/Video.
@@ -152,8 +154,14 @@ export function SidePanel({
 
   return (
     <div className="flex min-h-0 border-r border-border bg-card">
-      {/* Icon rail */}
-      <div className="flex min-h-0 w-[68px] shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-border py-3">
+      {/* Icon rail — its divider drops when collapsed so the panel's outer
+          border becomes the single line between the rail and the canvas. */}
+      <div
+        className={cn(
+          "flex min-h-0 w-[68px] shrink-0 flex-col items-center gap-1 overflow-y-auto py-3",
+          tab !== null && "border-r border-border"
+        )}
+      >
         {TABS.map(({ id, label, icon: Icon }) => {
           // The open tab never badges — its completions are already on screen.
           const unseenCount = isGenTab(id) && id !== tab ? unseen[id].length : 0;
@@ -185,7 +193,7 @@ export function SidePanel({
             <button
               className={tileClass}
               aria-pressed={tab === id}
-              onClick={() => setTab(id)}
+              onClick={() => setTab(tab === id ? null : id)}
               onDragOver={(e) => {
                 if (!acceptsDrop(id, e)) return;
                 e.preventDefault();
@@ -236,7 +244,7 @@ export function SidePanel({
         })}
       </div>
 
-      {tab === "image" || tab === "video" ? (
+      {tab === null ? null : tab === "image" || tab === "video" ? (
         // The generate tabs are two columns: the generate input on the left,
         // the stock reference browser on the right. Clicking a stock tile loads
         // its prompt into the generate panel beside it.
