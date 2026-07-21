@@ -27,6 +27,7 @@ final class ScreenRecordingController {
     private lazy var controlBar = RecordingControlBarController(model: model)
     private let regionOverlay = RegionSelectionOverlayController()
     private let windowPicker = WindowPickerOverlayController()
+    private let recordingDim = RecordingRegionDimOverlayController()
 
     private var recorder: (any ScreenRecording)?
     private var phase: Phase = .idle
@@ -105,6 +106,7 @@ final class ScreenRecordingController {
 
     private func cancel() {
         teardownOverlays()
+        recordingDim.close()
         controlBar.close()
         phase = .idle
         selectedRegion = nil
@@ -184,17 +186,26 @@ final class ScreenRecordingController {
             }
         }
 
+        // Swap the interactive picker for a non-interactive dim that keeps the un-recorded area darkened
+        // while recording. Both the dim and the control bar are excluded from the stream, so the
+        // recording captures the region's real content and neither overlay shows up in the file.
+        teardownOverlays()
+        if case .display(let displayID, let region) = target, let region {
+            recordingDim.show(region: region, displayID: displayID)
+        }
+
+        var excludedWindowIDs: [CGWindowID] = []
+        if let controlBarWindow = controlBar.windowNumber { excludedWindowIDs.append(CGWindowID(controlBarWindow)) }
+        if let dimWindow = recordingDim.windowNumber { excludedWindowIDs.append(CGWindowID(dimWindow)) }
+
         let configuration = ScreenRecordingConfiguration(
             target: target,
             capturesSystemAudio: audio.capturesSystemAudio,
             capturesMicrophone: audio.capturesMicrophone,
             microphoneDeviceID: audio.microphoneDeviceID,
-            excludedWindowIDs: controlBar.windowNumber.map { [CGWindowID($0)] } ?? [],
+            excludedWindowIDs: excludedWindowIDs,
             outputURL: ScreenRecordingDestination.makeOutputURL()
         )
-
-        // The pickers are gone once recording starts; only the (excluded) control bar remains.
-        teardownOverlays()
 
         let recorder = SCRecordingScreenRecorder()
         recorder.onUnexpectedStop = { [weak self] _ in self?.handleUnexpectedStop() }
@@ -209,10 +220,12 @@ final class ScreenRecordingController {
             startTimer()
         } catch ScreenRecordingError.screenRecordingPermissionDenied {
             self.recorder = nil
+            recordingDim.close()
             model.statusMessage = "Allow Screen Recording in System Settings, then try again."
             openScreenRecordingSettings()
         } catch {
             self.recorder = nil
+            recordingDim.close()
             model.statusMessage = "Couldn't start recording."
         }
     }
@@ -237,6 +250,7 @@ final class ScreenRecordingController {
     private func handleUnexpectedStop() {
         stopTimer()
         recorder = nil
+        recordingDim.close()
         phase = .idle
         controlBar.close()
     }
@@ -244,6 +258,7 @@ final class ScreenRecordingController {
     private func finishAfterRecording() {
         recorder = nil
         recordingStart = nil
+        recordingDim.close()
         phase = .idle
         model.isRecording = false
         model.isBusy = false
