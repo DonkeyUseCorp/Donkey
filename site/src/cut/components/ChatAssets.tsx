@@ -72,10 +72,27 @@ export function ChatProjectAsset({ assetId }: { assetId: string }) {
  * `stillAssetId` for a staged render's opening frame (shown above its job). */
 export function ToolOutputAssets({ output }: { output: unknown }) {
   if (!output || typeof output !== "object") return null;
-  const o = output as { assetId?: unknown; jobId?: unknown; stillAssetId?: unknown };
+  const o = output as {
+    assetId?: unknown;
+    jobId?: unknown;
+    stillAssetId?: unknown;
+    assets?: unknown;
+  };
+  // Tools that land several assets at once (import_url on an X post's photos, a
+  // video plus its poster) list them under `assets`, each with its own assetId
+  // — one card per asset. A listing like library_list keys entries by `id`, not
+  // `assetId`, so it renders nothing here.
+  const many = Array.isArray(o.assets)
+    ? o.assets
+        .map((a) => (a && typeof a === "object" ? (a as { assetId?: unknown }).assetId : undefined))
+        .filter((id): id is string => typeof id === "string")
+    : [];
   return (
     <>
       {typeof o.stillAssetId === "string" && <ChatProjectAsset assetId={o.stillAssetId} />}
+      {many.map((id) => (
+        <ChatProjectAsset key={id} assetId={id} />
+      ))}
       {typeof o.assetId === "string" ? (
         <ChatProjectAsset assetId={o.assetId} />
       ) : typeof o.jobId === "string" ? (
