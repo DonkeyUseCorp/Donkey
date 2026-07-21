@@ -280,26 +280,31 @@ async function runFake(emit: UIChunkWriter["write"], sessionKey: string, userTex
   }
 }
 
-function probe(cmd: string, args: string[]): Promise<{ ok: boolean; note: string }> {
+function probe(cmd: string, args: string[]): Promise<{ ok: boolean; note: string; installed: boolean }> {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 8000 }, (err, stdout, stderr) => {
       if (err) {
-        const note = err.message.includes("ENOENT")
+        // ENOENT means the binary isn't on PATH; any other error means it ran
+        // (installed) but exited non-zero. The page hides an uninstalled
+        // provider while still showing a sign-in prompt for an installed one.
+        const missing = err.message.includes("ENOENT");
+        const note = missing
           ? `${cmd} is not installed`
           : (stderr || err.message).trim().split("\n")[0];
-        resolve({ ok: false, note });
+        resolve({ ok: false, note, installed: !missing });
       } else {
         // Some CLIs (codex) report status on stderr.
-        resolve({ ok: true, note: (stdout.trim() || stderr.trim()).split("\n")[0] });
+        resolve({ ok: true, note: (stdout.trim() || stderr.trim()).split("\n")[0], installed: true });
       }
     });
   });
 }
 
 // Providers rarely change mid-session; cache probes for a minute.
+type ProviderStatus = { ok: boolean; note: string; installed: boolean };
 let aiProbe: {
   at: number;
-  value: { claude: { ok: boolean; note: string }; codex: { ok: boolean; note: string } };
+  value: { claude: ProviderStatus; codex: ProviderStatus };
 } | null = null;
 
 const mcpText = (value: unknown) => ({
@@ -401,10 +406,12 @@ export const aiApi = {
         probe("claude", ["--version"]),
         probe("codex", ["login", "status"]),
       ]);
-      const codex = codexLogin.ok
+      // The login probe running at all means codex is installed; only its
+      // ENOENT failure (carried through in codexLogin) marks it missing.
+      const codex: ProviderStatus = codexLogin.ok
         ? /logged in/i.test(codexLogin.note)
-          ? { ok: true, note: codexLogin.note }
-          : { ok: false, note: "Not signed in — run: codex login" }
+          ? { ok: true, note: codexLogin.note, installed: true }
+          : { ok: false, note: "Not signed in — run: codex login", installed: true }
         : codexLogin;
       value = { claude, codex };
       aiProbe = { at: Date.now(), value };
@@ -413,12 +420,12 @@ export const aiApi = {
     // engine only reports which provider CLIs are usable on this Mac.
     return Response.json({
       providers: {
-        claude: { available: value.claude.ok, note: value.claude.note },
-        codex: { available: value.codex.ok, note: value.codex.note },
+        claude: { available: value.claude.ok, note: value.claude.note, installed: value.claude.installed },
+        codex: { available: value.codex.ok, note: value.codex.note, installed: value.codex.installed },
         // Gemini chats run from the page through Donkey's hosted inference;
         // the browser overlays the real availability from its sign-in probe.
-        gemini: { available: true, note: "runs on your Donkey account" },
-        test: { available: true, note: "hermetic test provider" },
+        gemini: { available: true, note: "runs on your Donkey account", installed: true },
+        test: { available: true, note: "hermetic test provider", installed: true },
       },
     });
   },
