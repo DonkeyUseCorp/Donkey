@@ -157,7 +157,9 @@ class Engine {
       if (span.start <= t) continue; // current or past — not ours to warm
       if (span.start > t + WARM_HORIZON_S) break;
       const el = this.videoFor(span.clip, span.asset); // creating it starts the fetch
-      if (!isImageEl(el) && !el.seeking) {
+      // Only nudge a parked element back to its entrance frame — never yank the
+      // imminent clip that `warmNext` is priming (it's mid-play, so `!paused`).
+      if (!isImageEl(el) && !el.seeking && el.paused) {
         const target = span.clip.in;
         if (Math.abs(el.currentTime - target) > 0.1) el.currentTime = target;
       }
@@ -181,6 +183,44 @@ class Engine {
         el.currentTime = c.in;
       }
       if (++warmed >= WARM_MAX) break;
+    }
+  }
+
+  // Pipeline pre-roll state for the imminent next clip. A decode-ahead element
+  // has its entrance frame decoded but its decoder+audio pipeline cold, so the
+  // handoff `play()` spins up (tens of ms) before the clock advances — the
+  // residual hitch at a cut even with decode-ahead. `warmNext` exercises the
+  // pipeline once, muted, in the second before the cut, then parks the element
+  // back on its entrance frame.
+  private primeState = new WeakMap<MediaEl, "priming" | "primed">();
+
+  /** Warm the imminent next clip so its handoff is instant: hold its entrance
+   * frame decoded, then run the decoder+audio pipeline once (muted) and park it
+   * back on that frame. The real `play()` at the boundary resumes hot — the
+   * picture and audio start on the entrance frame with no spin-up, and nothing
+   * is skipped (unlike a running pre-roll, which would start the clip late). */
+  private warmNext(span: ClipSpan) {
+    const el = this.videoFor(span.clip, span.asset);
+    if (isImageEl(el)) return; // a still needs no pipeline
+    const state = this.primeState.get(el);
+    if (state === "priming") {
+      // The muted play has spun the pipeline up (buffered forward, or the clock
+      // has ticked past the entrance frame): park it back and mark it hot.
+      if (el.readyState >= 3 || el.currentTime > span.clip.in + 0.02) {
+        el.pause();
+        el.currentTime = span.clip.in;
+        this.primeState.set(el, "primed");
+      }
+      return;
+    }
+    // Hold the decoded entrance frame until the pipeline is ready to prime.
+    if (!el.seeking && Math.abs(el.currentTime - span.clip.in) > 0.1) {
+      el.currentTime = span.clip.in;
+    }
+    if (state !== "primed" && el.readyState >= 2 && !el.seeking) {
+      this.primeState.set(el, "priming");
+      el.muted = true;
+      void el.play().catch(() => this.primeState.delete(el));
     }
   }
 
@@ -332,11 +372,11 @@ class Engine {
     let incZoom = 1;
     let black = 0; // fade-to-black veil over the master clip, 0..1
     let gain = 1; // master audio follows the picture through a fade edge
-    // Warm the next clip's decoder shortly before its entrance (the dissolve
-    // start, or the hard cut) so it enters with a frame already decoded — a
-    // cold element would sit invisible for the first frames of the fade.
+    // Prime the next clip's decoder+audio pipeline shortly before its entrance
+    // (the dissolve start, or the hard cut) so the handoff `play()` resumes hot
+    // — no cold-start spin-up freezing the picture and playhead at the cut.
     if (next && t < next.start && t >= next.start - 1) {
-      this.prepare(next, next.start, false, true);
+      this.warmNext(next);
       keep.add(next.clip.id);
     }
     // Cross styles: once the incoming footprint starts, blend it in over the
