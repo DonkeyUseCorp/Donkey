@@ -6,7 +6,6 @@ import { Clapperboard, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/cut/lib/api";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
-import { useExport } from "@/cut/lib/exportStore";
 import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 // Side-effect import: registers the brief-to-video resume subscription, so a
@@ -18,7 +17,6 @@ import { projectDuration, serializeDoc, storedAssets, useEditor } from "@/cut/li
 import type { MediaAsset } from "@/cut/lib/types";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
-import { ExportStatus } from "./ExportStatus";
 import { Inspector } from "./Inspector";
 import { Lightbox } from "./Lightbox";
 import { Preview } from "./Preview";
@@ -60,8 +58,9 @@ export function Editor({
       .then(() => {
         for (const asset of useEditor.getState().assets) void enrichAsset(asset);
       });
-    // Rejoin an export that's still rendering (e.g. after a reload).
-    void useExport.getState().reconnect(projectId);
+    // An export still rendering after a reload rejoins on its own: the app-wide
+    // exports dock polls the engine's job feed, so it reappears with no per-
+    // project reconnect here.
   }, [projectId]);
 
   // Keep the project card's hover proxy fresh: rebuild it a few seconds after
@@ -435,7 +434,6 @@ export function Editor({
         />
       )}
       {exportOpen && <ExportDialog />}
-      <ExportStatus />
       <Lightbox />
     </div>
   );

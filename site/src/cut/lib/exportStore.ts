@@ -3,100 +3,167 @@
 import { create } from "zustand";
 import { apiFetch } from "./api";
 import {
+  cancelExportJob,
+  createExportJob,
   downloadExport,
-  pollExport,
-  startExport,
   type ExportDoc,
-  type ExportHandle,
   type ExportSettings,
 } from "./exportClient";
 
-// The current export, held outside the dialog so it keeps running (and stays
-// visible) after the dialog closes. One export at a time is plenty here.
+// Exports are tracked app-wide, not per-open-project. The engine holds every
+// export job in one process-global registry, so this store is a thin reflection
+// of that feed: every tab polls the same list and shows the same queue, and
+// starting an export in one project while another still renders just adds a row.
+// The dock (ExportsDock) renders it; the engine does the queueing.
 
-type Status = "idle" | "running" | "done" | "error";
-
-interface ExportState {
-  status: Status;
-  stage: string;
-  ratio: number;
-  /** Epoch ms when this export started (or was rejoined) — the running chip
-   * and dialog show a ticking elapsed from it. */
-  startedAt: number | null;
+export interface ExportJob {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  status: "queued" | "running" | "done" | "error";
+  progress: number; // 0..1
   outName?: string;
   error?: string;
-  projectId: string | null;
-  handle: ExportHandle | null;
-  start: (projectId: string, doc: ExportDoc, settings: ExportSettings) => void;
-  cancel: () => void;
-  dismiss: () => void;
-  /** After a reopen or reload, rejoin an export still running for a project. */
-  reconnect: (projectId: string) => Promise<void>;
+  /** Epoch ms the encode began (elapsed clock) and the job was created (order). */
+  startedAt?: number;
+  createdAt?: number;
 }
 
-export const useExport = create<ExportState>((set, get) => ({
-  status: "idle",
-  stage: "",
-  ratio: 0,
-  startedAt: null,
-  projectId: null,
-  handle: null,
+/** A client-only dock row for the brief window before the engine has a job id:
+ * while the cut is being built and uploaded ("preparing"), or when that failed
+ * before a job ever existed ("error"). Kept apart from the engine feed so a
+ * poll tick never clears it. */
+export interface LocalRow {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  status: "preparing" | "error";
+  error?: string;
+  createdAt: number;
+}
 
-  start: (projectId, doc, settings) => {
-    get().handle?.cancel();
-    set({
-      status: "running",
-      stage: "Preparing",
-      ratio: 0,
-      startedAt: Date.now(),
-      error: undefined,
-      outName: undefined,
-      projectId,
-    });
-    const handle = startExport(projectId, doc, settings, (stage, ratio) => set({ stage, ratio }));
-    set({ handle });
-    handle.done
-      .then(({ outName }) => set({ status: "done", outName, ratio: 1, handle: null }))
-      .catch((err: unknown) =>
-        set({
-          status: "error",
-          error: err instanceof Error ? err.message : String(err),
-          handle: null,
-        })
-      );
+// Jobs this tab started, so this tab (and only this tab) auto-downloads them
+// when they finish — the same one-download-per-export the single export gave.
+// Other tabs still see the job and can download it by hand from the dock.
+const ownDownloads = new Set<string>();
+
+interface ExportsState {
+  /** The engine's export feed, reflected verbatim on each poll. */
+  jobs: ExportJob[];
+  /** Rows that don't have an engine job yet (preparing / start error). */
+  local: LocalRow[];
+  /** Finished/failed engine jobs the user cleared from this tab's dock. */
+  dismissed: string[];
+  /** Build the cut and hand it to the engine; the dock tracks it from there. */
+  start: (
+    projectId: string,
+    doc: ExportDoc,
+    settings: ExportSettings,
+    projectName?: string
+  ) => Promise<void>;
+  cancel: (id: string) => void;
+  dismiss: (id: string) => void;
+  /** One poll of the engine feed. */
+  refresh: () => Promise<void>;
+}
+
+export const useExports = create<ExportsState>((set, get) => ({
+  jobs: [],
+  local: [],
+  dismissed: [],
+
+  start: async (projectId, doc, settings, projectName) => {
+    const localId = `local-${crypto.randomUUID().slice(0, 8)}`;
+    set((s) => ({
+      local: [
+        ...s.local,
+        { id: localId, projectId, projectName, status: "preparing", createdAt: Date.now() },
+      ],
+    }));
+    try {
+      const jobId = await createExportJob(projectId, doc, settings);
+      ownDownloads.add(jobId);
+      set((s) => ({ local: s.local.filter((r) => r.id !== localId) }));
+      void get().refresh(); // show the queued job now, not on the next tick
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      set((s) => ({
+        local: s.local.map((r) =>
+          r.id === localId ? { ...r, status: "error", error: msg } : r
+        ),
+      }));
+    }
   },
 
-  cancel: () => {
-    get().handle?.cancel();
-    set({ status: "idle", handle: null, ratio: 0, stage: "" });
+  cancel: (id) => {
+    cancelExportJob(id);
+    ownDownloads.delete(id);
+    set((s) => ({
+      jobs: s.jobs.map((j) =>
+        j.id === id ? { ...j, status: "error", error: "Export canceled." } : j
+      ),
+    }));
+    void get().refresh();
   },
 
-  dismiss: () =>
-    set({ status: "idle", ratio: 0, stage: "", error: undefined, outName: undefined }),
+  dismiss: (id) =>
+    set((s) => ({
+      local: s.local.filter((r) => r.id !== id),
+      dismissed: s.jobs.some((j) => j.id === id)
+        ? [...new Set([...s.dismissed, id])]
+        : s.dismissed,
+    })),
 
-  reconnect: async (projectId) => {
-    if (get().status === "running") return;
-    const list = (await apiFetch(`/api/cut/projects/${projectId}/export-jobs`)
-      .then((r) => (r.ok ? r.json() : []))
-      .catch(() => [])) as { id: string; status: string; progress: number; outName?: string }[];
-    const running = list.find((j) => j.status === "running");
-    if (!running) return;
-    // The true start predates the rejoin; counting from here still shows time
-    // moving, which is the point of the clock.
-    set({
-      status: "running",
-      stage: "Rendering",
-      ratio: running.progress,
-      startedAt: Date.now(),
-      projectId,
-    });
-    pollExport(running.id, (stage, ratio) => set({ stage, ratio }))
-      .then((outName) => {
-        downloadExport(running.id, outName);
-        set({ status: "done", outName, ratio: 1 });
-      })
-      .catch((err: unknown) =>
-        set({ status: "error", error: err instanceof Error ? err.message : String(err) })
-      );
+  refresh: async () => {
+    let list: ExportJob[];
+    try {
+      const res = await apiFetch("/api/cut/export-jobs");
+      if (!res.ok) return; // engine hiccup — keep the last good view
+      list = (await res.json()) as ExportJob[];
+    } catch {
+      return;
+    }
+    for (const j of list) {
+      const settled = j.status === "done" || j.status === "error";
+      if (j.status === "done" && j.outName && ownDownloads.has(j.id)) {
+        downloadExport(j.id, j.outName);
+      }
+      if (settled) ownDownloads.delete(j.id);
+    }
+    set((s) => ({
+      jobs: list,
+      dismissed: s.dismissed.filter((id) => list.some((j) => j.id === id)),
+    }));
   },
 }));
+
+// The dock is mounted app-wide, so polling runs the whole time the Cut app is
+// open. It quickens while work is in flight and idles between exports.
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let mounts = 0;
+
+export function beginExportPolling() {
+  mounts++;
+  if (pollTimer !== null) return;
+  const tick = async () => {
+    await useExports.getState().refresh();
+    if (mounts === 0) {
+      pollTimer = null;
+      return;
+    }
+    const s = useExports.getState();
+    const active =
+      s.local.length > 0 ||
+      s.jobs.some((j) => j.status === "queued" || j.status === "running");
+    pollTimer = setTimeout(tick, active ? 700 : 3000);
+  };
+  pollTimer = setTimeout(tick, 0);
+}
+
+export function endExportPolling() {
+  mounts = Math.max(0, mounts - 1);
+  if (mounts === 0 && pollTimer !== null) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}

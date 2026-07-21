@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { AppSurfaceBackground } from "@/app/app/_components/AppSurfaceBackground";
 import { ConnectGate } from "@/cut/components/ConnectGate";
+import { ExportsDock } from "@/cut/components/ExportsDock";
 import { RequireSession } from "@/cut/components/RequireSession";
 
 // The Cut app (projects home, library, editor) renders on the same white
@@ -19,7 +20,11 @@ export default function CutAppLayout({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-white font-system text-foreground antialiased">
       <AppSurfaceBackground />
       <RequireSession>
-        <ConnectGate>{children}</ConnectGate>
+        <ConnectGate>
+          {children}
+          {/* App-wide: exports keep showing as you move between projects. */}
+          <ExportsDock />
+        </ConnectGate>
       </RequireSession>
     </div>
   );

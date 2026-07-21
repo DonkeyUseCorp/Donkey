@@ -138,10 +138,6 @@ export interface ExportDoc {
   fadeOut?: number;
 }
 
-export interface ExportHandle {
-  cancel: () => void;
-  done: Promise<{ outName: string }>;
-}
 
 /** Build the export FormData from the cut. Media already lives in the project
  * folder — the spec references it by file name; only overlay PNGs travel with
@@ -391,37 +387,25 @@ export function downloadExport(jobId: string, outName: string) {
   a.remove();
 }
 
-export function startExport(
+/** Build the cut and hand it to the engine, returning the new job id. Progress,
+ * cancel, download, and the finished-file actions are all driven from the
+ * engine's job feed by the exports dock — this only kicks the render off, so it
+ * returns the moment the job is queued and never blocks on the encode. */
+export async function createExportJob(
   projectId: string,
   doc: ExportDoc,
-  settings: ExportSettings,
-  onProgress: (stage: string, ratio: number) => void
-): ExportHandle {
-  let jobId: string | null = null;
-  let canceled = false;
+  settings: ExportSettings
+): Promise<string> {
+  const form = await buildExportForm(projectId, doc, settings, "export");
+  const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
+  const body = await apiJson<{ id?: string }>(res);
+  if (!res.ok || !body.id) throw new Error(body.error ?? "Export failed to start.");
+  return body.id;
+}
 
-  const done = (async () => {
-    onProgress("Preparing", 0);
-    const form = await buildExportForm(projectId, doc, settings, "export");
-    onProgress("Starting encoder", 0);
-    const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
-    const body = await apiJson<{ id?: string }>(res);
-    if (!res.ok || !body.id) throw new Error(body.error ?? "Export failed to start.");
-    jobId = body.id;
-
-    const outName = await pollExport(jobId, onProgress, () => canceled);
-    onProgress("Done", 1);
-    downloadExport(jobId, outName);
-    return { outName };
-  })();
-
-  return {
-    done,
-    cancel: () => {
-      canceled = true;
-      if (jobId) void apiFetch(`/api/cut/export/${jobId}`, { method: "DELETE" });
-    },
-  };
+/** Cancel a running or queued export job by id. */
+export function cancelExportJob(jobId: string) {
+  void apiFetch(`/api/cut/export/${jobId}`, { method: "DELETE" }).catch(() => {});
 }
 
 /** Low-res proxy of the actual edit for the project card's hover preview.

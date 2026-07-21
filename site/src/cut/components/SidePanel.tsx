@@ -29,7 +29,7 @@ import {
 import type { AssetRef } from "@/cut/lib/assetRef";
 import { RefDropZone } from "./RefDropZone";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
-import { useExport } from "@/cut/lib/exportStore";
+import { useExports } from "@/cut/lib/exportStore";
 import {
   addAssetToLibraryTemplate,
   addLibraryAssetToProject,
@@ -330,7 +330,15 @@ function MediaPanel({
   // A render that finishes in the background (dialog closed) drops a new file in
   // the exports folder; re-read the list when it lands so it shows without a
   // manual refresh.
-  const exportStatus = useExport((s) => s.status);
+  // Refetch the finished-file list whenever an export for this project settles
+  // (its file lands in the exports folder). Counting settled jobs gives a value
+  // that changes exactly on that transition.
+  const exportsSettled = useExports(
+    (s) =>
+      s.jobs.filter(
+        (j) => j.projectId === projectId && (j.status === "done" || j.status === "error")
+      ).length
+  );
   const inputRef = useRef<HTMLInputElement>(null);
   const [exports, setExports] = useState<ExportItem[]>([]);
   const [preview, setPreview] = useState<ExportItem | null>(null);
@@ -348,7 +356,7 @@ function MediaPanel({
     return () => {
       alive = false;
     };
-  }, [projectId, exportOpen, exportStatus]);
+  }, [projectId, exportOpen, exportsSettled]);
 
   const removeExport = async () => {
     const it = deletingExport;
