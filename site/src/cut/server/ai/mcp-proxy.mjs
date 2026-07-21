@@ -4,9 +4,9 @@
  * the Next dev server. The engine binary launches the same core via its
  * `mcp-proxy` subcommand instead.
  *
- *   usage: node mcp-proxy.mjs <baseUrl> <sessionKey>
+ *   usage: node mcp-proxy.mjs <baseUrl> <sessionKey> <userId>
  */
 import { runMcpProxy } from "./mcp-proxy-core.mjs";
 
-const [, , BASE, SESSION] = process.argv;
-runMcpProxy(BASE, SESSION);
+const [, , BASE, SESSION, USER] = process.argv;
+runMcpProxy(BASE, SESSION, USER);

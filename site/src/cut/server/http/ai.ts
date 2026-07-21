@@ -14,6 +14,7 @@ import {
 import { rewriteCaptions, translateCaptions } from "../ai/captions";
 import { writeVisualCues, type VisualFrame } from "../ai/visualSubtitles";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, attachedAssetsBlock, systemPrompt } from "../ai/catalog";
+import { currentCutUser } from "../userScope";
 
 interface ChatBody {
   messages: UIMessage[];
@@ -29,11 +30,14 @@ const proxyPath = () =>
   path.join(process.cwd(), "src", "cut", "server", "ai", "mcp-proxy.mjs");
 
 /** How to spawn the MCP proxy. The engine binary spawns itself with its
- * mcp-proxy subcommand; the dev server spawns node on the proxy source. */
-function mcpCommand(base: string, sessionKey: string): { command: string; args: string[] } {
+ * mcp-proxy subcommand; the dev server spawns node on the proxy source. The
+ * account id rides along so the proxy's own engine calls carry the `u` scope
+ * every data route requires — without it tools/list 400s and the model, left
+ * with no editor tools, narrates tool calls as raw XML instead. */
+function mcpCommand(base: string, sessionKey: string, user: string): { command: string; args: string[] } {
   return process.env.DONKEY_CUT_ENGINE
-    ? { command: process.execPath, args: ["mcp-proxy", base, sessionKey] }
-    : { command: process.execPath, args: [proxyPath(), base, sessionKey] };
+    ? { command: process.execPath, args: ["mcp-proxy", base, sessionKey, user] }
+    : { command: process.execPath, args: [proxyPath(), base, sessionKey, user] };
 }
 
 function lastUserText(messages: UIMessage[]): string {
@@ -66,6 +70,7 @@ async function runClaude(
   body: ChatBody,
   base: string,
   sessionKey: string,
+  user: string,
   signal: AbortSignal
 ) {
   const q = query({
@@ -83,13 +88,20 @@ async function runClaude(
       mcpServers: {
         cut: {
           type: "stdio",
-          ...mcpCommand(base, sessionKey),
+          ...mcpCommand(base, sessionKey, user),
           alwaysLoad: true,
         },
       },
       allowedTools: ["mcp__cut"],
       permissionMode: "dontAsk",
       settingSources: [], // don't drag the user's CLAUDE.md/settings into app chats
+      // The editor MCP is the whole tool surface. settingSources:[] only drops
+      // filesystem config — the SDK still auto-fetches the account's claude.ai
+      // cloud connectors (Gmail, Drive, …) and surfaces them to the model.
+      // These two flags make the isolation total: no connectors, and no MCP
+      // server except the one we pass here.
+      strictMcpConfig: true,
+      settings: { disableClaudeAiConnectors: true },
       includePartialMessages: true,
       maxTurns: 30,
       cwd: os.tmpdir(),
@@ -104,6 +116,16 @@ async function runClaude(
     for await (const msg of q) {
       const m = msg as unknown as Record<string, unknown> & { type: string };
       if (m.type === "system" && m.subtype === "init") {
+        // The editor MCP is the assistant's entire tool surface. If it didn't
+        // bind (an engine hiccup, an out-of-scope proxy call), the model would
+        // improvise by narrating tool calls as raw XML — surface a clear error
+        // instead of letting that reach the user.
+        const tools = Array.isArray(m.tools) ? (m.tools as unknown[]) : [];
+        if (!tools.some((t) => typeof t === "string" && t.startsWith("mcp__cut"))) {
+          emit({ type: "error", errorText: "The editor tools didn't load. Reload the tab and try again." });
+          await q.interrupt().catch(() => {});
+          break;
+        }
         emit({ type: "data-session", data: { providerSession: m.session_id }, transient: true });
       } else if (m.type === "stream_event") {
         const ev = m.event as {
@@ -138,9 +160,10 @@ async function runCodex(
   body: ChatBody,
   base: string,
   sessionKey: string,
+  user: string,
   signal: AbortSignal
 ) {
-  const mcp = mcpCommand(base, sessionKey);
+  const mcp = mcpCommand(base, sessionKey, user);
   const args = ["exec"];
   if (body.providerSession) args.push("resume", body.providerSession);
   args.push(
@@ -336,6 +359,7 @@ export const aiApi = {
   async chat(req: Request) {
     const body = (await req.json()) as ChatBody;
     const base = new URL(req.url).origin;
+    const user = currentCutUser();
     const sessionKey = crypto.randomUUID();
     const userText = lastUserText(body.messages);
     const attachments = lastUserAttachments(body.messages);
@@ -351,11 +375,11 @@ export const aiApi = {
         emit({ type: "data-session", data: { sessionKey }, transient: true });
         try {
           if (body.model.startsWith("claude")) {
-            await runClaude(emit, prompt, body, base, sessionKey, req.signal);
+            await runClaude(emit, prompt, body, base, sessionKey, user, req.signal);
           } else if (body.model === "cut-test") {
             await runFake(emit, sessionKey, userText);
           } else {
-            await runCodex(emit, prompt, body, base, sessionKey, req.signal);
+            await runCodex(emit, prompt, body, base, sessionKey, user, req.signal);
           }
         } catch (err) {
           emit({ type: "error", errorText: err instanceof Error ? err.message : String(err) });

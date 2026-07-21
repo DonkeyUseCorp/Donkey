@@ -9,7 +9,12 @@
  * Two launchers share this core: mcp-proxy.mjs (dev, spawned by file path
  * with node) and the engine binary's `mcp-proxy` subcommand.
  */
-export function runMcpProxy(BASE = "http://localhost:3000", SESSION = "") {
+export function runMcpProxy(BASE = "http://localhost:3000", SESSION = "", USER = "") {
+  // Every Cut data route runs inside a user scope keyed by the `u` param; the
+  // proxy inherits the chatting account's id so its own tools/list and
+  // tools/call land in that same scope instead of 400ing as out-of-scope.
+  const scoped = (path) =>
+    USER ? `${path}${path.includes("?") ? "&" : "?"}u=${encodeURIComponent(USER)}` : path;
   let buffer = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {
@@ -25,6 +30,31 @@ export function runMcpProxy(BASE = "http://localhost:3000", SESSION = "") {
 
   function send(msg) {
     process.stdout.write(JSON.stringify(msg) + "\n");
+  }
+
+  const log = (line) => process.stderr.write(`[cut-mcp] ${line}\n`);
+
+  /**
+   * Fetch that rides out a transient blip reaching the engine (a dev-server
+   * recompile, an engine restart) instead of failing the whole call. Only for
+   * idempotent requests: a retried tools/call could double-run a paid render,
+   * so callers pass retry:true only for tools/list.
+   */
+  async function fetchEngine(url, init, label, retry) {
+    const attempts = retry ? 3 : 1;
+    let lastErr;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const res = await fetch(url, init);
+        if (res.ok) return res;
+        lastErr = new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+      }
+      log(`${label} attempt ${i}/${attempts} failed: ${lastErr.message}`);
+      if (i < attempts) await new Promise((r) => setTimeout(r, 150 * i));
+    }
+    throw lastErr;
   }
 
   async function handle(line) {
@@ -51,19 +81,28 @@ export function runMcpProxy(BASE = "http://localhost:3000", SESSION = "") {
       } else if (method === "ping") {
         reply({});
       } else if (method === "tools/list") {
-        const res = await fetch(`${BASE}/api/cut/ai/proxy?type=catalog`);
+        // Idempotent: retry so a momentary hiccup can't leave the model with an
+        // empty tool set (which reads to it as "editing tools aren't reachable").
+        const res = await fetchEngine(`${BASE}${scoped("/api/cut/ai/proxy?type=catalog")}`, undefined, "tools/list", true);
         const { tools } = await res.json();
         reply({ tools });
       } else if (method === "tools/call") {
-        const res = await fetch(`${BASE}/api/cut/ai/proxy`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionKey: SESSION,
-            name: params?.name,
-            args: params?.arguments ?? {},
-          }),
-        });
+        // No retry: the call may already have run on the editor by the time the
+        // response is lost, and re-running a generation tool would double-charge.
+        const res = await fetchEngine(
+          `${BASE}${scoped("/api/cut/ai/proxy")}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionKey: SESSION,
+              name: params?.name,
+              args: params?.arguments ?? {},
+            }),
+          },
+          `tools/call ${params?.name}`,
+          false
+        );
         const body = await res.json();
         reply(body); // { content: [...], isError? } — already MCP-shaped
       } else if (id !== undefined) {

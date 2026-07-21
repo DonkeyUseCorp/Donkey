@@ -53,6 +53,12 @@ export function callBrowserTool(
 ): Promise<{ output?: unknown; errorText?: string }> {
   const session = sessions.get(sessionKey);
   if (!session) {
+    // The proxy called with a key no open chat stream is registered under — a
+    // stale/mismatched session. Log which keys ARE live so a recurrence pins
+    // the drift instead of only surfacing to the model as "unreachable".
+    console.warn(
+      `[cut-ai] ${toolName}: no live editor session for ${sessionKey}; live: ${[...sessions.keys()].join(", ") || "none"}`
+    );
     return Promise.resolve({ errorText: "No live editor session for this chat." });
   }
   const toolCallId = crypto.randomUUID().slice(0, 12);
@@ -61,6 +67,7 @@ export function callBrowserTool(
     const timer = setTimeout(() => {
       session.waiters.delete(toolCallId);
       const errorText = `The editor did not answer the ${toolName} call in time.`;
+      console.warn(`[cut-ai] ${toolName}: editor tab did not answer within ${TOOL_TIMEOUT_MS}ms (session ${sessionKey})`);
       session.writer.write({ type: "tool-output-error", toolCallId, errorText });
       resolve({ errorText });
     }, TOOL_TIMEOUT_MS);

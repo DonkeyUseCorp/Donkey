@@ -28,9 +28,15 @@ export function runWithCutUser<T>(id: string, fn: () => T): T {
 /** The current request's per-user data root. Path helpers build on this, so a
  * path outside a user scope is impossible by construction. */
 export function cutUserRoot(): string {
+  return path.join(cutDataRoot(), "users", currentCutUser());
+}
+
+/** The account id bound to the current request. The AI chat threads it into the
+ * spawned MCP proxy so the proxy's own engine calls stay in the same scope. */
+export function currentCutUser(): string {
   const id = scope.getStore();
   if (!id) throw new Error("No user scope bound to this request.");
-  return path.join(cutDataRoot(), "users", id);
+  return id;
 }
 
 // Data written before user scoping lived directly under the data root. The
