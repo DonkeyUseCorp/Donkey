@@ -511,3 +511,14 @@ export interface ProjectSummary {
 
 export const mediaUrl = (projectId: string, fileName: string) =>
   apiUrl(`/api/cut/projects/${projectId}/media/${encodeURIComponent(fileName)}`);
+
+/** A filename-safe slug from a display name: lowercased, every run of
+ * non-alphanumerics collapsed to a hyphen, trimmed and capped, with `fallback`
+ * when nothing survives. Shared by every generated-media filename (music,
+ * voice, video) so the rule lives in one place. */
+export const mediaSlug = (name: string, fallback: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || fallback;

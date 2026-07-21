@@ -4,7 +4,7 @@ import { bytesFromBase64 } from "./bytes";
 import { hostedPost } from "./hosted";
 import { importFileToProject } from "./media";
 import { NoCreditsError } from "./tts";
-import type { MediaAsset } from "./types";
+import { mediaSlug, type MediaAsset } from "./types";
 
 // Client side of AI music generation: Gemini/Lyria on Donkey's hosted inference
 // routes, with the user's Donkey sign-in and credits (same-origin on the cut
@@ -41,16 +41,6 @@ async function readError(res: Response, fallback: string): Promise<string> {
       ? `${message} (${detail})`
       : message;
   return full ?? fallback;
-}
-
-function slug(name: string) {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "ai-music"
-  );
 }
 
 /** Display name for the track: the prompt, tidied and capped. */
@@ -91,7 +81,7 @@ export async function synthesizeMusic(
   // Cap whatever the label comes from — a caller-supplied name (the user's own
   // words when the prompt was composed from references) or the prompt itself.
   const label = musicName(opts?.name?.trim() || prompt);
-  const fileName = `ai-${slug(label)}.mp3`;
+  const fileName = `ai-${mediaSlug(label, "ai-music")}.mp3`;
   let file: File;
   if (out?.dataBase64) {
     file = new File([bytesFromBase64(out.dataBase64)], out.filename ?? fileName, {

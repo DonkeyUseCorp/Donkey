@@ -15,7 +15,7 @@ import { refsToInlineImages, videoSafeInline, visualRefs, type InlineImage } fro
 import { useGenNotify } from "./genNotify";
 import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
-import { mediaUrl, type MediaAsset } from "./types";
+import { mediaSlug, mediaUrl, type MediaAsset } from "./types";
 import { videoModel } from "./videoModels";
 import { walkLadder, type VideoAttempt } from "./videoLadder";
 
@@ -181,13 +181,6 @@ const promptName = (prompt: string) => {
   const line = prompt.trim().replace(/\s+/g, " ");
   return line.length > 60 ? `${line.slice(0, 57)}…` : line;
 };
-
-const promptSlug = (prompt: string) =>
-  prompt
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "generated";
 
 /** The Donkey sign-in URL for the current host (cut.* → apex). Image, video,
  * and voiceover all run on the user's Donkey account, so every generation
@@ -478,7 +471,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
     if (aborted()) return;
 
     const out = gen.outputs.find((o) => o.dataBase64) ?? gen.outputs.find((o) => o.url);
-    const fileName = `ai-${promptSlug(job.prompt)}.mp4`;
+    const fileName = `ai-${mediaSlug(job.prompt, "generated")}.mp4`;
     let file: File;
     if (out?.dataBase64) {
       file = new File([bytesFromBase64(out.dataBase64)], fileName, {

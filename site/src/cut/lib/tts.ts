@@ -4,7 +4,7 @@ import { geminiModels } from "@/lib/inference/gemini-models";
 import { bytesFromBase64 } from "./bytes";
 import { hostedPost } from "./hosted";
 import { importFileToProject } from "./media";
-import type { MediaAsset } from "./types";
+import { mediaSlug, type MediaAsset } from "./types";
 import {
   DEFAULT_VOICE,
   resolveVoice,
@@ -433,7 +433,7 @@ export async function speechClipToAsset(
   language?: string
 ): Promise<MediaAsset> {
   const label = name?.trim() || "AI voice";
-  const file = new File([blob], `${slug(label)}.wav`, { type: "audio/wav" });
+  const file = new File([blob], `${mediaSlug(label, "ai-voice")}.wav`, { type: "audio/wav" });
   const asset = await importFileToProject(projectId, file);
   if (!asset) throw new Error("Could not save the voiceover into the project.");
   asset.name = label;
@@ -457,14 +457,4 @@ export async function synthesizeSpeech(
   const { blob, offset, layout, language } = await renderSpeechClip(segments, opts);
   const asset = await speechClipToAsset(projectId, blob, opts.name, language);
   return { asset, offset, layout };
-}
-
-function slug(name: string) {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "ai-voice"
-  );
 }
