@@ -392,68 +392,71 @@ async function run(): Promise<void> {
     check("a fatal failure stops the walk before ungated rungs", !broke.out.ok && broke.ran.join(",") === "0" && broke.out.error === "No credits left");
   }
 
-  // ── Entry 2: brief only → script, voice, music, video ────────────────────
-  section('brief only → "a video of me and my son", audio-native video');
+  // ── Entry 2: brief only → script, video with burned-in narration, music ──
+  section('brief only → "a video of me and my son", burned-in narration');
   {
     const editor = emptyEditor();
-    const { d, studio } = deps(editor, { audioNative: true, videoVariant: "pro" });
+    const { d, studio } = deps(editor, { videoVariant: "pro" });
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
     check("wrote a script from the brief", !!project.script && project.script.beats.length > 0);
-    check("every shot has a spoken line", project.shots.every((s) => !!s.dialogue));
-    // The plan is laid out on estimated lengths; no TTS runs (spends) until the
-    // user approves. voiceAssetId lands only after the gate.
+    check("every shot carries its spoken line", project.shots.every((s) => !!s.dialogue?.trim()));
+    // Generated mode never voices: the video model burns each shot's line in.
     check("no voice spent before approval", studio.calls.every((c) => c.role !== "voice"));
-    check("shots not yet voiced at the gate", project.shots.every((s) => !s.voiceAssetId));
     await orch.approveBreakdown();
     check("run reaches done", project.phase === "done");
-    check("every shot voiced after approval", project.shots.every((s) => !!s.voiceAssetId));
-    assertTiling("placed clips tile the generated spine", editor.placed, project.durationFrames);
-    check("one voiceover placed per beat", editor.placedAudio.filter((a) => a.kind === "voice").length === (project.beatVoices?.length ?? -1));
+    check("still no voice spent after approval", studio.calls.every((c) => c.role !== "voice"));
+    assertTiling("placed clips tile the whole video", editor.placed, project.durationFrames);
+    check("generated shots play their own audio (not muted)", editor.placed.every((c) => c.muted === false));
+    check("no separate narration track placed", editor.placedAudio.filter((a) => a.kind === "voice").length === 0);
     check("a single music bed spans the whole video", editor.placedAudio.filter((a) => a.kind === "music").length === 1);
-    check("audio-native video carried audio inline, no lip-sync pass", studio.calls.some((c) => c.role === "video" && c.detail.includes("+audio")) && studio.calls.every((c) => c.role !== "lipsync"));
+    check(
+      "the music bed sits under the narration at a bed level",
+      editor.placedAudio.filter((a) => a.kind === "music").every((a) => a.volume !== undefined && a.volume < 1)
+    );
+    check("no lip-sync pass — generated mode passes the model no audio", studio.calls.every((c) => c.role !== "lipsync"));
   }
 
-  // ── finding 10: a line longer than one clip spans shots, not truncated ───
-  section("long voiceover spans several shots without truncation (finding 10)");
+  // ── finding 10: a line longer than one clip spans shots, sliced across ───
+  section("long line spans several shots, its narration sliced across them (finding 10)");
   {
     const editor = emptyEditor();
-    const { d } = deps(editor, { audioNative: true, scriptBeats: 2, voiceSeconds: 12 }); // 12s VO > 8s clip
+    const { d, studio } = deps(editor, { scriptBeats: 2, voiceSeconds: 12 }); // 12s line > 8s clip
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
     await orch.approveBreakdown();
-    const beatFrames = Math.round(12 * FPS);
     check("each long beat became several shots", project.shots.length > (project.beatVoices?.length ?? 0));
-    check("one voice clip per beat, at full length", editor.placedAudio.filter((a) => a.kind === "voice").every((a) => a.durationFrames === beatFrames));
-    check("voice not truncated to the clip cap", (project.beatVoices?.every((b) => b.durationFrames === beatFrames)) ?? false);
-    check("shots slice the beat's voice in order", project.shots[0].voiceFromSec === 0 && (project.shots[1].voiceFromSec ?? 0) > 0);
+    check("nothing voiced — the model burns each slice in", studio.calls.every((c) => c.role !== "voice"));
+    // The first beat's shots partition its line in word order — no repeat, no loss.
+    const beat0End = project.beatVoices?.[1]?.startFrame ?? project.durationFrames;
+    const beat0Shots = project.shots.filter((s) => s.startFrame < beat0End);
+    check("the long beat split into more than one shot", beat0Shots.length > 1);
+    const rejoined = beat0Shots.map((s) => (s.dialogue ?? "").trim()).filter(Boolean).join(" ");
+    check("shots partition the beat's line in order", rejoined === project.script!.beats[0].dialogue);
+    const words = beat0Shots.flatMap((s) => (s.dialogue ?? "").split(/\s+/).filter(Boolean));
+    check("no word is spoken twice across the split", new Set(words).size === words.length);
     assertTiling("split-beat shots still tile", editor.placed, project.durationFrames);
   }
 
   // ── a silent, action-only beat renders instead of failing the run ────────
-  // (an empty line reaching TTS threw "Nothing to say." and killed the render)
-  section("a silent beat renders without a voiceover, doesn't fail the run");
+  section("a silent beat renders without a line, doesn't fail the run");
   {
     const editor = emptyEditor();
-    const { d, studio } = deps(editor, { audioNative: true, scriptBeats: 3, silentBeats: [1] });
+    const { d, studio } = deps(editor, { scriptBeats: 3, silentBeats: [1] });
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
     await orch.approveBreakdown();
     check("run with a silent beat reaches done", project.phase === "done");
-    check("only the two spoken beats were voiced", studio.calls.filter((c) => c.role === "voice").length === 2);
-    check("the silent beat holds no voiceover asset", !project.beatVoices?.[1]?.voiceAssetId);
-    check(
-      "the spoken beats each hold a voiceover asset",
-      !!project.beatVoices?.[0]?.voiceAssetId && !!project.beatVoices?.[2]?.voiceAssetId
-    );
-    check("voiceovers placed only for the spoken beats", editor.placedAudio.filter((a) => a.kind === "voice").length === 2);
+    check("nothing is voiced (silent or spoken)", studio.calls.every((c) => c.role !== "voice"));
+    check("no narration track placed", editor.placedAudio.filter((a) => a.kind === "voice").length === 0);
     const silentShots = project.shots.filter((s) => !s.dialogue?.trim());
     check("the silent beat still rendered a shot", silentShots.length > 0);
-    check("silent shots carry a clip but no voice", silentShots.every((s) => !!s.clip && !s.voiceAssetId));
-    assertTiling("the silent-beat scene still tiles the spine", editor.placed, project.durationFrames);
+    check("silent shots carry a clip but no line", silentShots.every((s) => !!s.clip && !s.dialogue?.trim()));
+    check("the spoken beats carry their lines", project.shots.filter((s) => !!s.dialogue?.trim()).length >= 2);
+    assertTiling("the silent-beat scene still tiles", editor.placed, project.durationFrames);
   }
 
   // ── the bible is the run's spine: a failed design fails the run loudly ───
@@ -531,22 +534,24 @@ async function run(): Promise<void> {
     assertTiling("track still tiles after resume", editor.placed, project.durationFrames);
   }
 
-  // ── findings 6, 7: regenerate / changeStyle don't restack audio ──────────
-  section("regenerate + changeStyle keep audio single (findings 6, 7)");
+  // ── findings 6, 7: regenerate / changeStyle keep the soundtrack single ───
+  section("regenerate + changeStyle keep the soundtrack single (findings 6, 7)");
   {
     const editor = emptyEditor();
-    const { d } = deps(editor, { audioNative: true });
+    const { d } = deps(editor, {});
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
     await orch.approveBreakdown();
-    const voiceCount = editor.placedAudio.filter((a) => a.kind === "voice").length;
+    const noVoice = () => editor.placedAudio.filter((a) => a.kind === "voice").length === 0;
+    check("the initial run places no narration track", noVoice());
     await orch.regenerateShots([project.shots[0].id]);
-    check("regenerating a shot doesn't restack its voiceover", editor.placedAudio.filter((a) => a.kind === "voice").length === voiceCount);
+    check("regenerating a shot places no narration track", noVoice());
+    check("regenerated shots stay audible (not muted)", editor.placed.every((c) => c.muted === false));
     await orch.changeStyle("Hand-drawn watercolor storybook.");
     check("changeStyle restores the terminal phase", project.phase === "done");
     check("changeStyle leaves exactly one music bed", editor.placedAudio.filter((a) => a.kind === "music").length === 1);
-    check("changeStyle leaves one voiceover per beat", editor.placedAudio.filter((a) => a.kind === "voice").length === (project.beatVoices?.length ?? -1));
+    check("changeStyle places no narration track", noVoice());
     const clips = editor.placed.length;
     await orch.run(); // resume after done is a no-op
     check("a resume after done places nothing new", editor.placed.length === clips && editor.placedAudio.filter((a) => a.kind === "music").length === 1);
@@ -585,8 +590,17 @@ async function run(): Promise<void> {
     check("registry lists swappable video models", registry.options("video").length === 2);
     for (const videoId of ["fake-fast", "fake-pro"]) {
       const suite = registry.buildSuite({ video: videoId }, `suite:${videoId}`);
-      const project = generatedProject({ brief: "a short film about a lighthouse", targetSeconds: 24, suiteLabel: suite.label });
-      const editor = emptyEditor();
+      // Provided mode: the user's audio is the spine, so the audio-native vs
+      // lip-sync-post-pass distinction is what actually differs between the two
+      // models (a generated scene passes the model no audio at all).
+      const editor = editorWithAudio(DURATION_FRAMES);
+      const project = baseProject({
+        audioMode: "provided",
+        audioClipId: "audio-clip",
+        audioAssetId: "audio-asset",
+        durationFrames: DURATION_FRAMES,
+        suiteLabel: suite.label,
+      });
       const orch = new VideoOrchestrator(project, { editor, suite, emit: () => {}, persist: () => {}, sleep: async () => {} });
       await orch.run();
       await orch.approveBreakdown();

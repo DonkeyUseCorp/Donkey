@@ -53,8 +53,9 @@ export interface FakeStudioOptions {
   /** Beat indices the fake script writes with no dialogue — a silent,
    * action-only beat, which must render without a voiceover rather than fail. */
   silentBeats?: number[];
-  /** Force every voiceover to this many seconds (else derived from the line);
-   * used to exercise a beat whose VO outruns one clip and spans several shots. */
+  /** Make each spoken beat's line long enough to estimate to this many seconds
+   * (~165 wpm) — used to exercise a beat that outruns one clip and splits into
+   * several shots, its line sliced across them. */
   voiceSeconds?: number;
   /** Fail every image generation whose prompt contains this marker. */
   failImageMarker?: string;
@@ -112,8 +113,18 @@ export class FakeStudio {
   private async writeScript(input: ScriptInput): Promise<ScriptPlan> {
     const n = this.opts.scriptBeats ?? Math.max(2, Math.round((input.targetSeconds ?? 30) / 6));
     const silent = new Set(this.opts.silentBeats ?? []);
+    // A long line: enough distinct words that estimateSpokenSeconds (~165 wpm)
+    // reaches voiceSeconds, so the beat outgrows one clip and splits.
+    const longLine = (i: number): string => {
+      const words = Math.max(1, Math.round(((this.opts.voiceSeconds ?? 0) / 60) * 165));
+      return Array.from({ length: words }, (_, k) => `w${i}_${k}`).join(" ");
+    };
     const beats = Array.from({ length: n }, (_, i) => ({
-      dialogue: silent.has(i) ? "" : `Line ${i + 1}: ${input.brief}`.slice(0, 80),
+      dialogue: silent.has(i)
+        ? ""
+        : this.opts.voiceSeconds
+          ? longLine(i)
+          : `Line ${i + 1}: ${input.brief}`.slice(0, 80),
       action: i === 0 ? "establishing the scene" : "the story continues",
       characters: ["char:1"],
       location: "loc:1",
