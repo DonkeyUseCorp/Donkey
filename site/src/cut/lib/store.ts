@@ -49,6 +49,15 @@ export const track0Clips = (clips: VideoClip[]) => clips.filter((c) => c.track =
 /** Every video clip not on track 0 — the composited layers. */
 export const overlayLayers = (clips: VideoClip[]) => clips.filter((c) => c.track !== 0);
 
+/** Ground a clip stack: the lowest occupied row becomes track 0. Deleting or
+ * dragging away the last track-0 clip re-grounds the rows above it, so the
+ * spine — the sequence that carries transitions, fades, and ripple — always
+ * exists while any clip does. */
+export function groundTracks(clips: VideoClip[]): VideoClip[] {
+  const lift = clips.length ? Math.min(...clips.map((c) => c.track)) : 0;
+  return lift > 0 ? clips.map((c) => ({ ...c, track: c.track - lift })) : clips;
+}
+
 /** Open a slot at `level`, shifting the tracks at/above it up by one. `exclude`
  * is the clip being placed (left untouched). Level 0 shifts the whole stack up:
  * the placed clip becomes the new track 0 — the spine transplants to it. */
@@ -600,7 +609,20 @@ export async function runTranscription(projectId: string, spec: object): Promise
   }
 }
 
-export const useEditor = create<EditorState>((set, get) => {
+export const useEditor = create<EditorState>((baseSet, get) => {
+  // Every write that touches clips grounds the stack, so the spine invariant
+  // holds by construction — across deletes, drops, undo, and doc loads.
+  const set = (
+    partial:
+      | Partial<EditorState>
+      | ((s: EditorState) => Partial<EditorState>),
+    replace?: boolean
+  ) =>
+    baseSet((prev) => {
+      const next = typeof partial === "function" ? partial(prev) : partial;
+      return next.clips ? { ...next, clips: groundTracks(next.clips) } : next;
+    }, replace as false | undefined);
+
   const snapshot = (): DocSnapshot => {
     const { clips, audioClips, overlays, subtitles } = get();
     return {

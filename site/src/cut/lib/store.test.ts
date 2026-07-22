@@ -101,7 +101,7 @@ describe("video placement", () => {
     const a = asset(2);
     useEditor.setState({
       assets: [a],
-      clips: [vclip({ track: 1, start: 1, out: 2 })],
+      clips: [vclip({ track: 0, start: 0, out: 2 }), vclip({ track: 1, start: 1, out: 2 })],
     });
     s().addVideoFromAsset(a.id, { kind: "track", track: 1 }, 1.5);
     expectLaneSound(videoLane(1));
@@ -111,8 +111,9 @@ describe("video placement", () => {
 
   test("adding onto a freshly inserted track keeps the requested start", () => {
     const a = asset(2);
+    const spine = vclip({ track: 0, start: 0, out: 2 });
     const resident = vclip({ track: 1, start: 1, out: 2 });
-    useEditor.setState({ assets: [a], clips: [resident] });
+    useEditor.setState({ assets: [a], clips: [spine, resident] });
     s().addVideoFromAsset(a.id, { kind: "insert", level: 1 }, 1.5);
     const added = s().clips.find((c) => c.assetId === a.id)!;
     expect(added.start).toBeCloseTo(1.5);
@@ -122,8 +123,9 @@ describe("video placement", () => {
 
   test("dragging a track-0 clip up onto an occupied track slides it clear", () => {
     const mover = vclip({ track: 0, start: 0, out: 2 });
+    const anchor = vclip({ track: 0, start: 2, out: 2 });
     const resident = vclip({ track: 1, start: 1, out: 2 });
-    useEditor.setState({ clips: [mover, resident] });
+    useEditor.setState({ clips: [mover, anchor, resident] });
     s().dropVideoClip(mover.id, { kind: "track", track: 1 }, 1.2);
     expect(clipById(mover.id).track).toBe(1);
     expect(clipById(mover.id).start).toBeCloseTo(3);
@@ -311,5 +313,30 @@ describe("subtitle cues", () => {
     s().setCueTiming(q2.id, 0.5, 1.5);
     const next = s().subtitles.cues.find((c) => c.id === q2.id)!;
     expect(next.start).toBeCloseTo(0.5);
+  });
+});
+
+describe("spine grounding", () => {
+  test("deleting the last track-0 clip grounds the layers above it", () => {
+    const spine = vclip({ track: 0, start: 0, out: 2 });
+    const layer = vclip({ track: 1, start: 2, out: 2 });
+    const upper = vclip({ track: 2, start: 2.5, out: 2 });
+    useEditor.setState({
+      clips: [spine, layer, upper],
+      selection: { kind: "clip", id: spine.id },
+    });
+    s().deleteSelection();
+    expect(clipById(layer.id).track).toBe(0);
+    expect(clipById(upper.id).track).toBe(1);
+  });
+
+  test("dragging the only track-0 clip up onto a layer grounds the stack", () => {
+    const mover = vclip({ track: 0, start: 0, out: 2 });
+    const resident = vclip({ track: 1, start: 1, out: 2 });
+    useEditor.setState({ clips: [mover, resident] });
+    s().dropVideoClip(mover.id, { kind: "track", track: 1 }, 1.2);
+    expect(clipById(mover.id).track).toBe(0);
+    expect(clipById(resident.id).track).toBe(0);
+    expectLaneSound(videoLane(0));
   });
 });
