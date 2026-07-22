@@ -64,6 +64,9 @@ export function ExportsDock() {
   const waiting = items.filter(
     (i) => i.data.status === "queued" || i.data.status === "preparing"
   ).length;
+  const settled = items.filter(
+    (i) => i.data.status === "done" || i.data.status === "error"
+  ).length;
   const multi = items.length > 1;
 
   return (
@@ -76,6 +79,16 @@ export function ExportsDock() {
               .filter(Boolean)
               .join(" · ") || `${items.length} done`}
           </span>
+          {settled > 0 && (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+              onClick={() => useExports.getState().dismissSettled()}
+            >
+              Clear all
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-xs"

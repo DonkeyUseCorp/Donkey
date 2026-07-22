@@ -95,6 +95,8 @@ interface ExportsState {
   ) => Promise<void>;
   cancel: (id: string) => void;
   dismiss: (id: string) => void;
+  /** Clear every finished/failed row at once; running work stays. */
+  dismissSettled: () => void;
   /** One poll of the engine feed. */
   refresh: () => Promise<void>;
 }
@@ -144,6 +146,19 @@ export const useExports = create<ExportsState>((set, get) => ({
       dismissed: s.jobs.some((j) => j.id === id)
         ? [...new Set([...s.dismissed, id])]
         : s.dismissed,
+    })),
+
+  dismissSettled: () =>
+    set((s) => ({
+      local: s.local.filter((r) => r.status !== "error"),
+      dismissed: [
+        ...new Set([
+          ...s.dismissed,
+          ...s.jobs
+            .filter((j) => j.status === "done" || j.status === "error")
+            .map((j) => j.id),
+        ]),
+      ],
     })),
 
   refresh: async () => {
