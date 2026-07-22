@@ -347,23 +347,33 @@ describe("delete ripple and gaps", () => {
     expect(clipById(layer.id).start).toBeCloseTo(1);
   });
 
-  test("removeGap closes the empty span across the whole document", () => {
+  test("removeGap closes the gap on its own track only", () => {
     const b = vclip({ track: 0, start: 2, out: 2 });
     const layer = vclip({ track: 1, start: 2.5, out: 2 });
     const au = aclip({ start: 3, out: 2 });
     useEditor.setState({ clips: [b, layer], audioClips: [au] });
-    s().removeGap(1);
+    s().removeGap(0, 1);
     expect(clipById(b.id).start).toBeCloseTo(0);
-    expect(clipById(layer.id).start).toBeCloseTo(0.5);
-    expect(audioById(au.id).start).toBeCloseTo(1);
+    expect(clipById(layer.id).start).toBeCloseTo(2.5);
+    expect(audioById(au.id).start).toBeCloseTo(3);
+  });
+
+  test("removeGap between clips on an upper track slides only that track", () => {
+    const base = vclip({ track: 0, start: 0, out: 2 });
+    const l1 = vclip({ track: 1, start: 0, out: 1 });
+    const l2 = vclip({ track: 1, start: 3, out: 1 });
+    useEditor.setState({ clips: [base, l1, l2] });
+    s().removeGap(1, 2);
+    expect(clipById(l2.id).start).toBeCloseTo(1);
+    expect(clipById(base.id).start).toBeCloseTo(0);
   });
 
   test("removeGap outside a gap is a no-op", () => {
     const a = vclip({ track: 0, start: 0, out: 2 });
     const b = vclip({ track: 0, start: 3, out: 2 });
     useEditor.setState({ clips: [a, b] });
-    s().removeGap(1); // on a clip
-    s().removeGap(6); // past the end
+    s().removeGap(0, 1); // on a clip
+    s().removeGap(0, 6); // past the end
     expect(clipById(a.id).start).toBeCloseTo(0);
     expect(clipById(b.id).start).toBeCloseTo(3);
   });

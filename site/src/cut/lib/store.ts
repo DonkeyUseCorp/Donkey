@@ -286,11 +286,10 @@ export interface EditorState {
    * would shear them against track 0, so the delete leaves the gap; closing
    * it is `removeGap`. Deletes on every other track remove just that item. */
   deleteSelection: () => void;
-  /** Close the empty track-0 span containing `at`: cut that timeline range
-   * out of the whole document (see exciseRange), so everything after it —
-   * clips on every track, titles, captions, soundtrack — slides left in
-   * sync. No-op when `at` isn't inside a gap. */
-  removeGap: (at: number) => void;
+  /** Close the empty span on `track` containing `at`: that track's later
+   * clips slide left to shut the gap; every other track, the soundtrack,
+   * titles, and captions stay put. No-op when `at` isn't inside a gap. */
+  removeGap: (track: number, at: number) => void;
   /** Timeline window [start, end) spanned by the current selection, or null if
    * nothing selectable is chosen. */
   selectionRange: () => { start: number; end: number } | null;
@@ -1655,23 +1654,19 @@ export const useEditor = create<EditorState>((baseSet, get) => {
       });
     },
 
-    removeGap: (at) => {
-      const gap = track0GapAt(get().clips, at);
+    removeGap: (track, at) => {
+      const gap = trackGapAt(get().clips, track, at);
       if (!gap) return;
       push();
-      set((s) => {
-        const { clips, audioClips, overlays, cues } = exciseRange(
-          { clips: s.clips, audioClips: s.audioClips, overlays: s.overlays, cues: s.subtitles.cues },
-          gap.start,
-          gap.len
-        );
-        return {
-          clips: clips.sort((a, b) => a.start - b.start),
-          audioClips,
-          overlays,
-          subtitles: { ...s.subtitles, cues },
-        };
-      });
+      set((s) => ({
+        clips: s.clips
+          .map((c) =>
+            c.track === track && c.start >= gap.start + gap.len - 0.001
+              ? { ...c, start: c.start - gap.len }
+              : c
+          )
+          .sort((a, b) => a.start - b.start),
+      }));
     },
 
     selectionRange: () => {
@@ -2789,15 +2784,15 @@ export function getClipSpans(
   return spans;
 }
 
-/** The empty track-0 span containing time `t` — the stretch between two clip
- * footprints (or before the first one) that plays black. Null when `t` sits
- * on a clip or past the last one (there is nothing after trailing space to
- * pull left). */
-export function track0GapAt(
+/** The empty span on `track` containing time `t` — the stretch between two
+ * clip footprints (or before the first one). Null when `t` sits on a clip or
+ * past the last one (there is nothing after trailing space to pull left). */
+export function trackGapAt(
   clips: VideoClip[],
+  track: number,
   t: number
 ): { start: number; len: number } | null {
-  const spine = track0Clips(clips).sort((a, b) => a.start - b.start);
+  const spine = clips.filter((c) => c.track === track).sort((a, b) => a.start - b.start);
   let prevEnd = 0;
   for (const c of spine) {
     if (c.start - prevEnd > 0.05 && t >= prevEnd && t < c.start) {

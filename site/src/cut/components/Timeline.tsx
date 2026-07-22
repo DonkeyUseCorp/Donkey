@@ -34,7 +34,7 @@ import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
-import { track0Clips, track0GapAt, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { track0Clips, trackGapAt, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -315,10 +315,13 @@ export function Timeline() {
   // landing slot, and grow its row stack while a new row is hovered.
   const [laneDrag, setLaneDrag] = useState<LaneDrag | null>(null);
 
-  // Right-click on empty track-0 space: a small popover offering to close the
-  // gap under the cursor. Multi-track deletes leave their gap in place (a
-  // ripple would shear the layers), so this is the manual close.
-  const [gapMenu, setGapMenu] = useState<{ x: number; y: number; at: number } | null>(null);
+  // Right-click on a video row's empty space: a small popover offering to
+  // close that track's gap under the cursor. The cut is track-local — only
+  // the clicked track's later clips slide left — so the menu carries the gap
+  // it would cut and the row tints it red while the menu is open.
+  const [gapMenu, setGapMenu] = useState<
+    { x: number; y: number; track: number; gap: { start: number; len: number } } | null
+  >(null);
   useEffect(() => {
     if (!gapMenu) return;
     const close = (e: KeyboardEvent) => {
@@ -649,6 +652,29 @@ export function Timeline() {
       />
     ) : null;
 
+  // Only empty space gets the menu: a right-click on a clip sits on a
+  // footprint, so the gap lookup misses and the event falls through to the
+  // browser.
+  const openGapMenu = (track: number) => (e: React.MouseEvent) => {
+    const gap = trackGapAt(useEditor.getState().clips, track, timeAt(e.clientX));
+    if (!gap) return;
+    e.preventDefault();
+    setGapMenu({ x: e.clientX, y: e.clientY, track, gap });
+  };
+
+  // The span the open gap menu would cut, tinted red on its own track.
+  const gapHighlight = (track: number, h: number) =>
+    gapMenu?.track === track ? (
+      <div
+        className="pointer-events-none absolute top-0.5 z-10 rounded-lg bg-red-500/15"
+        style={{
+          left: gapMenu.gap.start * pps,
+          width: Math.max(2, gapMenu.gap.len * pps - CLIP_GAP),
+          height: h,
+        }}
+      />
+    ) : null;
+
   // The would-be new video track, one row past the stack's edge — the same
   // grown-row experience as the audio and title lanes. Dropping here opens a
   // brand-new track at z-level `level`.
@@ -935,9 +961,11 @@ export function Timeline() {
               style={{ height: OVERLAY_H }}
               data-drop={placementAttr({ kind: "track", track })}
               onPointerDown={deselectIfSelf}
+              onContextMenu={openGapMenu(track)}
               {...overlayDropHandlers({ kind: "track", track })}
             >
               {laneRail(OVERLAY_H - 2)}
+              {gapHighlight(track, OVERLAY_H - 4)}
               {draggedOverlayTrack === track && laneDrag && (
                 <LaneSlot
                   drag={laneDrag}
@@ -995,17 +1023,10 @@ export function Timeline() {
             style={{ height: VIDEO_H }}
             data-drop={placementAttr(TRACK_ZERO)}
             onPointerDown={deselectIfSelf}
-            onContextMenu={(e) => {
-              // Only empty space gets the menu: a right-click on a clip sits
-              // on a footprint, so the gap lookup misses and the event falls
-              // through to the browser.
-              const at = timeAt(e.clientX);
-              if (!track0GapAt(useEditor.getState().clips, at)) return;
-              e.preventDefault();
-              setGapMenu({ x: e.clientX, y: e.clientY, at });
-            }}
+            onContextMenu={openGapMenu(0)}
           >
             {spans.length > 0 && laneRail(VIDEO_H - 2)}
+            {gapHighlight(0, VIDEO_H - 4)}
             {trackSlot(TRACK_ZERO, VIDEO_H - 4)}
             {laneDrag?.kind === "clip" && !laneDrag.away && (
               <LaneSlot
@@ -1288,7 +1309,7 @@ export function Timeline() {
             <button
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
               onClick={() => {
-                useEditor.getState().removeGap(gapMenu.at);
+                useEditor.getState().removeGap(gapMenu.track, gapMenu.gap.start);
                 setGapMenu(null);
               }}
             >
