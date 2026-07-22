@@ -80,6 +80,7 @@ export interface LibraryTemplate {
   id: string;
   name: string;
   addedAt: number;
+  folderId?: string | null;
   duration: number;
   media: TemplateMedia[];
   layers: TemplateLayer[];
@@ -335,19 +336,22 @@ export async function renameFolder(id: string, name: string): Promise<LibraryFol
 export async function deleteFolder(id: string) {
   await mutateIndex((idx) => {
     idx.folders = (idx.folders ?? []).filter((f) => f.id !== id);
-    // Assets in the folder fall back to ungrouped rather than vanishing.
+    // Items in the folder fall back to ungrouped rather than vanishing.
     for (const a of idx.assets) if (a.folderId === id) a.folderId = null;
+    for (const t of idx.templates ?? []) if (t.folderId === id) t.folderId = null;
   });
 }
 
-export async function moveAsset(assetId: string, folderId: string | null) {
+/** File a library item — an asset or a template — into a folder (`null` ungroups). */
+export async function moveItem(id: string, folderId: string | null) {
   await mutateIndex((idx) => {
-    const asset = idx.assets.find((a) => a.id === assetId);
-    if (!asset) throw new Error("Library asset not found.");
+    const item =
+      idx.assets.find((a) => a.id === id) ?? (idx.templates ?? []).find((t) => t.id === id);
+    if (!item) throw new Error("Library item not found.");
     if (folderId && !(idx.folders ?? []).some((f) => f.id === folderId)) {
       throw new Error("Folder not found.");
     }
-    asset.folderId = folderId;
+    item.folderId = folderId;
   });
 }
 

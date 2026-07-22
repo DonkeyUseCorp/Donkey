@@ -9,7 +9,7 @@ import {
   listFolders,
   listLibrary,
   listTemplates,
-  moveAsset,
+  moveItem,
   removeAsset,
   renameFolder,
   renameTemplate,
@@ -124,17 +124,17 @@ export const libraryApi = {
     }
   },
 
-  /** Move an asset into a folder (or `null` to ungroup). */
+  /** Move an item — asset or template — into a folder (or `null` to ungroup). */
   async move(req: Request) {
     try {
-      const { assetId, folderId } = (await req.json()) as {
-        assetId: string;
+      const { id, folderId } = (await req.json()) as {
+        id: string;
         folderId: string | null;
       };
-      await moveAsset(assetId, folderId ?? null);
+      await moveItem(id, folderId ?? null);
       return Response.json({ ok: true });
     } catch (e) {
-      return caught(e, "Could not move asset.");
+      return caught(e, "Could not move item.");
     }
   },
 

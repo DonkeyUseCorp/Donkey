@@ -83,13 +83,14 @@ export async function deleteLibraryFolder(id: string): Promise<void> {
   if (!res.ok) throw new Error("Could not delete folder.");
 }
 
-export async function moveLibraryAsset(assetId: string, folderId: string | null): Promise<void> {
+/** File a library item — an asset or a template — into a folder (`null` ungroups). */
+export async function moveLibraryItem(id: string, folderId: string | null): Promise<void> {
   const res = await apiFetch("/api/cut/library/move", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ assetId, folderId }),
+    body: JSON.stringify({ id, folderId }),
   });
-  if (!res.ok) throw new Error("Could not move asset.");
+  if (!res.ok) throw new Error("Could not move item.");
 }
 
 export async function uploadToLibrary(file: File): Promise<LibraryAsset> {

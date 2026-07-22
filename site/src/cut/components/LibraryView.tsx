@@ -39,7 +39,7 @@ import {
   fetchLibrary,
   importUrlToLibrary,
   libraryMediaUrl,
-  moveLibraryAsset,
+  moveLibraryItem,
   renameLibraryFolder,
   renameTemplate,
   uploadToLibrary,
@@ -109,7 +109,7 @@ export function LibraryView() {
       try {
         const asset = await uploadToLibrary(file);
         if (openFolder) {
-          await moveLibraryAsset(asset.id, openFolder).catch(() => {});
+          await moveLibraryItem(asset.id, openFolder).catch(() => {});
           asset.folderId = openFolder;
         }
         setAssets((prev) => [asset, ...(prev ?? [])]);
@@ -130,7 +130,7 @@ export function LibraryView() {
       const imported = await importUrlToLibrary(value);
       if (openFolder) {
         for (const asset of imported) {
-          await moveLibraryAsset(asset.id, openFolder).catch(() => {});
+          await moveLibraryItem(asset.id, openFolder).catch(() => {});
           asset.folderId = openFolder;
         }
       }
@@ -163,12 +163,13 @@ export function LibraryView() {
     router.push(homeHref(base, "library", id));
   };
 
-  const moveAssets = async (ids: string[], folderId: string | null) => {
+  const moveItems = async (ids: string[], folderId: string | null) => {
     if (ids.length === 0) return;
     const idset = new Set(ids);
     setAssets((prev) => (prev ?? []).map((a) => (idset.has(a.id) ? { ...a, folderId } : a)));
+    setTemplates((prev) => prev.map((t) => (idset.has(t.id) ? { ...t, folderId } : t)));
     setSelected(new Set());
-    await Promise.all(ids.map((id) => moveLibraryAsset(id, folderId))).catch(() => void reload());
+    await Promise.all(ids.map((id) => moveLibraryItem(id, folderId))).catch(() => void reload());
   };
 
   // Carry the current selection (or just this card) as a folder-move payload,
@@ -191,6 +192,7 @@ export function LibraryView() {
 
   const all = assets ?? [];
   const shown = all.filter((a) => (a.folderId ?? null) === openFolder);
+  const shownTemplates = templates.filter((t) => (t.folderId ?? null) === openFolder);
   const openFolderName = folders.find((f) => f.id === openFolder)?.name;
   const hasContent = all.length > 0 || folders.length > 0 || templates.length > 0;
 
@@ -205,7 +207,7 @@ export function LibraryView() {
             name={openFolderName ?? "Folder"}
             mime={LIBRARY_MOVE_MIME}
             onBack={() => gotoFolder(null)}
-            onDropOut={(ids) => void moveAssets(ids, null)}
+            onDropOut={(ids) => void moveItems(ids, null)}
           />
         )}
         <div className="flex items-center gap-2">
@@ -240,7 +242,11 @@ export function LibraryView() {
           mime={LIBRARY_MOVE_MIME}
           creating={folderCreating}
           onCreatingChange={setFolderCreating}
-          statOf={(id) => ({ count: all.filter((a) => (a.folderId ?? null) === id).length })}
+          statOf={(id) => ({
+            count:
+              all.filter((a) => (a.folderId ?? null) === id).length +
+              templates.filter((t) => (t.folderId ?? null) === id).length,
+          })}
           onOpen={gotoFolder}
           onCreate={async (name) => {
             const f = await createLibraryFolder(name);
@@ -255,20 +261,28 @@ export function LibraryView() {
             setAssets((prev) =>
               (prev ?? []).map((a) => (a.folderId === id ? { ...a, folderId: null } : a))
             );
+            setTemplates((prev) =>
+              prev.map((t) => (t.folderId === id ? { ...t, folderId: null } : t))
+            );
             if (openFolder === id) router.replace(homeHref(base, "library"));
             await deleteLibraryFolder(id).catch(() => void reload());
           }}
-          onDropIds={(ids, fid) => void moveAssets(ids, fid)}
+          onDropIds={(ids, fid) => void moveItems(ids, fid)}
         />
       ) : null}
 
-      {openFolder === null && templates.length > 0 && (
+      {shownTemplates.length > 0 && (
         <div className="mb-6 grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
-          {templates.map((t) => (
+          {shownTemplates.map((t) => (
             <TemplateCard
               key={t.id}
               template={t}
               mediaSrc={libraryMediaUrl}
+              dragScope="library"
+              onDragStartExtra={(e) => {
+                e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify([t.id]));
+                e.dataTransfer.effectAllowed = "copyMove";
+              }}
               onRename={(name) => void renameTpl(t.id, name)}
               onDelete={() => void removeTpl(t.id)}
             />

@@ -42,7 +42,7 @@ import {
   importLibraryAsset,
   importTemplateToProject,
   libraryMediaUrl,
-  moveLibraryAsset,
+  moveLibraryItem,
   renameLibraryFolder,
   renameTemplate,
   saveAssetToLibrary,
@@ -769,9 +769,10 @@ function LibraryPanel({ projectId }: { projectId: string }) {
     }
   };
 
-  const move = async (assetId: string, folderId: string | null) => {
-    setAssets((prev) => (prev ?? []).map((a) => (a.id === assetId ? { ...a, folderId } : a)));
-    await moveLibraryAsset(assetId, folderId).catch(() => void reload());
+  const move = async (id: string, folderId: string | null) => {
+    setAssets((prev) => (prev ?? []).map((a) => (a.id === id ? { ...a, folderId } : a)));
+    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, folderId } : t)));
+    await moveLibraryItem(id, folderId).catch(() => void reload());
   };
 
   // Let a clip be dragged onto a folder tile to file it (alongside the timeline
@@ -784,6 +785,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
 
   const all = assets ?? [];
   const shown = all.filter((a) => (a.folderId ?? null) === openFolder);
+  const shownTemplates = templates.filter((t) => (t.folderId ?? null) === openFolder);
   const openFolderName = folders.find((f) => f.id === openFolder)?.name;
 
   return (
@@ -802,15 +804,19 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       ) : (
         <PanelHead title="Library" />
       )}
-      {templates.length > 0 && (
+      {shownTemplates.length > 0 && (
         <div className="shrink-0 px-3.5 pb-3">
           <div className="flex flex-col gap-1.5">
-            {templates.map((t) => (
+            {shownTemplates.map((t) => (
               <TemplateCard
                 key={t.id}
                 template={t}
                 mediaSrc={libraryMediaUrl}
                 dragScope="library"
+                onDragStartExtra={(e) => {
+                  e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify([t.id]));
+                  e.dataTransfer.effectAllowed = "copyMove";
+                }}
                 addTitle="Add to this project"
                 onAdd={() => void addTemplateToProject(projectId, t)}
                 onRename={(name) => void commitTemplateRename(t.id, name)}
@@ -835,7 +841,11 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           <FolderShelf
             folders={folders}
             mime={LIBRARY_MOVE_MIME}
-            statOf={(id) => ({ count: all.filter((a) => (a.folderId ?? null) === id).length })}
+            statOf={(id) => ({
+              count:
+                all.filter((a) => (a.folderId ?? null) === id).length +
+                templates.filter((t) => (t.folderId ?? null) === id).length,
+            })}
             onOpen={(id) => setOpenFolder(id)}
             onRename={async (id, name) => {
               setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
@@ -845,6 +855,9 @@ function LibraryPanel({ projectId }: { projectId: string }) {
               setFolders((prev) => prev.filter((f) => f.id !== id));
               setAssets((prev) =>
                 (prev ?? []).map((a) => (a.folderId === id ? { ...a, folderId: null } : a))
+              );
+              setTemplates((prev) =>
+                prev.map((t) => (t.folderId === id ? { ...t, folderId: null } : t))
               );
               if (openFolder === id) setOpenFolder(null);
               await deleteLibraryFolder(id).catch(() => void reload());
@@ -857,7 +870,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
               const asset = useEditor.getState().assets.find((a) => a.id === ref.id);
               if (!asset) return;
               void saveAssetToLibrary(projectId, asset)
-                .then((saved) => moveLibraryAsset(saved.id, fid))
+                .then((saved) => moveLibraryItem(saved.id, fid))
                 .then(() => void reload())
                 .catch(() => {});
             }}
@@ -872,7 +885,9 @@ function LibraryPanel({ projectId }: { projectId: string }) {
         // At the root, filed-away assets, folders, and templates all count as
         // content — "No items" is only for a truly empty library.
         openFolder !== null ? (
-          <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">Empty folder</div>
+          shownTemplates.length === 0 ? (
+            <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">Empty folder</div>
+          ) : null
         ) : all.length === 0 && folders.length === 0 && templates.length === 0 ? (
           <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">No items</div>
         ) : null

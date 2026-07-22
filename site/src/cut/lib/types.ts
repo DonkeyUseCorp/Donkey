@@ -270,6 +270,7 @@ export interface LibraryTemplate {
   id: string;
   name: string;
   addedAt: number;
+  folderId?: string | null;
   duration: number;
   media: TemplateMedia[];
   layers: TemplateLayer[];

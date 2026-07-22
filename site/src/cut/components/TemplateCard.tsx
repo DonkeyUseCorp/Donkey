@@ -50,6 +50,7 @@ export function TemplateCard({
   onRename,
   onDelete,
   onRefDrop,
+  onDragStartExtra,
   extraMenu,
 }: {
   template: LibraryTemplate;
@@ -65,6 +66,8 @@ export function TemplateCard({
   /** When set, the card accepts media drops (cards and timeline clips) —
    * filter by `ref.scope` and append the item to the template. */
   onRefDrop?: (ref: AssetRef) => void;
+  /** Extra drag payload (e.g. a folder-move id) set alongside the template drag. */
+  onDragStartExtra?: (e: React.DragEvent) => void;
   /** Extra menu items rendered between Rename and Delete. */
   extraMenu?: React.ReactNode;
 }) {
@@ -133,6 +136,7 @@ export function TemplateCard({
       onDragStart={(e) => {
         if (!dragScope) return;
         setTemplateDragData(e, dragScope, t);
+        onDragStartExtra?.(e);
         setCardDragImage(e, e.currentTarget);
       }}
       onDragEnd={clearAssetDrag}
