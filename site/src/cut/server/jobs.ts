@@ -379,14 +379,24 @@ async function resolveMedia(spec: ExportSpec, file: string) {
  * is pinned to bt2020-10, a close stand-in over HLG's SDR-compatible range;
  * the 10-bit format hop feeds it a planar format it accepts (decoders hand
  * HDR frames over as p010, which it rejects).
+ *
+ * The matrix decides, the way players decide. Social-app transcodes (8-bit
+ * H.264) keep BT.2020 primaries + HLG transfer tags from the phone original
+ * but write an explicit bt709 matrix — players read those as plain 709 SDR,
+ * so converting them shifts hue and saturation against what every player
+ * shows (verified frame-for-frame against WebKit playback). Convert only
+ * when the matrix itself is BT.2020, or when it's untagged and the wide
+ * primaries/transfer tags are the only signal there is.
  */
 function sdrConvert(c: Awaited<ReturnType<typeof videoColorInfo>>) {
+  if (c == null) return "";
+  const matrix = c.matrix && c.matrix !== "unknown" ? c.matrix : null;
   const wide =
-    c != null &&
-    (c.primaries === "bt2020" ||
-      c.transfer === "arib-std-b67" ||
-      c.transfer === "smpte2084" ||
-      c.matrix?.startsWith("bt2020") === true);
+    matrix?.startsWith("bt2020") === true ||
+    (matrix === null &&
+      (c.primaries === "bt2020" ||
+        c.transfer === "arib-std-b67" ||
+        c.transfer === "smpte2084"));
   return wide ? "format=yuv420p10le,colorspace=all=bt709:iall=bt2020:format=yuv420p," : "";
 }
 
