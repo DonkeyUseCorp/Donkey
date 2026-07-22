@@ -34,7 +34,7 @@ import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
-import { track0Clips, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { track0Clips, track0GapAt, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -306,6 +306,19 @@ export function Timeline() {
   // the coordinator publishes it so each section can render the ghost, the
   // landing slot, and grow its row stack while a new row is hovered.
   const [laneDrag, setLaneDrag] = useState<LaneDrag | null>(null);
+
+  // Right-click on empty track-0 space: a small popover offering to close the
+  // gap under the cursor. Multi-track deletes leave their gap in place (a
+  // ripple would shear the layers), so this is the manual close.
+  const [gapMenu, setGapMenu] = useState<{ x: number; y: number; at: number } | null>(null);
+  useEffect(() => {
+    if (!gapMenu) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setGapMenu(null);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [gapMenu]);
 
   // Title tracks: overlays carry a `lane`; used lanes compact to contiguous
   // display rows, so empty tracks disappear on their own.
@@ -982,6 +995,15 @@ export function Timeline() {
             style={{ height: VIDEO_H }}
             data-drop={placementAttr(TRACK_ZERO)}
             onPointerDown={deselectIfSelf}
+            onContextMenu={(e) => {
+              // Only empty space gets the menu: a right-click on a clip sits
+              // on a footprint, so the gap lookup misses and the event falls
+              // through to the browser.
+              const at = timeAt(e.clientX);
+              if (!track0GapAt(useEditor.getState().clips, at)) return;
+              e.preventDefault();
+              setGapMenu({ x: e.clientX, y: e.clientY, at });
+            }}
           >
             {spans.length > 0 && laneRail(VIDEO_H - 2)}
             {/* An external asset drag previews as an on-track segment ghost
@@ -1277,6 +1299,32 @@ export function Timeline() {
           a tint and inset ring over the track area, under the toolbar. */}
       {fileDropHint && (
         <div className="pointer-events-none absolute inset-x-0 top-11 bottom-0 z-40 bg-[#0a84ff]/5 ring-2 ring-[#0a84ff]/30 ring-inset" />
+      )}
+      {gapMenu && (
+        <div
+          className="fixed inset-0 z-50"
+          onPointerDown={() => setGapMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setGapMenu(null);
+          }}
+        >
+          <div
+            className="absolute min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+            style={{ left: gapMenu.x, top: gapMenu.y }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+              onClick={() => {
+                useEditor.getState().removeGap(gapMenu.at);
+                setGapMenu(null);
+              }}
+            >
+              <Scissors className="size-3.5 text-muted-foreground" /> Remove empty space
+            </button>
+          </div>
+        </div>
       )}
     </footer>
   );

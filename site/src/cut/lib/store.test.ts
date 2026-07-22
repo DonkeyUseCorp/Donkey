@@ -316,6 +316,59 @@ describe("subtitle cues", () => {
   });
 });
 
+describe("delete ripple and gaps", () => {
+  test("single-track delete ripples: later items on every track slide left", () => {
+    const a = vclip({ track: 0, start: 0, out: 2 });
+    const b = vclip({ track: 0, start: 2, out: 2 });
+    const au = aclip({ start: 3, out: 2 });
+    const t = title({ start: 3, end: 4 });
+    useEditor.setState({
+      clips: [a, b],
+      audioClips: [au],
+      overlays: [t],
+      selection: { kind: "clip", id: a.id },
+    });
+    s().deleteSelection();
+    expect(clipById(b.id).start).toBeCloseTo(0);
+    expect(audioById(au.id).start).toBeCloseTo(1);
+    expect(s().overlays[0].start).toBeCloseTo(1);
+  });
+
+  test("delete with an overlay video track leaves the gap in place", () => {
+    const a = vclip({ track: 0, start: 0, out: 2 });
+    const b = vclip({ track: 0, start: 2, out: 2 });
+    const layer = vclip({ track: 1, start: 1, out: 2 });
+    useEditor.setState({
+      clips: [a, b, layer],
+      selection: { kind: "clip", id: a.id },
+    });
+    s().deleteSelection();
+    expect(clipById(b.id).start).toBeCloseTo(2);
+    expect(clipById(layer.id).start).toBeCloseTo(1);
+  });
+
+  test("removeGap closes the empty span across the whole document", () => {
+    const b = vclip({ track: 0, start: 2, out: 2 });
+    const layer = vclip({ track: 1, start: 2.5, out: 2 });
+    const au = aclip({ start: 3, out: 2 });
+    useEditor.setState({ clips: [b, layer], audioClips: [au] });
+    s().removeGap(1);
+    expect(clipById(b.id).start).toBeCloseTo(0);
+    expect(clipById(layer.id).start).toBeCloseTo(0.5);
+    expect(audioById(au.id).start).toBeCloseTo(1);
+  });
+
+  test("removeGap outside a gap is a no-op", () => {
+    const a = vclip({ track: 0, start: 0, out: 2 });
+    const b = vclip({ track: 0, start: 3, out: 2 });
+    useEditor.setState({ clips: [a, b] });
+    s().removeGap(1); // on a clip
+    s().removeGap(6); // past the end
+    expect(clipById(a.id).start).toBeCloseTo(0);
+    expect(clipById(b.id).start).toBeCloseTo(3);
+  });
+});
+
 describe("spine grounding", () => {
   test("deleting the last track-0 clip grounds the layers above it", () => {
     const spine = vclip({ track: 0, start: 0, out: 2 });

@@ -280,11 +280,18 @@ export interface EditorState {
    * from the original recording, so the word highlighter would otherwise drift). */
   retimeCues: (entries: { id: string; start: number; end: number }[]) => void;
   sortCues: () => void;
-  /** Delete the current selection. A track-0 clip delete ripples: the
-   * footprint it occupied closes and everything after it — clips, titles,
-   * captions, soundtrack — slides left in sync (see exciseRange). Deletes on
-   * every other track remove just that item. */
+  /** Delete the current selection. While track 0 is the only video track, a
+   * track-0 clip delete ripples: the footprint it occupied closes and
+   * everything after it — clips, titles, captions, soundtrack — slides left
+   * in sync (see exciseRange). With upper video layers present the slide
+   * would shear them against track 0, so the delete leaves the gap; closing
+   * it is `removeGap`. Deletes on every other track remove just that item. */
   deleteSelection: () => void;
+  /** Close the empty track-0 span containing `at`: cut that timeline range
+   * out of the whole document (see exciseRange), so everything after it —
+   * clips on every track, titles, captions, soundtrack — slides left in
+   * sync. No-op when `at` isn't inside a gap. */
+  removeGap: (at: number) => void;
   /** Timeline window [start, end) spanned by the current selection, or null if
    * nothing selectable is chosen. */
   selectionRange: () => { start: number; end: number } | null;
@@ -1605,13 +1612,19 @@ export const useEditor = create<EditorState>((baseSet, get) => {
         // Deleting a track-0 clip closes the hole it leaves: everything after
         // it — clips, titles, captions, soundtrack — slides left with the
         // surviving footage, and anything living inside the hole annotated
-        // footage that is gone, so it goes too. Deletes on every other track
-        // are plain removals (already applied above). Holes close
+        // footage that is gone, so it goes too. That ripple runs only while
+        // track 0 is the only video track: with upper layers surviving, the
+        // slide would shear them against the footage they were composed over,
+        // so the delete leaves the gap and closing it is an explicit act
+        // (removeGap, via right-click on the empty space). Deletes on every
+        // other track are plain removals (already applied above). Holes close
         // right-to-left so each one's coordinates stay valid while the ones
         // before it are unprocessed.
-        const holes = s.clips
-          .filter((c) => c.track === 0 && clipIds.has(c.id))
-          .sort((a, b) => b.start - a.start);
+        const holes = clips.some((c) => c.track !== 0)
+          ? []
+          : s.clips
+              .filter((c) => c.track === 0 && clipIds.has(c.id))
+              .sort((a, b) => b.start - a.start);
         for (const gone of holes) {
           const next = clips.reduce(
             (acc, c) => (c.track === 0 && c.start > gone.start + 0.001 ? Math.min(acc, c.start) : acc),
@@ -1635,6 +1648,25 @@ export const useEditor = create<EditorState>((baseSet, get) => {
           subtitles: { ...s.subtitles, cues },
           selection: null,
           multiSelection: [],
+        };
+      });
+    },
+
+    removeGap: (at) => {
+      const gap = track0GapAt(get().clips, at);
+      if (!gap) return;
+      push();
+      set((s) => {
+        const { clips, audioClips, overlays, cues } = exciseRange(
+          { clips: s.clips, audioClips: s.audioClips, overlays: s.overlays, cues: s.subtitles.cues },
+          gap.start,
+          gap.len
+        );
+        return {
+          clips: clips.sort((a, b) => a.start - b.start),
+          audioClips,
+          overlays,
+          subtitles: { ...s.subtitles, cues },
         };
       });
     },
@@ -2750,6 +2782,25 @@ export function getClipSpans(
     spans.push({ clip, asset, start: clip.start, len, transitionOut: overlap });
   }
   return spans;
+}
+
+/** The empty track-0 span containing time `t` — the stretch between two clip
+ * footprints (or before the first one) that plays black. Null when `t` sits
+ * on a clip or past the last one (there is nothing after trailing space to
+ * pull left). */
+export function track0GapAt(
+  clips: VideoClip[],
+  t: number
+): { start: number; len: number } | null {
+  const spine = track0Clips(clips).sort((a, b) => a.start - b.start);
+  let prevEnd = 0;
+  for (const c of spine) {
+    if (c.start - prevEnd > 0.05 && t >= prevEnd && t < c.start) {
+      return { start: prevEnd, len: c.start - prevEnd };
+    }
+    prevEnd = Math.max(prevEnd, c.start + clipLen(c));
+  }
+  return null;
 }
 
 /** Cut the timeline range [at, at + delta) out of the whole document — the

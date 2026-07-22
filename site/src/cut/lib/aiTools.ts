@@ -24,7 +24,7 @@ import { blobToInlineAudio, refToInlineAudio, type InlineImage } from "./refMedi
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
-import { applyOverlayPatchSettled, track0Clips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
+import { applyOverlayPatchSettled, track0Clips, track0GapAt, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { synthesizeMusic } from "./audioGen";
@@ -466,6 +466,14 @@ export async function runAiTool(
       s.select({ kind: selKind, id });
       s.deleteSelection();
       return { deleted: { kind: selKind, id } };
+    }
+
+    case "remove_gap": {
+      if (!isNum(input.at)) throw new ToolError("at (seconds) is required.");
+      const gap = track0GapAt(s.clips, input.at);
+      if (!gap) throw new ToolError(`No track-0 gap at ${input.at}s — pass a time inside the empty span.`);
+      s.removeGap(input.at);
+      return { closed: gap };
     }
 
     case "add_title": {
