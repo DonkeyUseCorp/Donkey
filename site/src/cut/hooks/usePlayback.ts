@@ -665,21 +665,29 @@ class Engine {
 
     let t = Math.min(s.currentTime, total);
 
-    // Keep the next few clips decoded and buffering ahead of the playhead (and
-    // ahead of a paused playhead, so pressing play resumes clean). Runs before
-    // either branch since both benefit; warms only clips ahead of `t`, so it
-    // never touches the element the branches are about to drive.
-    this.warmAhead(spans, t);
-    this.warmOverlaysAhead(t);
+    // iMovie skimming: while paused with the mouse over the timeline, the
+    // frame on screen lives at the skim point, not the playhead. The playhead
+    // (currentTime) is never touched.
+    const pt =
+      !s.playing && s.skimTime !== null
+        ? Math.max(0, Math.min(s.skimTime, total - 0.001))
+        : t;
+
+    // Keep the next few clips decoded and buffering ahead of the frame being
+    // shown (the skim point while skimming, else the playhead — paused too, so
+    // pressing play resumes clean). Runs before either branch since both
+    // benefit; warms only clips ahead of the anchor, so it never touches the
+    // element the branches are about to drive — anchored at the playhead while
+    // skimming, its entrance-frame parking seeks would fight the skimmed
+    // clip's own scrub seeks every tick and freeze the preview on any clip
+    // ahead of the playhead.
+    this.warmAhead(spans, pt);
+    this.warmOverlaysAhead(pt);
 
     if (!s.playing) {
       // Not advancing: drop the wall-clock stamp so the first playing tick
       // starts a fresh delta instead of leaping over the paused stretch.
       this.lastPlayNow = 0;
-      // iMovie skimming: while the mouse hovers the timeline, preview the
-      // frame under it. The playhead (currentTime) is never touched.
-      const pt =
-        s.skimTime !== null ? Math.max(0, Math.min(s.skimTime, total - 0.001)) : t;
       const span = spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len);
       // Prime every layer live at `pt` — the track-0 element and each overlay
       // track — before repainting (create them, issue any seeks). A cold
