@@ -160,16 +160,21 @@ export function FolderCrumb({
   mime,
   onBack,
   onDropOut,
+  className,
 }: {
   root: string;
   name: string;
   mime: string;
   onBack: () => void;
   onDropOut: (ids: string[]) => void;
+  className?: string;
 }) {
   const [over, setOver] = useState(false);
   return (
-    <div className="flex items-center gap-2 text-lg font-semibold tracking-tight" data-no-marquee>
+    <div
+      className={cn("flex items-center gap-2 text-lg font-semibold tracking-tight", className)}
+      data-no-marquee
+    >
       <button
         className={cn(
           "rounded-md px-1.5 py-0.5 text-muted-foreground transition-colors hover:text-foreground",

@@ -788,7 +788,20 @@ function LibraryPanel({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <PanelHead title="Library" />
+      {openFolder !== null ? (
+        <div className="flex h-12 shrink-0 items-center pr-2.5 pl-2.5">
+          <FolderCrumb
+            className="text-sm"
+            root="Library"
+            name={openFolderName ?? "Folder"}
+            mime={LIBRARY_MOVE_MIME}
+            onBack={() => setOpenFolder(null)}
+            onDropOut={(ids) => ids.forEach((id) => void move(id, null))}
+          />
+        </div>
+      ) : (
+        <PanelHead title="Library" />
+      )}
       {templates.length > 0 && (
         <div className="shrink-0 px-3.5 pb-3">
           <div className="flex flex-col gap-1.5">
@@ -817,17 +830,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
-      {openFolder !== null ? (
-        <div className="shrink-0 px-3.5 pb-2.5">
-          <FolderCrumb
-            root="Library"
-            name={openFolderName ?? "Folder"}
-            mime={LIBRARY_MOVE_MIME}
-            onBack={() => setOpenFolder(null)}
-            onDropOut={(ids) => ids.forEach((id) => void move(id, null))}
-          />
-        </div>
-      ) : folders.length > 0 ? (
+      {openFolder === null && folders.length > 0 ? (
         <div className="shrink-0 px-3.5">
           <FolderShelf
             folders={folders}
