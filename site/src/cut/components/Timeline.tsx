@@ -251,14 +251,15 @@ export function Timeline() {
     const zone = el?.closest<HTMLElement>("[data-drop]");
     const parsed = zone ? parsePlacement(zone.dataset.drop!) : null;
     if (parsed) return parsed;
-    // Past the ends of the stack → a new track beyond the last one.
+    // Past the ends of the stack → above opens a new top track; below the
+    // bottom row opens a new track 0 (the spine transplants onto the drop).
     const rows = innerRef.current?.querySelectorAll<HTMLElement>("[data-drop]");
     const tracks = overlayLayers(useEditor.getState().clips).map((c) => c.track);
     if (rows && rows.length) {
       if (clientY < rows[0].getBoundingClientRect().top)
         return { kind: "insert", level: Math.max(0, ...tracks) + 1 };
       if (clientY > rows[rows.length - 1].getBoundingClientRect().bottom)
-        return { kind: "insert", level: Math.min(0, ...tracks) - 1 };
+        return { kind: "insert", level: 0 };
     }
     return TRACK_ZERO;
   }, []);
@@ -304,20 +305,17 @@ export function Timeline() {
     return { used, rowOf, count: used.length };
   }, [overlays]);
 
-  // Video tracks either side of track 0: positive tracks (PiP / composited
-  // layers) render above it, negative ones below it as a backdrop. Both list
-  // highest-first (nearest track 0 at the inner edge); empty tracks vanish.
+  // Video tracks above track 0 (PiP / composited layers), listed highest-first
+  // so the top row is the frontmost layer and track 0 sits at the bottom of
+  // the stack; empty tracks vanish.
   const aboveTracks = useMemo(
     () => [...new Set(overlayClips.map((c) => c.track).filter((n) => n > 0))].sort((a, b) => b - a),
     [overlayClips]
   );
-  const belowTracks = useMemo(
-    () => [...new Set(overlayClips.map((c) => c.track).filter((n) => n < 0))].sort((a, b) => b - a),
-    [overlayClips]
-  );
-  // The z-levels a drop past the stack's edges would open a new track at.
+  // The z-levels a drop past the stack's edges would open a new track at: a
+  // new top layer above, or a new track 0 below (the spine transplants there).
   const topInsertLevel = (aboveTracks[0] ?? 0) + 1;
-  const bottomInsertLevel = (belowTracks[belowTracks.length - 1] ?? 0) - 1;
+  const bottomInsertLevel = 0;
 
   // Audio tracks mirror the title tracks: clips carry a `lane`; used lanes
   // compact to contiguous display rows, so empty tracks disappear on their own.
@@ -1065,51 +1063,10 @@ export function Timeline() {
           </div>
           )}
 
-          {belowTracks.map((track) => (
-            <div
-              key={`ov-${track}`}
-              className="relative mt-1.5"
-              style={{ height: OVERLAY_H }}
-              data-drop={placementAttr({ kind: "track", track })}
-              onPointerDown={deselectIfSelf}
-              {...overlayDropHandlers({ kind: "track", track })}
-            >
-              {laneRail(OVERLAY_H - 2)}
-              {videoDragActive && trackGuide({ kind: "track", track })}
-              {draggedOverlayTrack === track && laneDrag && (
-                <LaneSlot
-                  drag={laneDrag}
-                  pps={pps}
-                  rowH={OVERLAY_H}
-                  barH={OVERLAY_H - 4}
-                  className="rounded-lg bg-[#0a84ff]/10 shadow-[inset_0_0_0_1.5px_rgba(10,132,255,0.4)]"
-                />
-              )}
-              {overlayClips
-                .filter((c) => c.track === track)
-                .map((c) => (
-                  <OverlayClipView
-                    key={c.id}
-                    clip={c}
-                    asset={assets.find((x) => x.id === c.assetId)}
-                    pps={pps}
-                    selected={selKeys.has(`clip:${c.id}`)}
-                    drag={laneDrag?.kind === "overlayClip" && laneDrag.id === c.id ? laneDrag : null}
-                    parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== c.id}
-                    onDrag={setLaneDrag}
-                    onSnap={setSnapX}
-                    resolveTarget={resolveDropTrack}
-                    onCrossMove={previewCross}
-                    onCrossDrop={onOverlayCrossDrop}
-                    onDragActive={setVideoDragging}
-                  />
-                ))}
-              {trackSlot({ kind: "track", track }, OVERLAY_H - 4)}
-            </div>
-          ))}
-
           {/* The bottom-side new track grows the stack downward, like the
-              audio and title lanes' extra row — nothing above it moves. */}
+              audio and title lanes' extra row — nothing above it moves.
+              Dropping here opens a new track 0: the whole stack renumbers up
+              and the spine (ripple, transitions) transplants onto the drop. */}
           {videoDragActive && newTrackRow(bottomInsertLevel)}
 
           {(audioClips.length > 0 || audioDrop !== null) && (

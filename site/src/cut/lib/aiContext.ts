@@ -182,8 +182,8 @@ export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | nu
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),
     })),
-    // Video layers composited with track 0: track > 0 above it (topmost
-    // full-frame clip covers the rest), track < 0 behind it.
+    // Video layers composited over track 0 in track order (the topmost
+    // full-frame clip covers the rest).
     overlayVideo: overlayLayers(s.clips).map((c) => ({ id: c.id, ...describeOverlayClip(c, assetById) })),
     soundtrack: s.audioClips.map((a) => ({ id: a.id, ...describeAudio(a, assetById) })),
     titles: s.overlays.map((o) => ({ id: o.id, ...describeOverlay(o) })),

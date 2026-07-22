@@ -111,11 +111,11 @@ export function regionLabel(r: FrameRect): string {
 export interface VideoClip {
   id: string;
   assetId: string;
-  /** Which video track this clip sits on. Track 0's clips form the sequence
-   * that carries transitions and drives playback.
-   * Positive tracks composite above it (higher = closer to the top and wins
-   * where clips overlap); negative tracks sit behind as a backdrop. Absent in
-   * older docs, which are all track 0. */
+  /** Which video track this clip sits on. Tracks number 0..N bottom-up:
+   * track 0's clips form the sequence that carries transitions and drives
+   * playback; higher tracks composite in front (highest wins where clips
+   * overlap). Absent in older docs, which are all track 0; docs saved when
+   * tracks could go negative lift on load so the lowest row becomes 0. */
   track: number;
   start: number; // timeline position, seconds
   in: number; // trim-in inside the source, seconds

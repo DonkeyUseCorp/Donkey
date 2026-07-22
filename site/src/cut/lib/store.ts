@@ -35,10 +35,10 @@ const uid = () => crypto.randomUUID().slice(0, 8);
 const MIN_LEN = 0.1;
 
 /** Where a video clip lands when dropped: an existing track or a brand-new
- * track inserted at z-level `level`. Track numbers are signed: positive tracks
- * sit above track 0 (higher = closer to the top), negative tracks sit below it
- * (more negative = further behind). Inserting shifts the
- * tracks past `level` (up for positive, down for negative) to open the slot. */
+ * track inserted at z-level `level`. Tracks number 0..N bottom-up: track 0 is
+ * the bottom row, higher tracks composite in front. Inserting shifts the
+ * tracks at/above `level` up to open the slot — inserting at 0 opens a new
+ * bottom row, which becomes the spine (ripple, transitions, playback master). */
 export type VideoTrackPlacement =
   | { kind: "track"; track: number }
   | { kind: "insert"; level: number };
@@ -49,15 +49,13 @@ export const track0Clips = (clips: VideoClip[]) => clips.filter((c) => c.track =
 /** Every video clip not on track 0 — the composited layers. */
 export const overlayLayers = (clips: VideoClip[]) => clips.filter((c) => c.track !== 0);
 
-/** Open a slot at a non-zero `level`, moving other clips out of the way: above
- * track 0 (level > 0) shifts tracks at/above it up; below track 0 (level < 0)
- * shifts tracks at/below it down. Track-0 clips never match a non-zero level, so
- * this is safe to run over the whole clip list. `exclude` is the clip being
- * placed (left untouched). */
+/** Open a slot at `level`, shifting the tracks at/above it up by one. `exclude`
+ * is the clip being placed (left untouched). Level 0 shifts the whole stack up:
+ * the placed clip becomes the new track 0 — the spine transplants to it. */
 function openInsertSlot(clips: VideoClip[], level: number, exclude?: string): VideoClip[] {
-  return level > 0
-    ? clips.map((c) => (c.id !== exclude && c.track >= level ? { ...c, track: c.track + 1 } : c))
-    : clips.map((c) => (c.id !== exclude && c.track <= level ? { ...c, track: c.track - 1 } : c));
+  return clips.map((c) =>
+    c.id !== exclude && c.track >= level ? { ...c, track: c.track + 1 } : c
+  );
 }
 const shiftTracksUp = (clips: VideoClip[], place: VideoTrackPlacement): VideoClip[] =>
   place.kind === "insert" ? openInsertSlot(clips, place.level) : clips;
@@ -91,8 +89,8 @@ export interface EditorState {
   saveState: SaveState;
 
   assets: MediaAsset[];
-  /** Every video clip, on any track. Track 0 carries the transition sequence;
-   * other tracks composite around it (positive above, negative behind). A
+  /** Every video clip, on any track. Tracks number 0..N bottom-up: track 0
+   * carries the transition sequence, higher tracks composite in front. A
    * clip's `track` field is the only thing that places it. */
   clips: VideoClip[];
   audioClips: AudioClip[];
@@ -645,7 +643,12 @@ export const useEditor = create<EditorState>((set, get) => {
         const legacyLayers = (doc.overlayClips ?? []).filter(
           (c) => c.track !== 0 && !seen.has(c.id)
         );
-        const merged = [...folded, ...legacyLayers];
+        // Tracks number 0..N bottom-up. Docs saved when tracks could go
+        // negative (backdrop rows below the spine) lift wholesale so the
+        // lowest row becomes track 0 — the bottom row is the spine now.
+        const joined = [...folded, ...legacyLayers];
+        const lift = Math.max(0, ...joined.map((c) => -c.track));
+        const merged = lift ? joined.map((c) => ({ ...c, track: c.track + lift })) : joined;
         set({
           projectName: doc.name,
           assets,
@@ -1640,14 +1643,14 @@ export const useEditor = create<EditorState>((set, get) => {
         }));
       const topTrack = Math.max(0, ...overlayLayers(get().clips).map((c) => c.track));
       // Template layers store `track` as the source track + 1 (so a track-1
-      // layer saved as 2, a track −1 backdrop as 0). Above-layers stack on top
-      // of the project's current top; a backdrop (stored ≤ 0) goes back behind
-      // track 0 at its original negative level — never onto track 0 itself,
-      // which would splice it into the transition sequence.
+      // layer saved as 2). Layers stack on top of the project's current top —
+      // never onto track 0 itself, which would splice them into the transition
+      // sequence. Templates saved when tracks could go negative (backdrops)
+      // clamp into the stack above too.
       const newLayers: VideoClip[] = overlayLayerDefs.map((l) => ({
         id: uid(),
         assetId: assetIds[l.media],
-        track: l.track > 0 ? topTrack + l.track : l.track - 1,
+        track: topTrack + Math.max(1, l.track),
         start: l.start + shift,
         in: l.in,
         out: l.out,

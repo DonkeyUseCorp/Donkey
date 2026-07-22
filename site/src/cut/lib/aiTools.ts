@@ -341,8 +341,11 @@ export async function runAiTool(
       if (asset.type !== "video" && asset.type !== "image")
         throw new ToolError("Only video or image assets can sit on a video track.");
       const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
-      const track = isNum(input.track) ? Math.round(input.track) : 1;
-      if (track === 0) throw new ToolError("Track 0 holds the timeline clips — use place_clip for it.");
+      // Tracks stack bottom-up from track 0; overlays live on 1+. A stale
+      // negative (the old behind-track model) clamps to the first layer.
+      const track = isNum(input.track) ? Math.max(1, Math.round(input.track)) : 1;
+      if (isNum(input.track) && Math.round(input.track) === 0)
+        throw new ToolError("Track 0 holds the timeline clips — use place_clip for it.");
       s.addVideoFromAsset(asset.id, { kind: "track", track }, start);
       const cur = useEditor.getState();
       const sel = cur.selection;
@@ -376,8 +379,8 @@ export async function runAiTool(
       }
       if (isNum(input.track)) {
         const track = Math.round(input.track);
-        if (track === 0) throw new ToolError("Track 0 holds the timeline clips — overlays are non-zero.");
-        patch.track = track;
+        if (track === 0) throw new ToolError("Track 0 holds the timeline clips — overlays are 1 or higher.");
+        patch.track = Math.max(1, track);
       }
       if (typeof input.muted === "boolean") patch.muted = input.muted;
       if (typeof input.hidden === "boolean") patch.hidden = input.hidden || undefined;

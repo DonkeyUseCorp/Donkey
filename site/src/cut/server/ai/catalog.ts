@@ -171,11 +171,11 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "add_overlay_video",
     description:
-      "Put a project video or image asset on an overlay video track, composited with track 0: track 1+ sits above it (the topmost full-frame clip covers everything below), negative tracks sit behind it. Pick a layout to share the frame — halves for a split screen, pip for picture-in-picture. Asset ids come from `media` in the editor state.",
+      "Put a project video or image asset on an overlay video track, composited over track 0: tracks stack bottom-up, and the topmost full-frame clip covers everything below. Pick a layout to share the frame — halves for a split screen, pip for picture-in-picture. Asset ids come from `media` in the editor state.",
     inputSchema: obj({
       asset_id: str("Project asset id (video or image)"),
       start: num("Timeline start s (default: the playhead)"),
-      track: num("Video track, non-zero; 1 = first layer above track 0, -1 = behind it (default 1)"),
+      track: num("Video track, 1 or higher; 1 = first layer above track 0, higher = further in front (default 1)"),
       layout: {
         type: "string",
         enum: ["full", "top", "bottom", "left", "right", "pip"],
@@ -192,7 +192,7 @@ export const AI_TOOLS: AiToolDef[] = [
       start: num("Timeline start s"),
       in: num("Source in s"),
       out: num("Source out s"),
-      track: num("Video track, non-zero; positive above track 0, negative behind"),
+      track: num("Video track, 1 or higher; higher = further in front"),
       muted: bool("Mute the clip's own audio"),
       hidden: bool("Hide the layer without deleting it"),
       layout: {
@@ -698,7 +698,7 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 - Deleting a track-0 clip ripples: the span it occupied closes, later items on every track slide left together, items wholly inside the span go with it, and straddlers are trimmed. A gap that already existed stays. Deletes on other tracks remove just that item.
 - Two ways to move a track-0 clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index, opening a slot at the landing point — clips after it shift right, every other gap survives. Index-based inserts (freeze_frame, generated clips) open a slot the same way.
 - add_clip puts a project asset on the timeline the way a drag does: video/image onto track 0 (a \`start\`, an \`index\` insert, or appended at the end), audio onto the soundtrack.
-- Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below track 0; they drag the region in the preview.
+- Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above track 0; they drag the region in the preview.
 - A clip's timeline length is (out-in)/speed; total duration runs to the last clip's end, gaps included, minus cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
 - set_speed sets a clip's playback rate; it changes the clip's timeline length, and later titles/captions ripple to stay in sync.

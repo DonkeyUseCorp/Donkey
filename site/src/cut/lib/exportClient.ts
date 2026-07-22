@@ -245,7 +245,7 @@ async function buildExportForm(
           clipEntries[i],
         ]);
 
-  // Video tracks composited around track 0; hidden ones are dropped.
+  // Video tracks composited over track 0; hidden ones are dropped.
   const overlayVideos = overlayLayers(doc.clips)
     .filter((c) => !c.hidden && assetById.has(c.assetId) && c.start < duration)
     .map((c) => ({

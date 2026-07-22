@@ -52,7 +52,7 @@ export interface ExportSpec {
     /** A still image: looped for the clip's length instead of trimmed. */
     image?: boolean;
   }[];
-  /** Video tracks composited around the track-0 `clips`, bottom track first. */
+  /** Video tracks composited over the track-0 `clips`, lowest track first. */
   overlayVideos?: {
     file: string;
     in: number;
@@ -444,15 +444,11 @@ async function runExport(job: Job, spec: ExportSpec) {
   if (spec.clips.length === 0) throw new Error("Nothing to export.");
   const { width: W, height: H, fps } = spec;
 
-  const overlayVideos = spec.overlayVideos ?? [];
-  // Negative tracks form a backdrop track 0 draws over; positive tracks sit
-  // on top. A below track means the track-0 picture must carry alpha where
-  // it's regioned so the backdrop shows through its margins.
-  const belowVideos = overlayVideos.filter((o) => o.track < 0).sort((a, b) => a.track - b.track);
-  const aboveVideos = overlayVideos.filter((o) => o.track > 0).sort((a, b) => a.track - b.track);
-  const hasBelow = belowVideos.length > 0;
-  const clipFmt = hasBelow ? "yuva420p" : "yuv420p";
-  const padColor = hasBelow ? "black@0.0" : "black";
+  // Tracks number 0..N bottom-up: track 0 folds sequentially into the base
+  // picture, the rest overlay it in track order (highest last = frontmost).
+  const overlayVideos = [...(spec.overlayVideos ?? [])].sort((a, b) => a.track - b.track);
+  const clipFmt = "yuv420p";
+  const padColor = "black";
   // One ffmpeg input per distinct media file (from the project folder),
   // plus one per uploaded overlay PNG.
   // Still images are excluded here: a plain `-i file` decodes one frame, so
@@ -656,11 +652,9 @@ async function runExport(job: Job, spec: ExportSpec) {
         filters.push(`${core}${fades}[v${j}]`);
       }
     } else {
-      // No video stream, or a hidden clip: keep the slot transparent (so a below
-      // track shows) when one exists, otherwise plain black.
-      const slot = hasBelow ? "black@0.0" : "black";
+      // No video stream, or a hidden clip: the slot plays black.
       filters.push(
-        `color=c=${slot}:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=${clipFmt}[v${j}]`
+        `color=c=black:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=${clipFmt}[v${j}]`
       );
     }
     if (!c.muted && !c.hidden && audioPresence.get(c.file)) {
@@ -709,15 +703,14 @@ async function runExport(job: Job, spec: ExportSpec) {
     aAcc = aOut;
   }
 
-  // Composite the video stack bottom→top: negative tracks form a backdrop
-  // track 0 draws over (a regioned clip leaves them showing), then the
-  // positive tracks sit on top. A full-frame layer covers; a regioned one
+  // Composite the video stack bottom→top: the overlay tracks draw over the
+  // track-0 base in track order. A full-frame layer covers; a regioned one
   // shares the frame (split half) or floats (PiP). Overlay audio (unless
   // muted) mixes in below.
   const overlaySoundLabels: string[] = [];
   let ovk = 0;
   // Overlay one track clip onto `onto`, returning the new label; also queues
-  // its audio. Reused for the backdrop and the positive-track stack.
+  // its audio.
   const addOverlay = (oc: (typeof overlayVideos)[number], onto: string): string => {
     if (!oc.image && !videoPresence.get(oc.file)) return onto;
     const idx = oc.image ? imageOverlayInput.get(oc)! : inputIndex.get(oc.file)!;
@@ -769,20 +762,7 @@ async function runExport(job: Job, spec: ExportSpec) {
   };
 
   let vLabel = vAcc;
-  if (hasBelow) {
-    // Backdrop = black + the negative tracks; the alpha-carrying track-0
-    // picture draws over it (regioned margins reveal the backdrop), then
-    // flatten for encoding.
-    filters.push(
-      `color=c=black:s=${W}x${H}:r=${fps},trim=0:${num(spec.duration)},setpts=PTS-STARTPTS,format=yuva420p[below0]`
-    );
-    let belowLabel = "below0";
-    for (const oc of belowVideos) belowLabel = addOverlay(oc, belowLabel);
-    filters.push(`[${belowLabel}][${vAcc}]overlay=0:0[t0comp]`);
-    filters.push(`[t0comp]format=yuv420p[t0flat]`);
-    vLabel = "t0flat";
-  }
-  for (const oc of aboveVideos) vLabel = addOverlay(oc, vLabel);
+  for (const oc of overlayVideos) vLabel = addOverlay(oc, vLabel);
 
   // Burn in text overlays, each windowed to its timeline range. Half-open so
   // back-to-back overlays sharing a boundary never composite on the same frame.

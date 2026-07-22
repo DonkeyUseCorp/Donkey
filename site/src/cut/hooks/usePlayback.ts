@@ -310,7 +310,7 @@ class Engine {
       return;
     }
     // A hidden clip plays nothing: fill black only if we own the clear,
-    // otherwise leave whatever is beneath (a below track) showing.
+    // otherwise leave the frame as drawn so far.
     if (clip?.hidden) {
       if (clear) {
         ctx.fillStyle = "#000";
@@ -430,8 +430,8 @@ class Engine {
       masterEl.volume = Math.max(0, Math.min(1, gain * duck * (masterSpan.clip.volume ?? 1)));
     }
     this.pauseExcept(keep);
-    // No clear here — the tick clears once, then draws the negative tracks, so
-    // track 0 composites over them (a regioned clip leaves them showing).
+    // No clear here — the tick clears once before compositing, so a regioned
+    // clip draws into its rect over the already-black frame.
     this.drawLayer(masterEl, masterSpan.clip, false, 1, masterZoom);
     if (incEl) this.drawLayer(incEl, next!.clip, false, alpha, incZoom);
     // Veil only the master clip's own footprint, like the export's per-clip
@@ -485,15 +485,12 @@ class Engine {
     this.fillBlackVeil(1 - gain);
   }
 
-  /** Overlay clips live at time `t` on one side of track 0 — `below`
-   * (track < 0) or `above` (track > 0) — with their assets, in z-order
-   * (further-back first). */
-  private liveOverlays(t: number, side: "below" | "above") {
+  /** Overlay clips live at time `t` — every track above 0, with their assets,
+   * in z-order (further-back first). */
+  private liveOverlays(t: number) {
     const s = useEditor.getState();
     const live: { clip: VideoClip; asset: MediaAsset }[] = [];
-    const clips = overlayLayers(s.clips)
-      .filter((c) => (side === "below" ? c.track < 0 : c.track > 0))
-      .sort((a, b) => a.track - b.track);
+    const clips = overlayLayers(s.clips).sort((a, b) => a.track - b.track);
     for (const c of clips) {
       if (c.hidden) continue;
       const asset = s.assets.find((a) => a.id === c.assetId);
@@ -533,29 +530,28 @@ class Engine {
     return el;
   }
 
-  /** Live overlays for one side, each already primed toward `t`. Computed once
-   * so the skim path's readiness check and the draw step share the same
+  /** The live overlays, each already primed toward `t`. Computed once so the
+   * skim path's readiness check and the draw step share the same
    * filter/sort/seek instead of repeating it per frame. */
-  private prepareSide(t: number, play: boolean, side: "below" | "above") {
-    return this.liveOverlays(t, side).map(({ clip, asset }) => ({
+  private prepareOverlays(t: number, play: boolean) {
+    return this.liveOverlays(t).map(({ clip, asset }) => ({
       clip,
       el: this.prepareOverlay(clip, asset, t, play),
     }));
   }
 
-  /** Draw the overlay tracks on one side of track 0 — `below` (track < 0) or
-   * `above` (track > 0) — in z-order (further-back first). A full-frame clip
-   * covers what's under it; a regioned one shares the frame, letting lower
-   * tracks show in its margins. Collects the clips it touched into `active`.
-   * Pass `prepared` (from `prepareSide`) to reuse an already-primed side. */
+  /** Draw the overlay tracks over track 0 in z-order (further-back first). A
+   * full-frame clip covers what's under it; a regioned one shares the frame,
+   * letting lower tracks show in its margins. Collects the clips it touched
+   * into `active`. Pass `prepared` (from `prepareOverlays`) to reuse an
+   * already-primed set. */
   private drawOverlays(
     t: number,
     play: boolean,
-    side: "below" | "above",
     active: Set<string>,
     prepared?: { clip: VideoClip; el: MediaEl }[]
   ) {
-    for (const { clip, el } of prepared ?? this.prepareSide(t, play, side)) {
+    for (const { clip, el } of prepared ?? this.prepareOverlays(t, play)) {
       active.add(clip.id);
       if (!elReady(el)) continue;
       const rect = rectOf(clip);
@@ -703,11 +699,10 @@ class Engine {
         // wedging the preview on it.
         if (!elErrored(el) && !elReady(el)) ready = false;
       }
-      // Prime each side once; the readiness scan and the draw step below reuse
-      // these instead of re-filtering/seeking the overlays a second time.
-      const belowLive = this.prepareSide(pt, false, "below");
-      const aboveLive = this.prepareSide(pt, false, "above");
-      for (const { el } of [...belowLive, ...aboveLive]) {
+      // Prime the overlays once; the readiness scan and the draw step below
+      // reuse these instead of re-filtering/seeking them a second time.
+      const overlaysLive = this.prepareOverlays(pt, false);
+      for (const { el } of overlaysLive) {
         if (!elErrored(el) && !elReady(el)) ready = false;
       }
       if (!ready) {
@@ -717,12 +712,11 @@ class Engine {
       }
       const active = new Set<string>();
       this.clearCanvas();
-      this.drawOverlays(pt, false, "below", active, belowLive);
-      // Where track 0 has nothing live there is no master frame — just the
-      // backdrop and the other tracks still running at `pt`.
+      // Where track 0 has nothing live there is no master frame — just black
+      // and the other tracks still running at `pt`.
       if (span) this.composite(span, spans, Math.min(pt, span.start + span.len), false);
       else this.pauseExcept(new Set());
-      this.drawOverlays(pt, false, "above", active, aboveLive);
+      this.drawOverlays(pt, false, active, overlaysLive);
       this.drawProjectFade(this.projectFadeGain(pt, total));
       this.cleanupOverlays(active);
       this.syncSoundtrack(t, false);
@@ -746,11 +740,10 @@ class Engine {
       }
     }
 
-    // Draw the below tracks first (backdrop), then prime the master element
-    // (and any dissolve partner) over them and read the clock.
+    // Clear to black, then prime the master element (and any dissolve
+    // partner) over it and read the clock.
     const active = new Set<string>();
     this.clearCanvas();
-    this.drawOverlays(t, true, "below", active);
 
     if (span) {
       let el = this.composite(span, spans, t, true);
@@ -804,7 +797,7 @@ class Engine {
           // Track 0 and every other track finished.
           useEditor.setState({ playing: false, currentTime: total });
           pauseEl(el);
-          this.drawOverlays(t, true, "above", active);
+          this.drawOverlays(t, true, active);
           this.drawProjectFade(this.projectFadeGain(total, total));
           this.cleanupOverlays(active);
           this.syncSoundtrack(total, false);
@@ -822,7 +815,7 @@ class Engine {
       t = t + dt;
       if (t >= total - 0.001) {
         useEditor.setState({ playing: false, currentTime: total });
-        this.drawOverlays(t, true, "above", active);
+        this.drawOverlays(t, true, active);
         this.drawProjectFade(this.projectFadeGain(total, total));
         this.cleanupOverlays(active);
         this.syncSoundtrack(total, false);
@@ -830,7 +823,7 @@ class Engine {
       }
     }
 
-    this.drawOverlays(t, true, "above", active);
+    this.drawOverlays(t, true, active);
     // The whole-video fade veils the finished frame and dims the sound —
     // the master's element volume (set by composite) and the soundtrack.
     const fadeGain = this.projectFadeGain(t, total);
