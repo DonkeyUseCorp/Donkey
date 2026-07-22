@@ -1208,11 +1208,21 @@ export const useEditor = create<EditorState>((set, get) => {
       // Full-frame by default: covers track 0 ("topmost plays"); the inspector
       // regions it (split half / corner PiP).
       const track = place.kind === "insert" ? place.level : place.track;
+      // An existing track has residents: slide to its next free slot, like the
+      // track-0 add. An inserted track is brand-new, so the start holds as-is.
+      const at =
+        place.kind === "track"
+          ? nextFreeStart(
+              footprints(get().clips.filter((c) => c.track === track)),
+              Math.max(0, start),
+              Math.max(MIN_LEN, out)
+            )
+          : Math.max(0, start);
       const ov: VideoClip = {
         id: uid(),
         assetId,
         track,
-        start: Math.max(0, start),
+        start: at,
         in: 0,
         out,
         muted: false,
@@ -1245,6 +1255,16 @@ export const useEditor = create<EditorState>((set, get) => {
       }
 
       const track = place.kind === "insert" ? place.level : place.track;
+      // An existing track has residents: slide to its next free slot, like the
+      // track-0 drop. An inserted track is brand-new, so the start holds as-is.
+      const at =
+        place.kind === "track"
+          ? nextFreeStart(
+              footprints(get().clips.filter((c) => c.track === track && c.id !== id)),
+              Math.max(0, start),
+              clipLen(src)
+            )
+          : Math.max(0, start);
       set((st) => {
         // Inserting a new track opens the slot by renumbering the others; the
         // moved clip itself is excluded from the shift, then placed at `track`.
@@ -1252,7 +1272,7 @@ export const useEditor = create<EditorState>((set, get) => {
           place.kind === "insert" ? openInsertSlot(st.clips, place.level, id) : st.clips;
         return {
           clips: shifted
-            .map((c) => (c.id === id ? { ...c, track, start: Math.max(0, start) } : c))
+            .map((c) => (c.id === id ? { ...c, track, start: at } : c))
             .sort((a, b) => a.start - b.start),
           ...sole({ kind: "clip", id }),
         };
