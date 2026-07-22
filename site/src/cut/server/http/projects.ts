@@ -213,6 +213,25 @@ export const projectsApi = {
     }
   },
 
+  /** Reveal a media file in Finder (Cut runs on the user's own Mac). */
+  async revealMedia(_req: Request, { id, file }: { id: string; file: string }) {
+    let p: string;
+    try {
+      p = mediaPath(id, decodeURIComponent(file));
+    } catch {
+      return err("Bad request.", 400);
+    }
+    if (!(await exists(p))) return err("Media file not found.", 404);
+    try {
+      await new Promise<void>((resolve, reject) =>
+        execFile("open", ["-R", p], (e) => (e ? reject(e) : resolve()))
+      );
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not reveal the file.");
+    }
+  },
+
   /** Raw media file with Range support so <video>/<audio> can seek. */
   async serveMedia(req: Request, { id, file }: { id: string; file: string }) {
     let p: string;

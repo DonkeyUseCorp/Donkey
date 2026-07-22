@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
+import { Captions, Check, Clapperboard, ClipboardList, Copy, Ellipsis, Film, FolderOpen, FolderPlus, Image as ImageIcon, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
@@ -15,7 +15,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { SectionTitle } from "@/cut/components/SectionTitle";
-import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import {
   clearAssetDrag,
@@ -50,6 +56,7 @@ import {
   type LibraryAsset,
   type LibraryFolder,
 } from "@/cut/lib/library";
+import { revealMedia } from "@/cut/lib/media";
 import { mediaUrl, type LibraryTemplate } from "@/cut/lib/types";
 import { genPulseOverlay, isGenTab, useGenNotify, useGenPulse, useWatchGenTab } from "@/cut/lib/genNotify";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
@@ -668,24 +675,30 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
             <Plus className="size-3" />
           </span>
         </span>
-        <span className="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          <span
-            role="button"
-            title="Save to library for reuse"
-            className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
-            onClick={saveToLibrary}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label="More actions"
+            title="More actions"
+            className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/65 data-[state=open]:opacity-100"
+            onClick={(e) => e.stopPropagation()}
           >
-            {saved ? <Check className="size-3" /> : <FolderPlus className="size-3" />}
-          </span>
-          <span
-            role="button"
-            title="Remove from project"
-            className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
-            onClick={remove}
-          >
-            <Trash2 className="size-3" />
-          </span>
-        </span>
+            {saved ? <Check className="size-3" /> : <Ellipsis className="size-3" />}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48" onClick={(e) => e.stopPropagation()}>
+            <DropdownMenuItem onClick={saveToLibrary}>
+              <FolderPlus /> Save to library
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => void revealMedia(projectId, asset.fileName).catch(() => {})}
+            >
+              <FolderOpen /> Show in Finder
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={remove}>
+              <Trash2 /> Remove from project
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {asset.type === "audio" && (
           <CopyNameLabel
             name={asset.name}

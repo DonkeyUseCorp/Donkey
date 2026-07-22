@@ -68,6 +68,14 @@ export async function createProjectFromFile(
   return project.id;
 }
 
+/** Reveal a project media file in Finder (local engine only). */
+export async function revealMedia(projectId: string, fileName: string) {
+  await apiFetch(
+    `/api/cut/projects/${projectId}/media/${encodeURIComponent(fileName)}/reveal`,
+    { method: "POST" }
+  );
+}
+
 export function isVideoFile(file: File) {
   return file.type.startsWith("video/") || /\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name);
 }

@@ -39,6 +39,7 @@ export const CUT_ROUTES: CutRoute[] = [
   { method: "POST", path: "/api/cut/projects/:id/import-url", handler: (req, p) => projectsApi.importUrl(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/media/:file", handler: (req, p) => projectsApi.serveMedia(req, { id: p.id, file: p.file }) },
   { method: "DELETE", path: "/api/cut/projects/:id/media/:file", handler: (req, p) => projectsApi.removeMedia(req, { id: p.id, file: p.file }) },
+  { method: "POST", path: "/api/cut/projects/:id/media/:file/reveal", handler: (req, p) => projectsApi.revealMedia(req, { id: p.id, file: p.file }) },
   { method: "GET", path: "/api/cut/projects/:id/exports", handler: (req, p) => projectsApi.listExports(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/exports/:file", handler: (req, p) => projectsApi.serveExport(req, { id: p.id, file: p.file }) },
   { method: "DELETE", path: "/api/cut/projects/:id/exports/:file", handler: (req, p) => projectsApi.removeExport(req, { id: p.id, file: p.file }) },
