@@ -286,14 +286,12 @@ function LayoutButtons({
 function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const updateClip = useEditor((s) => s.updateClip);
-  // A transition hands this clip into the next one, so only offer it when
-  // there is a next clip on track 0 — layer clips share the sorted array
-  // but sit outside the sequence, so position checks read track 0 only.
-  const hasNext = useEditor((s) => {
-    const row = track0Clips(s.clips);
-    const i = row.findIndex((c) => c.id === clip.id);
-    return i >= 0 && i < row.length - 1;
-  });
+  // A transition hands this clip into the next one on its own track — every
+  // track carries transitions — so offer it whenever a same-track clip
+  // follows this one.
+  const hasNext = useEditor((s) =>
+    s.clips.some((c) => c.track === clip.track && c.start > clip.start + 1e-6)
+  );
   // The whole-video fades are project-level but live on the clips that show
   // them: fade in on the first clip's panel, fade out on the last clip's.
   const isFirst = useEditor((s) => track0Clips(s.clips)[0]?.id === clip.id);

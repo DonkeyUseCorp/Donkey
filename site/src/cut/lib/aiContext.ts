@@ -183,8 +183,19 @@ export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | nu
         : {}),
     })),
     // Video layers composited over track 0 in track order (the topmost
-    // full-frame clip covers the rest).
-    overlayVideo: overlayLayers(s.clips).map((c) => ({ id: c.id, ...describeOverlayClip(c, assetById) })),
+    // full-frame clip covers the rest). Each track carries its own
+    // transitions, reported per clip like track 0's.
+    overlayVideo: [...new Set(overlayLayers(s.clips).map((c) => c.track))].flatMap((track) => {
+      const trackSpans = getClipSpans(s.clips, s.assets, track);
+      return trackSpans.map((sp, i) => ({
+        id: sp.clip.id,
+        ...describeOverlayClip(sp.clip, assetById),
+        ...(() => {
+          const t = transitionToNext(sp, i, trackSpans);
+          return t ? { transitionToNext: t } : {};
+        })(),
+      }));
+    }),
     soundtrack: s.audioClips.map((a) => ({ id: a.id, ...describeAudio(a, assetById) })),
     titles: s.overlays.map((o) => ({ id: o.id, ...describeOverlay(o) })),
     subtitles: {

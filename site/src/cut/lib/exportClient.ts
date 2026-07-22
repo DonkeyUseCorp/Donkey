@@ -245,24 +245,53 @@ async function buildExportForm(
           clipEntries[i],
         ]);
 
-  // Video tracks composited over track 0; hidden ones are dropped.
-  const overlayVideos = overlayLayers(doc.clips)
-    .filter((c) => !c.hidden && assetById.has(c.assetId) && c.start < duration)
-    .map((c) => ({
-      file: assetById.get(c.assetId)!.fileName,
-      in: c.in,
-      out: c.out,
-      start: c.start,
-      track: c.track,
-      frame: c.frame,
-      // Pass `fit` through unset so the server's "default full-frame overlay
-      // covers what's below" branch fires — normalizing to "fit" defeated it.
-      fit: c.fit,
-      muted: c.muted,
-      volume: c.volume,
-      speed: c.speed,
-      image: assetById.get(c.assetId)!.type === "image",
-    }));
+  // Video tracks composited over track 0; hidden ones are dropped. Each
+  // track's transitions translate into per-clip head/tail ramps: on an upper
+  // track a fade is an alpha fade (transparent, so the tracks beneath show
+  // through), and a cross style blends the incoming clip in over the
+  // outgoing one — the incoming alpha-fades in for the overlap while the
+  // outgoing stays opaque underneath it.
+  const overlayTracks = [...new Set(overlayLayers(doc.clips).map((c) => c.track))];
+  const overlayVideos = overlayTracks.flatMap((track) => {
+    const trackSpans = getClipSpans(doc.clips, doc.assets, track);
+    const ramps = trackSpans.map(() => ({ headFade: 0, tailFade: 0, headZoom: 0, tailZoom: 0 }));
+    trackSpans.forEach((sp, i) => {
+      const next = trackSpans[i + 1];
+      if (!next) return;
+      const style = sp.clip.transitionStyle ?? "crossfade";
+      const d = sp.clip.transition ?? 0;
+      if (d <= 0) return;
+      if (sp.transitionOut > 0) {
+        ramps[i + 1].headFade = sp.transitionOut;
+        if (style === "crosszoom") {
+          ramps[i].tailZoom = sp.transitionOut;
+          ramps[i + 1].headZoom = sp.transitionOut;
+        }
+      } else if (style === "fadeout") ramps[i].tailFade = Math.min(d, sp.len);
+      else if (style === "zoomin") ramps[i].tailZoom = Math.min(d, sp.len);
+      else if (style === "fadein") ramps[i + 1].headFade = Math.min(d, next.len);
+      else if (style === "zoomout") ramps[i + 1].headZoom = Math.min(d, next.len);
+    });
+    return trackSpans
+      .map((sp, i) => ({ c: sp.clip, ramp: ramps[i] }))
+      .filter(({ c }) => !c.hidden && c.start < duration)
+      .map(({ c, ramp }) => ({
+        file: assetById.get(c.assetId)!.fileName,
+        in: c.in,
+        out: c.out,
+        start: c.start,
+        track: c.track,
+        frame: c.frame,
+        // Pass `fit` through unset so the server's "default full-frame overlay
+        // covers what's below" branch fires — normalizing to "fit" defeated it.
+        fit: c.fit,
+        muted: c.muted,
+        volume: c.volume,
+        speed: c.speed,
+        image: assetById.get(c.assetId)!.type === "image",
+        ...ramp,
+      }));
+  });
 
   const audio = doc.audioClips
     .filter((a) => !a.hidden && a.start < duration && assetById.has(a.assetId))

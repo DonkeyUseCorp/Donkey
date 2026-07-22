@@ -206,6 +206,14 @@ export function Timeline() {
   );
 
   const spans = useMemo(() => getClipSpans(clips, assets), [clips, assets]);
+  // Per-upper-track spans: each track carries its own transitions, so its row
+  // needs the same overlap-aware geometry (insets, badges) as track 0's.
+  const overlayTrackSpans = useMemo(() => {
+    const m = new Map<number, ClipSpan[]>();
+    for (const c of overlayClips)
+      if (!m.has(c.track)) m.set(c.track, getClipSpans(clips, assets, c.track));
+    return m;
+  }, [overlayClips, clips, assets]);
   const total = projectDuration({ clips, audioClips });
   // Fill the viewport at minimum so a wide window never leaves the ruler/tracks
   // cut off; grow past it once the content is longer. While a trim/slide drag
@@ -958,25 +966,36 @@ export function Timeline() {
                   className="rounded-lg bg-[#0a84ff]/10 shadow-[inset_0_0_0_1.5px_rgba(10,132,255,0.4)]"
                 />
               )}
-              {overlayClips
-                .filter((c) => c.track === track)
-                .map((c) => (
-                  <OverlayClipView
-                    key={c.id}
-                    clip={c}
-                    asset={assets.find((x) => x.id === c.assetId)}
-                    pps={pps}
-                    selected={selKeys.has(`clip:${c.id}`)}
-                    drag={laneDrag?.kind === "overlayClip" && laneDrag.id === c.id ? laneDrag : null}
-                    parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== c.id}
-                    onDrag={setLaneDrag}
-                    onSnap={setSnapX}
-                    resolveTarget={resolveDropTrack}
-                    onCrossMove={previewCross}
-                    onCrossDrop={onOverlayCrossDrop}
-                    onDragActive={setVideoDragging}
-                  />
-                ))}
+              {(overlayTrackSpans.get(track) ?? []).map((span, i, tSpans) => (
+                <OverlayClipView
+                  key={span.clip.id}
+                  clip={span.clip}
+                  asset={span.asset}
+                  prevOverlap={tSpans[i - 1]?.transitionOut ?? 0}
+                  overlap={span.transitionOut}
+                  pps={pps}
+                  selected={selKeys.has(`clip:${span.clip.id}`)}
+                  drag={
+                    laneDrag?.kind === "overlayClip" && laneDrag.id === span.clip.id
+                      ? laneDrag
+                      : null
+                  }
+                  parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== span.clip.id}
+                  onDrag={setLaneDrag}
+                  onSnap={setSnapX}
+                  resolveTarget={resolveDropTrack}
+                  onCrossMove={previewCross}
+                  onCrossDrop={onOverlayCrossDrop}
+                  onDragActive={setVideoDragging}
+                />
+              ))}
+              {laneDrag?.kind !== "overlayClip" && (
+                <TransitionBadges
+                  spans={overlayTrackSpans.get(track) ?? []}
+                  pps={pps}
+                  rowH={OVERLAY_H}
+                />
+              )}
               {trackSlot({ kind: "track", track }, OVERLAY_H - 4)}
             </div>
           ))}
@@ -1065,33 +1084,9 @@ export function Timeline() {
                 onDragActive={setVideoDragging}
               />
             ))}
-            {/* Transition badge, floating in the gutter where the two clips
-                meet (the overlap midpoint; a hard cut for edge styles),
-                vertically centered on the clip row. */}
-            {laneDrag?.kind !== "clip" &&
-              spans.map((span, i) => {
-                const d = span.clip.transition ?? 0;
-                if (!spans[i + 1] || d <= 0) return null;
-                const style = span.clip.transitionStyle ?? "crossfade";
-                const Icon = TRANSITION_ICONS[style];
-                return (
-                  <div
-                    key={`xf-${span.clip.id}`}
-                    // Above SELECTED_SHADOW's z-10: the badge marks the joint even
-                    // when a selected clip's ring runs under it.
-                    className="tl-xfade pointer-events-none absolute z-11 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
-                    style={{
-                      left: (span.start + span.len - span.transitionOut / 2) * pps - CLIP_GAP / 2,
-                      top: 2 + (VIDEO_H - 4) / 2 - 8,
-                      width: 16,
-                      height: 16,
-                    }}
-                    title={`${TRANSITION_STYLE_LABELS[style]} ${d.toFixed(1)}s`}
-                  >
-                    <Icon className="size-2.5" />
-                  </div>
-                );
-              })}
+            {laneDrag?.kind !== "clip" && (
+              <TransitionBadges spans={spans} pps={pps} rowH={VIDEO_H} />
+            )}
           </div>
           )}
 
@@ -1544,6 +1539,47 @@ function Playhead({
         <div className="mx-auto h-3 w-2.5 rounded-t-[3px] bg-[#0a84ff] [clip-path:polygon(0_0,100%_0,100%_58%,50%_100%,0_58%)]" />
       </div>
     </div>
+  );
+}
+
+/** Transition badges for one track row, floating in the gutter where each
+ * pair meets (the overlap midpoint; a hard cut for edge styles), vertically
+ * centered on the row. Shared by track 0 and the upper tracks. */
+function TransitionBadges({
+  spans,
+  pps,
+  rowH,
+}: {
+  spans: ClipSpan[];
+  pps: number;
+  rowH: number;
+}) {
+  return (
+    <>
+      {spans.map((span, i) => {
+        const d = span.clip.transition ?? 0;
+        if (!spans[i + 1] || d <= 0) return null;
+        const style = span.clip.transitionStyle ?? "crossfade";
+        const Icon = TRANSITION_ICONS[style];
+        return (
+          <div
+            key={`xf-${span.clip.id}`}
+            // Above SELECTED_SHADOW's z-10: the badge marks the joint even
+            // when a selected clip's ring runs under it.
+            className="tl-xfade pointer-events-none absolute z-11 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
+            style={{
+              left: (span.start + span.len - span.transitionOut / 2) * pps - CLIP_GAP / 2,
+              top: 2 + (rowH - 4) / 2 - 8,
+              width: 16,
+              height: 16,
+            }}
+            title={`${TRANSITION_STYLE_LABELS[style]} ${d.toFixed(1)}s`}
+          >
+            <Icon className="size-2.5" />
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -2019,6 +2055,8 @@ function overlayLen(c: VideoClip) {
 function OverlayClipView({
   clip,
   asset,
+  prevOverlap,
+  overlap,
   pps,
   selected,
   drag,
@@ -2032,6 +2070,11 @@ function OverlayClipView({
 }: {
   clip: VideoClip;
   asset: MediaAsset | undefined;
+  /** Cross-dissolve overlap of the previous same-track clip into this one —
+   * the room the incoming transition claims on this clip's left. */
+  prevOverlap: number;
+  /** This clip's own dissolve into the next same-track clip (its right). */
+  overlap: number;
   pps: number;
   selected: boolean;
   /** This clip's live drag when it is the one being carried (ghost mode). */
@@ -2045,7 +2088,17 @@ function OverlayClipView({
   onCrossDrop: (id: string, target: TrackTarget, start: number) => void;
   onDragActive: (active: boolean) => void;
 }) {
-  const w = Math.max(10, overlayLen(clip) * pps);
+  // A cross-dissolve overlaps two clips; inset each box by half the overlap
+  // so the pair meets at the overlap midpoint with the same CLIP_GAP gutter
+  // as a hard cut — identical to the track-0 boxes.
+  const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+  const leftXf = prevOverlap / 2;
+  const rightXf = overlap / 2;
+  const visStart = clip.start + leftXf;
+  const w = Math.max(10, Math.max(0, overlayLen(clip) - leftXf - rightXf) * pps);
+  // Frames start where the box does: skip the source seconds the left
+  // dissolve consumed so the filmstrip stays aligned under the inset edge.
+  const filmIn = clip.in + leftXf * speed;
 
   // Same filmstrip as a track-0 clip so an overlay reads as a video, not a
   // featureless bar — sampled across the clip's trimmed span.
@@ -2054,16 +2107,15 @@ function OverlayClipView({
     const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
     const imgW = Math.max(24, Math.round((OVERLAY_H - 4) * aspect));
     const count = Math.min(120, Math.ceil(w / imgW));
-    const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
     return Array.from({ length: count }, (_, k) => {
-      const at = clip.in + ((k * imgW + imgW / 2) / pps) * speed;
+      const at = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
       const idx = Math.min(
         asset.thumbs!.length - 1,
         Math.max(0, Math.floor(at / asset.thumbStep!))
       );
       return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
     });
-  }, [asset, clip.in, clip.speed, w, pps]);
+  }, [asset, filmIn, speed, w, pps]);
 
   if (!asset) return null;
 
@@ -2075,6 +2127,9 @@ function OverlayClipView({
     rowH: OVERLAY_H,
     laneCount: 0,
     homeRow: 0,
+    // The box is inset by half the incoming dissolve; click-to-seek anchors
+    // on where the box is drawn, not the clip's footprint start.
+    visStart,
     onDrag,
     onSnap,
     vertical: {
@@ -2098,7 +2153,8 @@ function OverlayClipView({
           : parting && "transition-[left] duration-150 ease-out"
       )}
       style={{
-        left: drag ? drag.ghostX : clip.start * pps,
+        // The ghost keeps the box's dissolve insets, offset to follow the pointer.
+        left: drag ? drag.ghostX + leftXf * pps : visStart * pps,
         top: drag ? 2 + drag.ghostY : undefined,
         width: Math.max(10, w - CLIP_GAP),
         height: OVERLAY_H - 4,

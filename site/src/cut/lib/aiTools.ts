@@ -1502,12 +1502,10 @@ export async function runAiTool(
 
     case "set_transition": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
-      // Transitions join the track-0 sequence; a layer clip has no next clip.
-      if (clip.track !== 0)
-        throw new ToolError("That clip is on an overlay track — transitions join timeline (track 0) clips.");
-      const row = track0Clips(s.clips);
+      // A transition joins a clip to the next one on its own track.
+      const row = s.clips.filter((c) => c.track === clip.track);
       if (row.findIndex((c) => c.id === clip.id) === row.length - 1)
-        throw new ToolError("The last clip has no next clip to transition into.");
+        throw new ToolError("That is its track's last clip — nothing after it to transition into.");
       if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the transition).");
       let style: TransitionStyle | undefined;
       if (input.style !== undefined) {

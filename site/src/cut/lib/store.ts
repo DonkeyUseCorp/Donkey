@@ -43,8 +43,7 @@ export type VideoTrackPlacement =
   | { kind: "track"; track: number }
   | { kind: "insert"; level: number };
 
-/** The track-0 clips — the sequence that carries transitions and drives
- * playback. */
+/** The track-0 clips — the sequence that drives playback and ripple. */
 export const track0Clips = (clips: VideoClip[]) => clips.filter((c) => c.track === 0);
 /** Every video clip not on track 0 — the composited layers. */
 export const overlayLayers = (clips: VideoClip[]) => clips.filter((c) => c.track !== 0);
@@ -1199,7 +1198,9 @@ export const useEditor = create<EditorState>((baseSet, get) => {
 
     setClipTransition: (id, seconds, style) => {
       const s = get();
-      const spans = getClipSpans(s.clips, s.assets);
+      const self = s.clips.find((c) => c.id === id);
+      if (!self) return;
+      const spans = getClipSpans(s.clips, s.assets, self.track);
       const idx = spans.findIndex((sp) => sp.clip.id === id);
       if (idx < 0) return;
       const clip = spans[idx].clip;
@@ -1220,9 +1221,9 @@ export const useEditor = create<EditorState>((baseSet, get) => {
       // (and the run behind it, gaps preserved) so it starts `newOverlap`
       // before this clip ends — closing any gap, since a dissolve needs
       // contact. Clearing one pushes the pair back to a hard cut. Edge styles
-      // overlap nothing: they leave the layout alone. Only track 0 moves:
-      // transitions live on its sequence, and the composited layers
-      // stay pinned to the absolute times they annotate.
+      // overlap nothing: they leave the layout alone. Only the clip's own
+      // track moves: every other track stays pinned to the absolute times it
+      // annotates.
       if (next) {
         const oldOverlap = spans[idx].transitionOut;
         const wantStart =
@@ -1232,7 +1233,7 @@ export const useEditor = create<EditorState>((baseSet, get) => {
           set((st) => ({
             clips: st.clips
               .map((c) =>
-                c.track === 0 && c.start >= next.start - 1e-6
+                c.track === self.track && c.start >= next.start - 1e-6
                   ? { ...c, start: Math.max(0, c.start + delta) }
                   : c
               )
@@ -1503,7 +1504,9 @@ export const useEditor = create<EditorState>((baseSet, get) => {
           if (t > c.start + 0.05 && t < c.start + eff - 0.05) {
             push();
             const cutIn = c.in + (t - c.start) * sp;
-            const left: VideoClip = { ...c, out: cutIn };
+            // The left half hard-cuts into the right; the right keeps the
+            // original dissolve into whatever came after (same as track 0).
+            const left: VideoClip = { ...c, out: cutIn, transition: undefined, transitionStyle: undefined };
             const right: VideoClip = { ...c, id: uid(), start: t, in: cutIn };
             set((s) => {
               const idx = s.clips.findIndex((x) => x.id === c.id);
@@ -2759,14 +2762,16 @@ export function transitionOverlap(a: VideoClip, b: VideoClip | undefined): numbe
 
 export function getClipSpans(
   clips: VideoClip[],
-  assets: MediaAsset[]
+  assets: MediaAsset[],
+  track = 0
 ): ClipSpan[] {
-  // Spans are track 0: the sequence that carries transitions and drives
-  // playback. Layer clips composite separately.
+  // One track's clips in sequence, each with its live dissolve overlap into
+  // the next. Track 0 is the spine that drives playback; upper tracks carry
+  // their own transitions between their own clips.
   // Map lookup, not a per-clip assets.find — this runs every playback frame.
   const byId = new Map(assets.map((a) => [a.id, a]));
   const present = clips
-    .filter((clip) => clip.track === 0)
+    .filter((clip) => clip.track === track)
     .map((clip) => ({ clip, asset: byId.get(clip.assetId) }))
     .filter((x): x is { clip: VideoClip; asset: MediaAsset } => !!x.asset)
     .sort((a, b) => a.clip.start - b.clip.start);

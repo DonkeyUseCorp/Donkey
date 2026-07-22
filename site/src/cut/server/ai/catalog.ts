@@ -638,7 +638,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "set_transition",
     description:
-      "Set the transition from this clip into the next one, in seconds (0 clears it, max 2). crossfade/crosszoom overlap the two clips so the cut shortens; fadeout/zoomin ramp the outgoing tail and fadein/zoomout the incoming head around a hard cut. Only valid when a next clip exists.",
+      "Set the transition from this clip into the next clip on its track (any video track), in seconds (0 clears it, max 2). crossfade/crosszoom overlap the two clips so the cut shortens; fadeout/zoomin ramp the outgoing tail and fadein/zoomout the incoming head around a hard cut. On upper tracks fades are alpha fades (the tracks beneath show through). Only valid when a next same-track clip exists.",
     inputSchema: obj({
       clipId: str("Video clip id (the clip the transition starts from)"),
       seconds: num("Transition length in seconds, 0–2 (0 = hard cut)"),

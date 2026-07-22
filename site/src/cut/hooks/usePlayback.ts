@@ -5,6 +5,70 @@ import { clipSpeed, getClipSpans, overlayLayers, projectDuration, useEditor } fr
 import { isFullRect, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
 import type { AudioClip, ClipSpan, FrameRect, MediaAsset, VideoClip } from "@/cut/lib/types";
 
+/** The alpha/zoom/gain ramps a transition puts on one upper-track clip at
+ * `t`. Cross styles blend the incoming clip in over the outgoing one (which
+ * keeps full alpha and its audio until its footprint ends); edge styles ramp
+ * a clip's own edge. On an upper track a fade ramps to transparent — the
+ * tracks beneath show through — matching the export's alpha fades. */
+function overlayTransitionFx(
+  span: ClipSpan,
+  prev: ClipSpan | undefined,
+  next: ClipSpan | undefined,
+  t: number
+): { alpha: number; zoom: number; gain: number } {
+  let alpha = 1;
+  let zoom = 1;
+  let gain = 1;
+  const style = span.clip.transitionStyle ?? "crossfade";
+  const prevStyle = prev?.clip.transitionStyle ?? "crossfade";
+  // Incoming side of the previous clip's cross transition: blend in.
+  if (prev && prev.transitionOut > 0) {
+    const rel = t - span.start;
+    if (rel < prev.transitionOut) {
+      const p = Math.max(0, rel / prev.transitionOut);
+      alpha = Math.min(alpha, p);
+      gain = Math.min(gain, p);
+      if (prevStyle === "crosszoom") zoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
+    }
+  }
+  // Outgoing side of this clip's own cross zoom: the picture pushes in while
+  // the incoming clip settles back (it stays opaque — the blend is the
+  // incoming clip's alpha).
+  if (next && span.transitionOut > 0 && t >= next.start && style === "crosszoom") {
+    const p = Math.min(1, (t - next.start) / span.transitionOut);
+    zoom = 1 + (TRANSITION_ZOOM - 1) * p;
+  }
+  // Edge style on this clip's own tail (fade out / zoom in).
+  if (next && span.transitionOut === 0 && (style === "fadeout" || style === "zoomin")) {
+    const d = Math.min(span.clip.transition ?? 0, span.len);
+    const left = span.start + span.len - t;
+    if (d > 0 && left < d) {
+      const p = 1 - left / d;
+      if (style === "fadeout") {
+        alpha = Math.min(alpha, 1 - p);
+        gain = Math.min(gain, 1 - p);
+      } else {
+        zoom = 1 + (TRANSITION_ZOOM - 1) * p;
+      }
+    }
+  }
+  // Edge style the previous clip set on this clip's head (fade in / zoom out).
+  if (prev && prev.transitionOut === 0 && (prevStyle === "fadein" || prevStyle === "zoomout")) {
+    const d = Math.min(prev.clip.transition ?? 0, span.len);
+    const rel = t - span.start;
+    if (d > 0 && rel < d) {
+      const p = rel / d;
+      if (prevStyle === "fadein") {
+        alpha = Math.min(alpha, p);
+        gain = Math.min(gain, p);
+      } else {
+        zoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
+      }
+    }
+  }
+  return { alpha, zoom, gain };
+}
+
 /** The gain everything else drops to at time `t` while a ducking voiceover
  * clip is audible: the lowest `duck` among the clips live then, 1 when none
  * (mirrors the export's timeline-windowed volume filters). */
@@ -485,27 +549,30 @@ class Engine {
     this.fillBlackVeil(1 - gain);
   }
 
-  /** Overlay clips live at time `t` — every track above 0, with their assets,
-   * in z-order (further-back first). */
+  /** Overlay clips live at time `t` — every track above 0, with their assets
+   * and transition ramps, in draw order: further-back tracks first, and
+   * within a track earlier clips first, so a dissolving pair blends the
+   * incoming clip in over the outgoing one. */
   private liveOverlays(t: number) {
     const s = useEditor.getState();
-    const live: { clip: VideoClip; asset: MediaAsset }[] = [];
-    const clips = overlayLayers(s.clips).sort((a, b) => a.track - b.track);
-    for (const c of clips) {
-      if (c.hidden) continue;
-      const asset = s.assets.find((a) => a.id === c.assetId);
-      if (!asset) continue;
-      const speed = c.speed && c.speed > 0 ? c.speed : 1;
-      const len = Math.max(0.1, (c.out - c.in) / speed);
-      if (t < c.start || t >= c.start + len) continue;
-      live.push({ clip: c, asset });
+    const live: { clip: VideoClip; asset: MediaAsset; alpha: number; zoom: number; gain: number }[] = [];
+    const tracks = [...new Set(overlayLayers(s.clips).map((c) => c.track))].sort((a, b) => a - b);
+    for (const track of tracks) {
+      const spans = getClipSpans(s.clips, s.assets, track);
+      for (let i = 0; i < spans.length; i++) {
+        const sp = spans[i];
+        if (sp.clip.hidden) continue;
+        if (t < sp.start || t >= sp.start + sp.len) continue;
+        live.push({ clip: sp.clip, asset: sp.asset, ...overlayTransitionFx(sp, spans[i - 1], spans[i + 1], t) });
+      }
     }
     return live;
   }
 
   /** Seek/rate/play one overlay clip's element toward its frame at timeline
-   * time `t` (the overlay counterpart of `prepare`). */
-  private prepareOverlay(clip: VideoClip, asset: MediaAsset, t: number, play: boolean): MediaEl {
+   * time `t` (the overlay counterpart of `prepare`). `gain` carries the
+   * clip's transition ramp, so a fading picture takes its sound with it. */
+  private prepareOverlay(clip: VideoClip, asset: MediaAsset, t: number, play: boolean, gain = 1): MediaEl {
     const el = this.overlayVideoFor(clip, asset);
     if (isImageEl(el)) return el;
     const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
@@ -520,7 +587,7 @@ class Engine {
     el.muted = !!clip.muted;
     el.volume = Math.max(
       0,
-      Math.min(1, (clip.volume ?? 1) * duckGainAt(useEditor.getState().audioClips, t))
+      Math.min(1, gain * (clip.volume ?? 1) * duckGainAt(useEditor.getState().audioClips, t))
     );
     if (play) {
       if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
@@ -534,9 +601,11 @@ class Engine {
    * skim path's readiness check and the draw step share the same
    * filter/sort/seek instead of repeating it per frame. */
   private prepareOverlays(t: number, play: boolean) {
-    return this.liveOverlays(t).map(({ clip, asset }) => ({
+    return this.liveOverlays(t).map(({ clip, asset, alpha, zoom, gain }) => ({
       clip,
-      el: this.prepareOverlay(clip, asset, t, play),
+      alpha,
+      zoom,
+      el: this.prepareOverlay(clip, asset, t, play, gain),
     }));
   }
 
@@ -549,14 +618,14 @@ class Engine {
     t: number,
     play: boolean,
     active: Set<string>,
-    prepared?: { clip: VideoClip; el: MediaEl }[]
+    prepared?: { clip: VideoClip; el: MediaEl; alpha: number; zoom: number }[]
   ) {
-    for (const { clip, el } of prepared ?? this.prepareOverlays(t, play)) {
+    for (const { clip, el, alpha, zoom } of prepared ?? this.prepareOverlays(t, play)) {
       active.add(clip.id);
       if (!elReady(el)) continue;
       const rect = rectOf(clip);
       const cover = clip.fit === "fill" || (clip.fit == null && isFullRect(rect));
-      this.drawIntoRect(el, rect, cover, 1);
+      this.drawIntoRect(el, rect, cover, alpha, zoom);
     }
   }
 

@@ -188,6 +188,7 @@ const overlayClipAdapter: LaneAdapter<VideoClip> = {
   maxLen: (s, c) =>
     ((s.assets.find((x) => x.id === c.assetId)?.duration ?? c.out) - c.in) / speedOf(c),
   assetOf: (s, c) => s.assets.find((x) => x.id === c.assetId),
+  overlapInto: (c, next) => transitionOverlap(c, next),
 };
 
 const cueAdapter: LaneAdapter<SubtitleCue> = {

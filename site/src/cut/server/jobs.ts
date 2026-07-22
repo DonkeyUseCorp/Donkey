@@ -66,6 +66,16 @@ export interface ExportSpec {
     /** Gain on the clip's own audio, 0..1.5; absent = 1 (unchanged). */
     volume?: number;
     speed?: number;
+    /** Transition ramps, timeline seconds from this overlay's head/tail. On
+     * an upper track a fade is an alpha fade (the tracks beneath show
+     * through); a cross transition arrives as the incoming clip's headFade
+     * while the outgoing clip stays opaque under it, and cross zoom adds a
+     * tailZoom/headZoom pair riding that overlap. The audio fades with the
+     * picture. */
+    headFade?: number;
+    tailFade?: number;
+    headZoom?: number;
+    tailZoom?: number;
     /** A still image: looped for the clip's length instead of trimmed. */
     image?: boolean;
   }[];
@@ -467,7 +477,11 @@ async function runExport(job: Job, spec: ExportSpec) {
 
   // Tracks number 0..N bottom-up: track 0 folds sequentially into the base
   // picture, the rest overlay it in track order (highest last = frontmost).
-  const overlayVideos = [...(spec.overlayVideos ?? [])].sort((a, b) => a.track - b.track);
+  // Within a track, earlier clips composite first, so a dissolving pair
+  // blends the incoming clip in over the outgoing one.
+  const overlayVideos = [...(spec.overlayVideos ?? [])].sort(
+    (a, b) => a.track - b.track || a.start - b.start
+  );
   const clipFmt = "yuv420p";
   const padColor = "black";
   // One ffmpeg input per distinct media file (from the project folder),
@@ -588,6 +602,66 @@ async function runExport(job: Job, spec: ExportSpec) {
   const clipDur = (c: ExportSpec["clips"][number]) =>
     c.file ? Math.max(0.1, (c.out - c.in) / clipRate(c)) : Math.max(0, c.out - c.in);
 
+  /** Emit `core` into `[out]` with zoom ramps confined to the head/tail
+   * windows and `fades` appended. Zoom runs zoompan over just the touched
+   * slice (split → ramp → concat) so the per-frame zoom stays inside the
+   * short transition window. A head ramp settles TRANSITION_ZOOM→1 (zoom
+   * out), a tail ramp pushes 1→TRANSITION_ZOOM (zoom in); zoompan clamps z
+   * below 1 itself, so the plain arithmetic needs no guards. `w`×`h` is the
+   * segment's constant frame size; `tag` uniquifies intermediate labels.
+   * Shared by the track-0 segments and the overlay-track segments. */
+  const pushZoomRamped = (
+    core: string,
+    dur: number,
+    hz: number,
+    tz: number,
+    w: number,
+    h: number,
+    fmt: string,
+    fades: string,
+    out: string,
+    tag: string
+  ) => {
+    const ramp = (side: "head" | "tail", secs: number) => {
+      const frames = Math.max(1, Math.round(secs * fps) - 1);
+      const k = num(TRANSITION_ZOOM - 1);
+      const z =
+        side === "tail"
+          ? `1+${k}*in/${frames}`
+          : `${num(TRANSITION_ZOOM)}-${k}*in/${frames}`;
+      return (
+        `zoompan=z=${z}:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)` +
+        `:d=1:s=${w}x${h}:fps=${fps},setsar=1,format=${fmt}`
+      );
+    };
+    if (hz <= 0.01 && tz <= 0.01) {
+      filters.push(`${core}${fades}[${out}]`);
+      return;
+    }
+    const slices: { from: number; to: number; fx?: string }[] = [];
+    if (hz > 0.01) slices.push({ from: 0, to: hz, fx: ramp("head", hz) });
+    const mid0 = hz > 0.01 ? hz : 0;
+    const mid1 = tz > 0.01 ? dur - tz : dur;
+    if (mid1 - mid0 > 0.01) slices.push({ from: mid0, to: mid1 });
+    if (tz > 0.01) slices.push({ from: dur - tz, to: dur, fx: ramp("tail", tz) });
+    if (slices.length === 1) {
+      filters.push(`${core},${slices[0].fx}${fades}[${out}]`);
+      return;
+    }
+    filters.push(`${core},split=${slices.length}${slices.map((_, k) => `[zs${tag}_${k}]`).join("")}`);
+    slices.forEach((sl, k) => {
+      filters.push(
+        `[zs${tag}_${k}]trim=${num(sl.from)}:${num(sl.to)},setpts=PTS-STARTPTS` +
+          (sl.fx ? `,${sl.fx}` : "") +
+          `[zp${tag}_${k}]`
+      );
+    });
+    filters.push(
+      slices.map((_, k) => `[zp${tag}_${k}]`).join("") +
+        `concat=n=${slices.length}:v=1:a=0${fades}[${out}]`
+    );
+  };
+
   // Per-clip normalized video + audio segments for the join below.
   spec.clips.forEach((c, j) => {
     const idx = c.image ? imageClipInput.get(j)! : inputIndex.get(c.file)!;
@@ -632,50 +706,7 @@ async function runExport(job: Job, spec: ExportSpec) {
       const fades =
         (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
-      if (hz > 0.01 || tz > 0.01) {
-        // Zoom ramp on the touched slice only: split the segment, run zoompan
-        // over the head/tail window, and concat back — the per-frame zoom
-        // stays confined to the short transition window. A head ramp settles
-        // TRANSITION_ZOOM→1 (zoom out), a tail ramp pushes 1→TRANSITION_ZOOM
-        // (zoom in); zoompan clamps z below 1 itself, so the plain arithmetic
-        // needs no guards.
-        const ramp = (side: "head" | "tail", secs: number) => {
-          const frames = Math.max(1, Math.round(secs * fps) - 1);
-          const k = num(TRANSITION_ZOOM - 1);
-          const z =
-            side === "tail"
-              ? `1+${k}*in/${frames}`
-              : `${num(TRANSITION_ZOOM)}-${k}*in/${frames}`;
-          return (
-            `zoompan=z=${z}:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)` +
-            `:d=1:s=${W}x${H}:fps=${fps},setsar=1,format=${clipFmt}`
-          );
-        };
-        const slices: { from: number; to: number; fx?: string }[] = [];
-        if (hz > 0.01) slices.push({ from: 0, to: hz, fx: ramp("head", hz) });
-        const mid0 = hz > 0.01 ? hz : 0;
-        const mid1 = tz > 0.01 ? dur - tz : dur;
-        if (mid1 - mid0 > 0.01) slices.push({ from: mid0, to: mid1 });
-        if (tz > 0.01) slices.push({ from: dur - tz, to: dur, fx: ramp("tail", tz) });
-        if (slices.length === 1) {
-          filters.push(`${core},${slices[0].fx}${fades}[v${j}]`);
-        } else {
-          filters.push(`${core},split=${slices.length}${slices.map((_, k) => `[vs${j}_${k}]`).join("")}`);
-          slices.forEach((sl, k) => {
-            filters.push(
-              `[vs${j}_${k}]trim=${num(sl.from)}:${num(sl.to)},setpts=PTS-STARTPTS` +
-                (sl.fx ? `,${sl.fx}` : "") +
-                `[vp${j}_${k}]`
-            );
-          });
-          filters.push(
-            slices.map((_, k) => `[vp${j}_${k}]`).join("") +
-              `concat=n=${slices.length}:v=1:a=0${fades}[v${j}]`
-          );
-        }
-      } else {
-        filters.push(`${core}${fades}[v${j}]`);
-      }
+      pushZoomRamped(core, dur, hz, tz, W, H, clipFmt, fades, `v${j}`, `c${j}`);
     } else {
       // No video stream, or a hidden clip: the slot plays black.
       filters.push(
@@ -744,6 +775,17 @@ async function runExport(job: Job, spec: ExportSpec) {
     const end = Math.min(oc.start + olen, spec.duration);
     const region = regionPx(oc.frame, W, H);
     const cover = oc.fit === "fill" || (oc.fit == null && !region);
+    // Transition ramps, clamped so head+tail never overrun the segment. On an
+    // upper track the fades are alpha fades — the clip dissolves against
+    // whatever is beneath it (a cross transition ships as the incoming clip's
+    // head fade, blending it in over the still-opaque outgoing clip).
+    const hz = Math.max(0, Math.min(oc.headZoom ?? 0, olen));
+    const tz = Math.max(0, Math.min(oc.tailZoom ?? 0, olen - hz));
+    const hf = Math.max(0, Math.min(oc.headFade ?? 0, olen));
+    const tf = Math.max(0, Math.min(oc.tailFade ?? 0, olen - hf));
+    const ramped = hz > 0.01 || tz > 0.01;
+    const boxW = region ? region.rw : W;
+    const boxH = region ? region.rh : H;
     let framing: string;
     let pos: string;
     if (!region) {
@@ -758,6 +800,17 @@ async function runExport(job: Job, spec: ExportSpec) {
         : `scale=${rw}:${rh}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
       pos = cover ? `${rx}:${ry}` : `x=${rx}+(${rw}-w)/2:y=${ry}+(${rh}-h)/2`;
     }
+    // zoompan needs a constant frame size: pad a letterboxed segment out to
+    // its exact box with transparent margins (the tracks beneath keep showing
+    // through) and anchor the overlay at the box origin.
+    if (ramped && !cover) {
+      framing += `,format=yuva420p,pad=${boxW}:${boxH}:(ow-iw)/2:(oh-ih)/2:color=black@0.0`;
+      pos = region ? `${region.rx}:${region.ry}` : "0:0";
+    }
+    const fmt = hf > 0.01 || tf > 0.01 || (ramped && !cover) ? "yuva420p" : "yuv420p";
+    const fades =
+      (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}:alpha=1` : "") +
+      (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, olen - tf))}:d=${num(tf)}:alpha=1` : "");
     const k = ovk++;
     const seg = `ovv${k}`;
     // A still replays its looped input; footage trims its source span and
@@ -765,10 +818,13 @@ async function runExport(job: Job, spec: ExportSpec) {
     const timebase = oc.image
       ? `[${idx}:v]setpts=PTS-STARTPTS`
       : `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)}`;
-    filters.push(
-      `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}format=yuv420p,` +
-        `tpad=start_duration=${num(oc.start)}[${seg}]`
-    );
+    const core = `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}format=${fmt}`;
+    const pre = `ovp${k}`;
+    pushZoomRamped(core, olen, hz, tz, boxW, boxH, fmt, fades, pre, `o${k}`);
+    // The zoom slices' concat drops the stream's frame-rate metadata, and
+    // tpad converts start_duration to a frame count through it — without the
+    // fps re-stamp it pads zero frames and the overlay lands early.
+    filters.push(`[${pre}]fps=${fps},tpad=start_duration=${num(oc.start)}[${seg}]`);
     const next = `vovv${k}`;
     filters.push(
       `[${onto}][${seg}]overlay=${pos}:enable='between(t,${num(oc.start)},${num(end)})':eof_action=pass[${next}]`
@@ -776,10 +832,14 @@ async function runExport(job: Job, spec: ExportSpec) {
     if (!oc.muted && audioPresence.get(oc.file)) {
       const tempo = ospeed !== 1 ? `${atempoChain(ospeed)},` : "";
       const vol = (oc.volume ?? 1) !== 1 ? `volume=${num(oc.volume ?? 1)},` : "";
+      // The picture's fade edges carry the sound with them; zoom edges don't.
+      const afades =
+        (hf > 0.01 ? `afade=t=in:st=0:d=${num(hf)},` : "") +
+        (tf > 0.01 ? `afade=t=out:st=${num(Math.max(0, olen - tf))}:d=${num(tf)},` : "");
       const delayMs = Math.max(0, Math.round(oc.start * 1000));
       const lab = `ovs${k}`;
       filters.push(
-        `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}${vol}` +
+        `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}${vol}${afades}` +
           `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${delayMs}:all=1[${lab}]`
       );
       overlaySoundLabels.push(lab);

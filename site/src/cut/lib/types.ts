@@ -112,10 +112,11 @@ export interface VideoClip {
   id: string;
   assetId: string;
   /** Which video track this clip sits on. Tracks number 0..N bottom-up:
-   * track 0's clips form the sequence that carries transitions and drives
-   * playback; higher tracks composite in front (highest wins where clips
-   * overlap). Absent in older docs, which are all track 0; docs saved when
-   * tracks could go negative lift on load so the lowest row becomes 0. */
+   * track 0's clips form the sequence that drives playback; higher tracks
+   * composite in front (highest wins where clips overlap). Every track
+   * carries transitions between its own clips. Absent in older docs, which
+   * are all track 0; docs saved when tracks could go negative lift on load
+   * so the lowest row becomes 0. */
   track: number;
   start: number; // timeline position, seconds
   in: number; // trim-in inside the source, seconds
@@ -137,9 +138,11 @@ export interface VideoClip {
   /** Playback rate, default 1 (absent). The source (out-in) seconds play in
    * (out-in)/speed timeline seconds, so >1 is faster and shorter. */
   speed?: number;
-  /** Transition into the next clip, in timeline seconds (absent/0 = hard cut).
-   * Cross styles overlap the two clips by this much (the cut shortens); edge
-   * styles ramp one clip's edge over this window around a hard cut. */
+  /** Transition into the next clip on this clip's track, in timeline seconds
+   * (absent/0 = hard cut). Cross styles overlap the two clips by this much
+   * (the cut shortens); edge styles ramp one clip's edge over this window
+   * around a hard cut. On upper tracks the fades ramp to transparent instead
+   * of black, so the tracks beneath show through. */
   transition?: number;
   /** Look of that transition; absent = "crossfade". */
   transitionStyle?: TransitionStyle;

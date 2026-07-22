@@ -393,3 +393,49 @@ describe("spine grounding", () => {
     expectLaneSound(videoLane(0));
   });
 });
+
+describe("upper-track transitions", () => {
+  test("setClipTransition on an upper track pulls the pair into overlap contact", () => {
+    const av = asset(4);
+    const bv = asset(4);
+    const spine = vclip({ track: 0, start: 0, out: 4 });
+    const a = vclip({ track: 1, start: 0, out: 4, assetId: av.id });
+    const b = vclip({ track: 1, start: 4, out: 4, assetId: bv.id });
+    useEditor.setState({ assets: [av, bv], clips: [spine, a, b] });
+    s().setClipTransition(a.id, 1);
+    expect(clipById(a.id).transition).toBeCloseTo(1);
+    expect(clipById(b.id).start).toBeCloseTo(3); // slid into the dissolve
+    expect(clipById(spine.id).start).toBeCloseTo(0); // track 0 untouched
+  });
+
+  test("setClipTransition slides only its own track's run", () => {
+    const av = asset(4);
+    const spine1 = vclip({ track: 0, start: 0, out: 4 });
+    const spine2 = vclip({ track: 0, start: 4, out: 4 });
+    const a = vclip({ track: 1, start: 0, out: 4, assetId: av.id });
+    const b = vclip({ track: 1, start: 4, out: 4, assetId: av.id });
+    useEditor.setState({ assets: [av], clips: [spine1, spine2, a, b] });
+    s().setClipTransition(a.id, 1);
+    expect(clipById(b.id).start).toBeCloseTo(3);
+    expect(clipById(spine2.id).start).toBeCloseTo(4);
+  });
+
+  test("splitting a layer clip clears the left half's transition", () => {
+    const av = asset(8);
+    const spine = vclip({ track: 0, start: 0, out: 8 });
+    const a = vclip({ track: 1, start: 0, out: 8, transition: 1, assetId: av.id });
+    useEditor.setState({
+      assets: [av],
+      clips: [spine, a],
+      selection: { kind: "clip", id: a.id },
+      currentTime: 4,
+    });
+    s().splitAtPlayhead();
+    const halves = s().clips.filter((c) => c.track === 1);
+    expect(halves.length).toBe(2);
+    const left = halves.find((c) => c.start === 0)!;
+    const right = halves.find((c) => c.start === 4)!;
+    expect(left.transition).toBeUndefined();
+    expect(right.transition).toBe(1);
+  });
+});
