@@ -207,6 +207,22 @@ const AUDIO_STATE = {
   media: [...EDITOR_STATE.media, NARRATION_ASSET],
 };
 
+/** A tweet photo import_url landed in an earlier turn: chat-owned (aiTools
+ * tags chat imports origin "chat"), named by the post's text, not yet placed.
+ * Past turns' tool traffic is stripped from the request, so the model must
+ * find this asset through `media` in the snapshot. */
+const TWEET_ASSET = {
+  id: "a-tw1",
+  name: "first snow of the year ❄️",
+  type: "image",
+  origin: "chat",
+};
+
+const TWEET_STATE = {
+  ...EDITOR_STATE,
+  media: [...EDITOR_STATE.media, TWEET_ASSET],
+};
+
 /** A finished scene run's timeline: three generated takes, each clip carrying
  * its plan shot number (sceneShot), the narration as the spine. */
 const sceneClip = (n: number, start: number, len: number) => ({
@@ -620,6 +636,47 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
           note:
             "Rendering a new take — it previews in this chat when it lands, in a minute or two. Your current clip stays put.",
         },
+      },
+    },
+    {
+      // The tweet-import flow: after import_url landed a photo in an earlier
+      // turn, "the exact same thing but…" must anchor generate_image on that
+      // asset via reference_asset_ids — the compose pass and image model see
+      // the real photo only through the reference, so a text-only render of
+      // the model's guess loses the source image entirely.
+      name: "imported-photo-edit-references-photo",
+      input: () => [
+        plainUserTurn("https://x.com/oggii_0/status/2079613105571828043"),
+        assistantTurn(
+          `Imported the photo from that post — it's on a card in this chat. The post says: "${TWEET_ASSET.name}".`
+        ),
+        userTurn("generate the exact same thing but put her in a santa hat", {
+          state: TWEET_STATE,
+        }),
+      ],
+      reply: /santa|hat|image|render|preview/i,
+      requiredTools: ["generate_image"],
+      state: TWEET_STATE,
+      simulate: () => (name, args) => {
+        if (name === "generate_image") {
+          const refs = Array.isArray(args.reference_asset_ids)
+            ? args.reference_asset_ids.map(String)
+            : [];
+          if (!refs.includes(TWEET_ASSET.id))
+            throw new Error(
+              `generate_image must reference ${TWEET_ASSET.id}, got ${JSON.stringify(args.reference_asset_ids)}`
+            );
+          return {
+            assetId: "a-gen1",
+            kind: "image",
+            note: "Rendered — the image previews on a card in this chat.",
+          };
+        }
+        if (name === "watch_video")
+          return { note: "Eval: the photo shows a young woman smiling outdoors in falling snow." };
+        if (name === "generate_video" || name === "generate_scene")
+          throw new Error(`${name} called — an edited copy of a photo is a generate_image ask`);
+        return undefined;
       },
     },
     {
