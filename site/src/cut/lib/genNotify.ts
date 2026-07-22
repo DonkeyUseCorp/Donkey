@@ -7,16 +7,17 @@ import { create } from "zustand";
 // already imports, so the styles load exactly where the overlay is used.
 import "./genNotify.css";
 
-// AI generations outlive the panel that started them — several can render at
-// once while the user edits elsewhere. This store notices the ones that finish
-// unwatched: the side rail badges each generate tab with a blue count, and
-// opening that tab clears the count and lets the freshly-arrived tiles pulse
-// blue for a few seconds so the eye lands on them.
+// AI generations and exports outlive the panel that started them — several can
+// render at once while the user edits elsewhere. This store notices the ones
+// that finish unwatched: the side rail badges the owning tab with a blue count,
+// and opening that tab clears the count and lets the freshly-arrived tiles
+// pulse blue for a few seconds so the eye lands on them. Media's arrivals are
+// finished exports, keyed by file name.
 
-export type GenTab = "video" | "image" | "audio";
+export type GenTab = "video" | "image" | "audio" | "media";
 
 export const isGenTab = (v: string): v is GenTab =>
-  v === "video" || v === "image" || v === "audio";
+  v === "video" || v === "image" || v === "audio" || v === "media";
 
 /** How long a tab's new tiles keep pulsing once it opens. */
 const PULSE_MS = 4500;
@@ -27,7 +28,7 @@ const PULSE_MS = 4500;
 export const genPulseOverlay =
   "cut-gen-pulse pointer-events-none absolute inset-0 rounded-[inherit]";
 
-const EMPTY: Record<GenTab, string[]> = { video: [], image: [], audio: [] };
+const EMPTY: Record<GenTab, string[]> = { video: [], image: [], audio: [], media: [] };
 
 interface GenNotifyState {
   /** Finished-while-away asset ids per tab — the rail badge counts these. */

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { apiFetch } from "./api";
 import {
@@ -8,6 +9,7 @@ import {
   type ExportDoc,
   type ExportSettings,
 } from "./exportClient";
+import { useGenNotify } from "./genNotify";
 
 // Exports are tracked app-wide, not per-open-project. The engine holds every
 // export job in one process-global registry, so this store is a thin reflection
@@ -136,6 +138,31 @@ export const useExports = create<ExportsState>((set, get) => ({
     }));
   },
 }));
+
+/** Badge the Media tab when one of this project's exports finishes in the
+ * background: watch the engine feed for jobs newly turned done and report each
+ * to the gen-notify store, keyed by file name so the export row can pulse.
+ * The first sight of the feed only seeds the baseline — exports that were
+ * already done when the editor opened aren't news. */
+export function useWatchExportLands(projectId: string) {
+  const jobs = useExports((s) => s.jobs);
+  const seen = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    seen.current = null;
+  }, [projectId]);
+  useEffect(() => {
+    const done = jobs.filter((j) => j.projectId === projectId && j.status === "done");
+    if (seen.current === null) {
+      seen.current = new Set(done.map((j) => j.id));
+      return;
+    }
+    for (const j of done) {
+      if (seen.current.has(j.id)) continue;
+      seen.current.add(j.id);
+      if (j.outName) useGenNotify.getState().landed("media", j.outName);
+    }
+  }, [jobs, projectId]);
+}
 
 // The dock is mounted app-wide, so polling runs the whole time the Cut app is
 // open. It quickens while work is in flight and idles between exports.

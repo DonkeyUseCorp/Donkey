@@ -29,7 +29,7 @@ import {
 import type { AssetRef } from "@/cut/lib/assetRef";
 import { RefDropZone } from "./RefDropZone";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
-import { useExports } from "@/cut/lib/exportStore";
+import { useExports, useWatchExportLands } from "@/cut/lib/exportStore";
 import {
   addAssetToLibraryTemplate,
   addLibraryAssetToProject,
@@ -51,7 +51,7 @@ import {
   type LibraryFolder,
 } from "@/cut/lib/library";
 import { mediaUrl, type LibraryTemplate } from "@/cut/lib/types";
-import { isGenTab, useGenNotify, useWatchGenTab } from "@/cut/lib/genNotify";
+import { genPulseOverlay, isGenTab, useGenNotify, useGenPulse, useWatchGenTab } from "@/cut/lib/genNotify";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
@@ -138,6 +138,8 @@ export function SidePanel({
   // the rail icon, and opening the tab lets the new tiles pulse for a beat.
   const unseen = useGenNotify((s) => s.unseen);
   useWatchGenTab(tab, projectId);
+  // Media badges too: its arrivals are exports finishing in the background.
+  useWatchExportLands(projectId);
 
   // Clicking a reference token anywhere jumps here: switch to the tab that
   // owns the asset; the matching card scrolls into view and flashes.
@@ -317,6 +319,12 @@ function PanelHead({ title, action }: { title: string; action?: React.ReactNode 
   );
 }
 
+/** Fresh-arrival ring for an export row that landed while the tab was closed. */
+function ExportPulse({ file }: { file: string }) {
+  const pulse = useGenPulse("media", file);
+  return pulse ? <div aria-hidden className={genPulseOverlay} /> : null;
+}
+
 function MediaPanel({
   projectId,
   onImport,
@@ -456,8 +464,9 @@ function MediaPanel({
               {exports.map((it) => (
                 <div
                   key={it.file}
-                  className="export-row group flex w-full items-center gap-2.5 rounded-lg border border-border p-1.5 transition-colors hover:border-input hover:bg-muted/50"
+                  className="export-row group relative flex w-full items-center gap-2.5 overflow-hidden rounded-lg border border-border p-1.5 transition-colors hover:border-input hover:bg-muted/50"
                 >
+                  <ExportPulse file={it.file} />
                   <button
                     type="button"
                     className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
