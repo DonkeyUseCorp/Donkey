@@ -83,6 +83,48 @@ export function atempoChain(speed: number) {
 }
 
 /**
+ * The first video stream's color tags (e.g. primaries "bt2020", transfer
+ * "arib-std-b67"), or null when the probe fails or the file has no video
+ * stream. Untagged fields come back undefined.
+ */
+export function videoColorInfo(
+  file: string
+): Promise<{ primaries?: string; transfer?: string; matrix?: string } | null> {
+  return new Promise((resolve) => {
+    const p = spawn("ffprobe", [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=color_primaries,color_transfer,color_space",
+      "-of", "json",
+      file,
+    ]);
+    let out = "";
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      resolve(null);
+    }, 30_000);
+    timer.unref();
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return resolve(null);
+      try {
+        const s = JSON.parse(out).streams?.[0];
+        resolve(
+          s ? { primaries: s.color_primaries, transfer: s.color_transfer, matrix: s.color_space } : null
+        );
+      } catch {
+        resolve(null);
+      }
+    });
+    p.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
+/**
  * Whether a media file carries a stream of the given kind ("a" audio /
  * "v" video). Resolves false only when ffprobe reports no such stream; a
  * probe that errors is reported by `onProbeError` so callers can decide

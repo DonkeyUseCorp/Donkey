@@ -6,7 +6,7 @@ import { assertLocalRuntime } from "./local-only";
 import { createJobRegistry } from "./jobRegistry";
 import { exportsDir, mediaPath, projectDir, readProject } from "./projects";
 import { currentCutUser } from "./userScope";
-import { atempoChain, hasStream, num } from "./util";
+import { atempoChain, hasStream, num, videoColorInfo } from "./util";
 import { projectFadeSeconds, TRANSITION_ZOOM } from "../lib/types";
 
 export interface ExportSpec {
@@ -359,6 +359,27 @@ async function resolveMedia(spec: ExportSpec, file: string) {
   return p;
 }
 
+/**
+ * Filter prefix converting a wide-gamut/HDR source (phone footage: BT.2020
+ * primaries with an HLG or PQ transfer) down to the BT.709 SDR the export is
+ * tagged as, or "" for an SDR source. The blind `format=yuv420p` squeeze keeps
+ * BT.2020 code values, and players reading them as 709 wash the clip out —
+ * visible whenever phone footage sits next to Cut-rendered (already-709)
+ * clips. The native `colorspace` filter has no HLG/PQ transfer, so the input
+ * is pinned to bt2020-10, a close stand-in over HLG's SDR-compatible range;
+ * the 10-bit format hop feeds it a planar format it accepts (decoders hand
+ * HDR frames over as p010, which it rejects).
+ */
+function sdrConvert(c: Awaited<ReturnType<typeof videoColorInfo>>) {
+  const wide =
+    c != null &&
+    (c.primaries === "bt2020" ||
+      c.transfer === "arib-std-b67" ||
+      c.transfer === "smpte2084" ||
+      c.matrix?.startsWith("bt2020") === true);
+  return wide ? "format=yuv420p10le,colorspace=all=bt709:iall=bt2020:format=yuv420p," : "";
+}
+
 /** A clip's effective playback rate (>0, default 1). */
 function clipRate(c: ExportSpec["clips"][number]) {
   return c.speed && c.speed > 0 ? c.speed : 1;
@@ -467,6 +488,8 @@ async function runExport(job: Job, spec: ExportSpec) {
   ];
   const audioPresence = new Map<string, boolean>();
   const videoPresence = new Map<string, boolean>();
+  // file → filter prefix folding a wide-gamut/HDR source down to BT.709 (or "").
+  const colorFix = new Map<string, string>();
   const inputs: string[] = [];
   const inputIndex = new Map<string, number>();
   // Counted explicitly: the concat input below carries extra flags, so the
@@ -491,6 +514,8 @@ async function runExport(job: Job, spec: ExportSpec) {
       let videoProbeFailed = false;
       const hasVideo = await hasStream(paths[i], "v", () => (videoProbeFailed = true));
       videoPresence.set(f, hasVideo || videoProbeFailed);
+      // A failed color probe (null) means no conversion — SDR passthrough.
+      colorFix.set(f, sdrConvert(await videoColorInfo(paths[i])));
     })
   );
   for (const o of spec.overlays) {
@@ -603,7 +628,7 @@ async function runExport(job: Job, spec: ExportSpec) {
       }
       // setpts/speed rescales the clip's duration on the timeline (footage);
       // a still just replays its looped input.
-      const core = `${timebase},fps=${fps},${frame},setsar=1,format=${clipFmt}`;
+      const core = `${timebase},fps=${fps},${frame},setsar=1,${colorFix.get(c.file) ?? ""}format=${clipFmt}`;
       const fades =
         (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
@@ -741,7 +766,8 @@ async function runExport(job: Job, spec: ExportSpec) {
       ? `[${idx}:v]setpts=PTS-STARTPTS`
       : `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)}`;
     filters.push(
-      `${timebase},fps=${fps},${framing},setsar=1,format=yuv420p,tpad=start_duration=${num(oc.start)}[${seg}]`
+      `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}format=yuv420p,` +
+        `tpad=start_duration=${num(oc.start)}[${seg}]`
     );
     const next = `vovv${k}`;
     filters.push(
@@ -903,6 +929,8 @@ async function runExport(job: Job, spec: ExportSpec) {
       "-pix_fmt", "yuv420p",
       "-color_range", "tv",
       "-colorspace", "bt709",
+      "-color_primaries", "bt709",
+      "-color_trc", "bt709",
       "-c:a", "aac",
       "-b:a", "192k",
       "-t", num(spec.duration),
