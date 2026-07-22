@@ -120,7 +120,7 @@ function StatusIcon({ status }: { status: string }) {
   if (status === "queued") return <Clock className="size-4 shrink-0 text-muted-foreground" />;
   if (status === "done")
     return (
-      <span className="grid size-4 shrink-0 place-items-center rounded-full bg-[#30d158] text-[#04180b]">
+      <span className="grid size-4 shrink-0 place-items-center rounded-full bg-[#30d158] text-white">
         <Check className="size-2.5" />
       </span>
     );
