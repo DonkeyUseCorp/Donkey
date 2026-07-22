@@ -162,7 +162,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "delete_item",
     description:
-      "Delete a video clip (any track), soundtrack clip, or title by id. Every track is free-positioned, so deleting leaves a gap; place_clip can slide a neighbor into it if the cut should stay tight.",
+      "Delete a video clip (any track), soundtrack clip, or title by id. Deleting a track-0 clip ripples: its footprint closes and everything after it — clips, titles, captions, soundtrack — slides left in sync; items wholly inside that span are removed with it, straddlers are trimmed. Deletes on other tracks remove just that item.",
     inputSchema: obj({
       kind: { type: "string", enum: ["clip", "audio", "text"], description: "Item kind — 'clip' is any video clip, whatever track" },
       id: str("Item id"),
@@ -694,7 +694,8 @@ Everything autosaves to the project folder. Undo/redo is unlimited (⌘Z / ⇧�
 Times are in seconds on the shared timeline. The playhead is currentTime; a skimmer previews under the mouse without moving the playhead.`,
 
   "timeline-editing": `# Timeline editing
-- Every track is free-positioned: items carry a start time, gaps are allowed, and a track-0 gap plays black (and silence). Deleting leaves a gap. videoTrack entries in editor_state report gapBefore where one exists.
+- Every track is free-positioned: items carry a start time, gaps are allowed, and a track-0 gap plays black (and silence). videoTrack entries in editor_state report gapBefore where one exists.
+- Deleting a track-0 clip ripples: the span it occupied closes, later items on every track slide left together, items wholly inside the span go with it, and straddlers are trimmed. A gap that already existed stays. Deletes on other tracks remove just that item.
 - Two ways to move a track-0 clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index, opening a slot at the landing point — clips after it shift right, every other gap survives. Index-based inserts (freeze_frame, generated clips) open a slot the same way.
 - add_clip puts a project asset on the timeline the way a drag does: video/image onto track 0 (a \`start\`, an \`index\` insert, or appended at the end), audio onto the soundtrack.
 - Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below track 0; they drag the region in the preview.

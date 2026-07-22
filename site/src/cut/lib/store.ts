@@ -269,6 +269,10 @@ export interface EditorState {
    * from the original recording, so the word highlighter would otherwise drift). */
   retimeCues: (entries: { id: string; start: number; end: number }[]) => void;
   sortCues: () => void;
+  /** Delete the current selection. A track-0 clip delete ripples: the
+   * footprint it occupied closes and everything after it — clips, titles,
+   * captions, soundtrack — slides left in sync (see exciseRange). Deletes on
+   * every other track remove just that item. */
   deleteSelection: () => void;
   /** Timeline window [start, end) spanned by the current selection, or null if
    * nothing selectable is chosen. */
@@ -1412,19 +1416,46 @@ export const useEditor = create<EditorState>((set, get) => {
       const audioIds = idsOf("audio");
       const textIds = idsOf("text");
       const cueIds = idsOf("cue");
-      // Every track is free-positioned: deleting leaves a gap and nothing
-      // else moves, so annotations keep the timing they were placed at.
-      set((s) => ({
-        clips: s.clips.filter((c) => !clipIds.has(c.id)),
-        audioClips: s.audioClips.filter((c) => !audioIds.has(c.id)),
-        overlays: s.overlays.filter((o) => !textIds.has(o.id)),
-        subtitles: {
-          ...s.subtitles,
-          cues: s.subtitles.cues.filter((c) => !cueIds.has(c.id)),
-        },
-        selection: null,
-        multiSelection: [],
-      }));
+      set((s) => {
+        let clips = s.clips.filter((c) => !clipIds.has(c.id));
+        let audioClips = s.audioClips.filter((c) => !audioIds.has(c.id));
+        let overlays = s.overlays.filter((o) => !textIds.has(o.id));
+        let cues = s.subtitles.cues.filter((c) => !cueIds.has(c.id));
+        // Deleting a track-0 clip closes the hole it leaves: everything after
+        // it — clips, titles, captions, soundtrack — slides left with the
+        // surviving footage, and anything living inside the hole annotated
+        // footage that is gone, so it goes too. Deletes on every other track
+        // are plain removals (already applied above). Holes close
+        // right-to-left so each one's coordinates stay valid while the ones
+        // before it are unprocessed.
+        const holes = s.clips
+          .filter((c) => c.track === 0 && clipIds.has(c.id))
+          .sort((a, b) => b.start - a.start);
+        for (const gone of holes) {
+          const next = clips.reduce(
+            (acc, c) => (c.track === 0 && c.start > gone.start + 0.001 ? Math.min(acc, c.start) : acc),
+            Infinity
+          );
+          // The clip's own footprint, capped at the next clip's start so a
+          // dissolve overlap (or a neighbor dragged into it) never over-closes;
+          // any gap that already existed after it survives.
+          const delta = Math.min(clipLen(gone), next - gone.start);
+          if (delta < 0.05) continue;
+          ({ clips, audioClips, overlays, cues } = exciseRange(
+            { clips, audioClips, overlays, cues },
+            gone.start,
+            delta
+          ));
+        }
+        return {
+          clips: clips.sort((a, b) => a.start - b.start),
+          audioClips,
+          overlays,
+          subtitles: { ...s.subtitles, cues },
+          selection: null,
+          multiSelection: [],
+        };
+      });
     },
 
     selectionRange: () => {
@@ -2525,6 +2556,82 @@ export function getClipSpans(
     spans.push({ clip, asset, start: clip.start, len, transitionOut: overlap });
   }
   return spans;
+}
+
+/** Cut the timeline range [at, at + delta) out of the whole document — the
+ * ripple half of a track-0 delete. Items past the hole slide left by delta;
+ * items wholly inside it are removed; items straddling an edge keep the part
+ * that survives (a layer/soundtrack clip spanning the hole splits around it,
+ * excising those source seconds). Track-0 clips only shift: the hole is a
+ * deleted track-0 clip's own footprint, so no survivor there can straddle it. */
+function exciseRange(
+  doc: {
+    clips: VideoClip[];
+    audioClips: AudioClip[];
+    overlays: TextOverlay[];
+    cues: SubtitleCue[];
+  },
+  at: number,
+  delta: number
+): typeof doc {
+  const EPS = 0.001;
+  const end = at + delta;
+
+  const cutClip = <T extends VideoClip | AudioClip>(c: T): T[] => {
+    const speed = c.speed && c.speed > 0 ? c.speed : 1;
+    const stop = c.start + clipLen(c);
+    if (stop <= at + EPS) return [c];
+    if (c.start >= end - EPS) return [{ ...c, start: c.start - delta }];
+    const pieces: T[] = [];
+    if (c.start < at) pieces.push({ ...c, out: c.in + (at - c.start) * speed });
+    if (stop > end) pieces.push({ ...c, id: pieces.length ? uid() : c.id, start: at, in: c.in + (end - c.start) * speed });
+    return pieces.filter((p) => (p.out - p.in) / speed >= MIN_LEN);
+  };
+
+  const cutText = (o: TextOverlay): TextOverlay[] => {
+    if (o.end <= at + EPS) return [o];
+    if (o.start >= end - EPS) return [{ ...o, start: o.start - delta, end: o.end - delta }];
+    const start = Math.min(o.start, at);
+    const stop = o.end > end ? o.end - delta : at;
+    return stop - start >= MIN_LEN ? [{ ...o, start, end: stop }] : [];
+  };
+
+  const cutCue = (c: SubtitleCue): SubtitleCue[] => {
+    if (c.end <= at + EPS) return [c];
+    if (c.start >= end - EPS) {
+      return [{
+        ...c,
+        start: c.start - delta,
+        end: c.end - delta,
+        words: c.words?.map((w) => ({ ...w, t0: w.t0 - delta, t1: w.t1 - delta })),
+      }];
+    }
+    const start = Math.min(c.start, at);
+    const stop = c.end > end ? c.end - delta : at;
+    if (stop - start < MIN_LEN) return [];
+    // Same convention as splitCue: a word sits left of a cut when it starts
+    // before it. Words swallowed by the hole go with it; later ones slide left
+    // and the text follows the surviving words.
+    const words = c.words
+      ?.filter((w) => w.t0 < at || w.t0 >= end)
+      .map((w) => (w.t0 >= end ? { ...w, t0: w.t0 - delta, t1: w.t1 - delta } : w));
+    return [{
+      ...c,
+      start,
+      end: stop,
+      words: words?.length ? words : undefined,
+      text: words?.length ? words.map((w) => w.w).join(" ") : c.text,
+    }];
+  };
+
+  return {
+    clips: doc.clips.flatMap((c) =>
+      c.track !== 0 ? cutClip(c) : c.start >= end - EPS ? [{ ...c, start: c.start - delta }] : [c]
+    ),
+    audioClips: doc.audioClips.flatMap(cutClip),
+    overlays: doc.overlays.flatMap(cutText),
+    cues: doc.cues.flatMap(cutCue),
+  };
 }
 
 /** One video clip's timeline window with its asset, wherever the clip lives:
