@@ -1149,6 +1149,44 @@ function splitThoughtSegments(text: string): TextSegment[] {
   return segments;
 }
 
+/** A pulled post's own words, clamped to a few lines when the source ran
+ * long, with a chevron to unfold the full text in place. */
+function SourceQuote({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setClamped(el.scrollHeight > el.clientHeight + 1);
+  }, [text]);
+  return (
+    <blockquote className="border-l-2 border-border pl-3 text-[12.5px] leading-relaxed text-muted-foreground">
+      <div
+        ref={bodyRef}
+        className={cn(
+          "break-words whitespace-pre-wrap",
+          !expanded && "line-clamp-4",
+        )}
+      >
+        {text}
+      </div>
+      {(clamped || expanded) && (
+        <button
+          type="button"
+          aria-label={expanded ? "Collapse source text" : "Expand source text"}
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 flex cursor-pointer items-center rounded text-muted-foreground/70 transition-colors hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+          />
+        </button>
+      )}
+    </blockquote>
+  );
+}
+
 /** A collapsed disclosure for a reasoning block, styled like the tool row. */
 function ThoughtBlock({ text }: { text: string }) {
   return (
@@ -1301,12 +1339,7 @@ const MessageView = memo(function MessageView({
       {/* The imported post's own text, quoted above its media so the two read
           as one thing — the tweet body, or the video's title and description. */}
       {sourceTexts.map((t, i) => (
-        <blockquote
-          key={`src-${i}`}
-          className="border-l-2 border-border pl-3 text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
-        >
-          {t}
-        </blockquote>
+        <SourceQuote key={`src-${i}`} text={t} />
       ))}
       {/* Everything the turn generated, in one left-to-right row (images and
           clips flow and wrap; audio and documents take their own line). It
