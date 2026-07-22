@@ -1,0 +1,24 @@
+/**
+ * Minimal typings for `bun:test`, covering what our unit tests use. The full
+ * `@types/bun` package replaces ambient Node/DOM types project-wide (breaking
+ * the Next.js server code), so the tests get this narrow shim instead.
+ */
+declare module "bun:test" {
+  export function describe(label: string, fn: () => void): void;
+  export function test(label: string, fn: () => void | Promise<void>): void;
+  export function beforeEach(fn: () => void | Promise<void>): void;
+  export function afterEach(fn: () => void | Promise<void>): void;
+  export interface Matchers {
+    toBe(expected: unknown): void;
+    toEqual(expected: unknown): void;
+    toBeCloseTo(expected: number, precision?: number): void;
+    toBeGreaterThanOrEqual(expected: number): void;
+    toBeLessThanOrEqual(expected: number): void;
+    toBeUndefined(): void;
+    toHaveLength(expected: number): void;
+    toBeTruthy(): void;
+    toBeFalsy(): void;
+    not: Matchers;
+  }
+  export function expect(value: unknown): Matchers;
+}

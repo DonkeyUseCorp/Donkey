@@ -17,6 +17,7 @@
     "engine:dev": "bun run src/cut/engine/main.ts",
     "engine:build": "bash scripts/build-cut-engine.sh",
     "eval:cut-chat": "bun run scripts/eval-cut-chat.ts",
+    "test": "bun test src",
     "test:genvideo": "bun run scripts/genvideo-selftest.ts",
     "eval:genvideo": "bun run scripts/genvideo-eval.ts"
   },
