@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { clearAssetDrag, setCardDragImage, setLibraryDragData } from "@/cut/lib/assetDrag";
+import { isMediaFile } from "@/cut/lib/media";
 import {
   createLibraryFolder,
   deleteFromLibrary,
@@ -78,6 +79,10 @@ export function LibraryView() {
   const [folderCreating, setFolderCreating] = useState(false);
   const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Whether an OS-file drag is hovering the surface (a depth counter tames
+  // enter/leave noise as the cursor crosses child tiles).
+  const [fileOver, setFileOver] = useState(false);
+  const dragDepth = useRef(0);
 
   const reload = () =>
     fetchLibrary()
@@ -102,15 +107,17 @@ export function LibraryView() {
     void reload();
   }, []);
 
-  const upload = async (files: FileList) => {
-    const list = Array.from(files);
+  // Upload a batch into `folderId` (the open folder by default — folder tiles
+  // pass their own id when files are dropped straight onto them).
+  const upload = async (files: FileList | File[], folderId: string | null = openFolder) => {
+    const list = Array.from(files).filter(isMediaFile);
     setUploading((n) => n + list.length);
     for (const file of list) {
       try {
         const asset = await uploadToLibrary(file);
-        if (openFolder) {
-          await moveLibraryItem(asset.id, openFolder).catch(() => {});
-          asset.folderId = openFolder;
+        if (folderId) {
+          await moveLibraryItem(asset.id, folderId).catch(() => {});
+          asset.folderId = folderId;
         }
         setAssets((prev) => [asset, ...(prev ?? [])]);
       } catch {
@@ -194,10 +201,47 @@ export function LibraryView() {
   const shown = all.filter((a) => (a.folderId ?? null) === openFolder);
   const shownTemplates = templates.filter((t) => (t.folderId ?? null) === openFolder);
   const openFolderName = folders.find((f) => f.id === openFolder)?.name;
-  const hasContent = all.length > 0 || folders.length > 0 || templates.length > 0;
+  const hasContent =
+    all.length > 0 || folders.length > 0 || templates.length > 0 || uploading > 0;
+
+  // Only OS-file drags are drop targets here; internal card drags carry
+  // LIBRARY_MOVE_MIME and are handled by the folder tiles and breadcrumb.
+  const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-10 py-9">
+    <div
+      className={cn(
+        "mx-auto w-full max-w-6xl px-10 py-9",
+        fileOver &&
+          "rounded-3xl outline-2 outline-dashed outline-offset-[-10px] outline-[#0a84ff]/60"
+      )}
+      onDragEnter={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        setFileOver(true);
+      }}
+      onDragOver={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!isFileDrag(e)) return;
+        dragDepth.current -= 1;
+        if (dragDepth.current <= 0) {
+          dragDepth.current = 0;
+          setFileOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setFileOver(false);
+        void upload(e.dataTransfer.files);
+      }}
+    >
       <div className="mb-5 flex items-center justify-between gap-4">
         {openFolder === null ? (
           <h1 className="text-lg font-semibold tracking-tight">Library</h1>
@@ -268,6 +312,7 @@ export function LibraryView() {
             await deleteLibraryFolder(id).catch(() => void reload());
           }}
           onDropIds={(ids, fid) => void moveItems(ids, fid)}
+          onDropFiles={(files, fid) => void upload(files, fid)}
         />
       ) : null}
 
