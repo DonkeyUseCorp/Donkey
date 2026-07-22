@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { AudioLines, Blend, Check, Clapperboard, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, AudioLines, Blend, Check, Clapperboard, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -29,6 +29,8 @@ import {
   importLibraryAsset,
   saveAssetToLibrary,
 } from "@/cut/lib/library";
+import { originalSettings, type ExportDoc } from "@/cut/lib/exportClient";
+import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
@@ -36,7 +38,7 @@ import { baseClips, clipLen, clipSpeed, getClipSpans, overlayLayers, projectDura
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
-import { IMAGE_CLIP_SECONDS, TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
+import { emptySubtitles, IMAGE_CLIP_SECONDS, TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
 import type { AudioClip, ClipSpan, MediaAsset, SubtitleCue, TextOverlay, TransitionStyle, VideoClip } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -1690,7 +1692,7 @@ function ClipView({
         className="bottom-1 right-2"
         onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
       />
-      <ClipMenu asset={asset}>
+      <ClipMenu asset={asset} clip={clip}>
         {asset.type === "video" ? (
           <DropdownMenuItem
             disabled={clip.muted}
@@ -1717,11 +1719,47 @@ function ClipView({
   );
 }
 
+/** Render just this timeline item through the normal export pipeline: a
+ * one-clip cut at the project aspect, trimmed and paced like the segment on
+ * the timeline, landing in the project's exports folder and the dock like any
+ * full export. */
+function exportSegment(asset: MediaAsset, clip: VideoClip | AudioClip) {
+  const s = useEditor.getState();
+  if (!s.projectId) return;
+  // AudioClip has no `track`; a hidden segment still renders when exported alone.
+  const doc: ExportDoc =
+    "track" in clip
+      ? {
+          assets: [asset],
+          clips: [{ ...clip, start: 0, track: 0, hidden: undefined }],
+          audioClips: [],
+          overlays: [],
+          subtitles: emptySubtitles(),
+        }
+      : {
+          assets: [asset],
+          clips: [],
+          audioClips: [{ ...clip, start: 0, hidden: undefined }],
+          overlays: [],
+          subtitles: emptySubtitles(),
+        };
+  const settings = originalSettings(s.aspect, doc.clips, doc.assets);
+  void useExports.getState().start(s.projectId, doc, settings, s.projectName);
+}
+
 /** The "⋮" menu on a timeline item. Every item gets the same filing pair —
  * move its asset into the Media panel (drop the `origin` tag) or copy it into
- * the shared library — and slots item-specific actions above them via
- * `children`. */
-function ClipMenu({ asset, children }: { asset: MediaAsset; children?: ReactNode }) {
+ * the shared library — plus a solo export, and slots item-specific actions
+ * above them via `children`. */
+function ClipMenu({
+  asset,
+  clip,
+  children,
+}: {
+  asset: MediaAsset;
+  clip: VideoClip | AudioClip;
+  children?: ReactNode;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -1757,6 +1795,9 @@ function ClipMenu({ asset, children }: { asset: MediaAsset; children?: ReactNode
           }}
         >
           <FolderPlus /> Add to library
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => exportSegment(asset, clip)}>
+          <ArrowDownToLine /> Export segment
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -1930,7 +1971,7 @@ function AudioView({
           {mention}
         </span>
       )}
-      <ClipMenu asset={asset} />
+      <ClipMenu asset={asset} clip={clip} />
       <MuteChip
         muted={!!clip.hidden}
         className="bottom-1 left-1"
@@ -2082,7 +2123,7 @@ function OverlayClipView({
           {+(clip.speed ?? 1).toFixed(2)}×
         </span>
       )}
-      <ClipMenu asset={asset} />
+      <ClipMenu asset={asset} clip={clip} />
       <HideChip
         hidden={!!clip.hidden}
         className="bottom-1 right-2"
