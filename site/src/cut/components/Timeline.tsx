@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowDownToLine, AudioLines, Blend, Check, Clapperboard, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, AudioLines, Blend, Check, Clapperboard, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -233,8 +233,8 @@ export function Timeline() {
   );
   // Kind of external media being dragged over the timeline (audio vs video).
   const [dropType, setDropType] = useState<"video" | "audio" | null>(null);
-  // A video clip is being dragged (internal or external): reveals the track
-  // guides and the would-be new tracks past the stack's edges.
+  // A video clip is being dragged (internal or external): reveals the
+  // would-be new tracks past the stack's edges.
   const [videoDragging, setVideoDragging] = useState(false);
   // The pending drop preview: which track/gap, at what time, for how long.
   const [overlayDrop, setOverlayDrop] = useState<
@@ -635,23 +635,6 @@ export function Timeline() {
     });
   };
 
-  // A dashed outline over a whole video row while a video drag is in flight:
-  // the ghost floats free under the pointer, so these mark every row it can
-  // land on, and the targeted row brightens — the same chrome as the audio
-  // and title row guides.
-  const trackGuide = (place: TrackTarget) => {
-    const active = samePlacement(overlayDrop?.target ?? null, place);
-    return (
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-x-0 top-0.5 rounded-lg border border-dashed transition-colors",
-          active ? "border-[#0a84ff]/70 bg-[#0a84ff]/5" : "border-[#0a84ff]/25"
-        )}
-        style={{ height: OVERLAY_H - 4 }}
-      />
-    );
-  };
-
   // The landing-slot preview on a video row while the drag targets it — the
   // same chrome as the lane slots.
   const trackSlot = (place: TrackTarget, h: number) =>
@@ -678,7 +661,6 @@ export function Timeline() {
         data-drop={placementAttr(place)}
         {...overlayDropHandlers(place)}
       >
-        {trackGuide(place)}
         {trackSlot(place, OVERLAY_H - 4)}
       </div>
     );
@@ -956,7 +938,6 @@ export function Timeline() {
               {...overlayDropHandlers({ kind: "track", track })}
             >
               {laneRail(OVERLAY_H - 2)}
-              {videoDragActive && trackGuide({ kind: "track", track })}
               {draggedOverlayTrack === track && laneDrag && (
                 <LaneSlot
                   drag={laneDrag}
@@ -1025,10 +1006,6 @@ export function Timeline() {
             }}
           >
             {spans.length > 0 && laneRail(VIDEO_H - 2)}
-            {/* An external asset drag previews as an on-track segment ghost
-                (below), so track 0 skips the full-width dashed guide that
-                would otherwise cover it; an internal clip move still shows it. */}
-            {videoDragging && trackGuide(TRACK_ZERO)}
             {trackSlot(TRACK_ZERO, VIDEO_H - 4)}
             {laneDrag?.kind === "clip" && !laneDrag.away && (
               <LaneSlot
@@ -1060,8 +1037,7 @@ export function Timeline() {
                     className="absolute inset-0 h-full w-full object-cover"
                   />
                 )}
-                <span className="absolute top-1 left-1 flex items-center gap-0.5 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] tabular-nums text-white">
-                  <Plus className="size-2.5" />
+                <span className="absolute top-1 left-1 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] tabular-nums text-white">
                   {assetDrop.len.toFixed(1)}s
                 </span>
               </div>
