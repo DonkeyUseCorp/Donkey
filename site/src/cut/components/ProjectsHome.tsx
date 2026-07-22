@@ -310,7 +310,7 @@ export function ProjectsHome() {
   return (
     <div
       className={cn(
-        "relative mx-auto w-full max-w-6xl px-10 py-9",
+        "min-h-full",
         fileOver &&
           "rounded-3xl outline-2 outline-dashed outline-offset-[-10px] outline-[#0a84ff]/60"
       )}
@@ -341,6 +341,7 @@ export function ProjectsHome() {
         void importFilesAsProjects(e.dataTransfer.files, openFolder);
       }}
     >
+    <div className="relative mx-auto w-full max-w-6xl px-10 py-9">
       {importing > 0 && (
         <div className="pointer-events-none fixed right-6 bottom-6 z-50 flex items-center gap-2 rounded-full bg-foreground/90 px-3.5 py-2.5 text-background shadow-lg">
           <Loader2 className="size-5 animate-spin" />
@@ -633,6 +634,7 @@ export function ProjectsHome() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
     </div>
   );
 }

@@ -211,7 +211,7 @@ export function LibraryView() {
   return (
     <div
       className={cn(
-        "mx-auto w-full max-w-6xl px-10 py-9",
+        "min-h-full",
         fileOver &&
           "rounded-3xl outline-2 outline-dashed outline-offset-[-10px] outline-[#0a84ff]/60"
       )}
@@ -242,6 +242,7 @@ export function LibraryView() {
         void upload(e.dataTransfer.files);
       }}
     >
+    <div className="mx-auto w-full max-w-6xl px-10 py-9">
       <div className="mb-5 flex items-center justify-between gap-4">
         {openFolder === null ? (
           <h1 className="text-lg font-semibold tracking-tight">Library</h1>
@@ -452,6 +453,7 @@ export function LibraryView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
     </div>
   );
 }
