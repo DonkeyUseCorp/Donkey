@@ -34,7 +34,7 @@ import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
-import { track0Clips, clipLen, clipSpeed, getClipSpans, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { track0Clips, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -265,10 +265,20 @@ export function Timeline() {
   }, []);
 
   // Drive the drop preview while a clip is dragged across tracks: highlight the
-  // target track's slot or a between-track insertion line.
+  // target track's slot or a between-track insertion line. An existing track
+  // slides the drop to its next free slot, so the slot previews where the clip
+  // will actually land, not the raw pointer time.
   const previewCross = useCallback((target: TrackTarget | null, start = 0, len = 0) => {
     if (target === null) return setOverlayDrop(null);
-    setOverlayDrop({ target, t: start, len });
+    const t =
+      target.kind === "track"
+        ? nextFreeStart(
+            footprints(useEditor.getState().clips.filter((c) => c.track === target.track)),
+            Math.max(0, start),
+            len
+          )
+        : start;
+    setOverlayDrop({ target, t, len });
   }, []);
 
   // Releasing a track-0 clip on any other track lifts it out onto that track
@@ -549,7 +559,7 @@ export function Timeline() {
       e.dataTransfer.dropEffect = "copy";
       setAssetDrop(null);
       setDropType("video"); // keep the insertion zones lit however the drag entered
-      setOverlayDrop({ target: place, t: Math.max(0, timeAt(e.clientX)), len: vid.duration });
+      previewCross(place, Math.max(0, timeAt(e.clientX)), vid.duration);
     },
     onDragLeave: (e: React.DragEvent) => {
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOverlayDrop(null);

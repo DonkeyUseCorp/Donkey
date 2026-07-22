@@ -262,6 +262,10 @@ export interface EditorState {
   mergeCueIntoPrev: (id: string) => void;
   deleteCue: (id: string) => void;
   updateCueTransient: (id: string, patch: Partial<SubtitleCue>) => void;
+  /** Committed single-cue retime: keep the requested window's length, slide
+   * right past occupied stretches on the cue's own lane so cues never overlap,
+   * and detach the word timings (they described the old window). One undo step. */
+  setCueTiming: (id: string, start: number, end: number) => void;
   /** Re-time listed cues to a generated voiceover: set each cue's [start, end]
    * and spread its words across the new span (the AI voice paces differently
    * from the original recording, so the word highlighter would otherwise drift). */
@@ -352,6 +356,136 @@ let clipboard: ClipboardItem[] = [];
  * captured a lane index checks it before landing, so a result can't write to
  * what is now a different language's track. */
 let laneEpoch = 0;
+
+/** Fields whose committed change moves or resizes a footprint. `in` checks
+ * (not undefined-checks) because some patches clear a field by writing
+ * `undefined` (e.g. speed back to 1×). */
+const touches = (patch: object, keys: readonly string[]) => keys.some((k) => k in patch);
+
+/**
+ * Committed patches keep the lane invariant: segments never overlap. Each
+ * settle runs after a committed update lands, scoped to the item's own lane.
+ * A move (start / track / lane) re-places the item at the first spot where it
+ * intrudes into no resident; a resize (in / out / speed / end) keeps its start
+ * and pushes the following same-lane run right by the overflow. For video
+ * clips a declared cross-dissolve is contact, not intrusion — the pair may
+ * overlap by the declared transition, exactly as the drag gestures allow.
+ * Writes are transient: the committed action that calls this owns the history
+ * entry, so the patch and its settle undo as one step.
+ */
+function settleClipFootprint(id: string, patch: Partial<VideoClip>) {
+  const moved = touches(patch, ["start", "track"]);
+  if (!moved && !touches(patch, ["in", "out", "speed"])) return;
+  const st = useEditor.getState();
+  const clip = st.clips.find((c) => c.id === id);
+  if (!clip) return;
+  const others = st.clips
+    .filter((c) => c.id !== id && c.track === clip.track)
+    .sort((a, b) => a.start - b.start);
+  const len = clipLen(clip);
+  if (moved) {
+    let at = clip.start;
+    for (const c of others) {
+      const blockEnd = c.start + clipLen(c) - transitionOverlap(c, clip);
+      if (blockEnd <= at + 1e-3) continue;
+      if (c.start + transitionOverlap(clip, c) >= at + len - 1e-3) break;
+      at = blockEnd;
+    }
+    if (Math.abs(at - clip.start) > 1e-9) st.updateClipTransient(id, { start: at });
+    st.sortClips();
+    return;
+  }
+  const next = others.find((c) => c.start >= clip.start - 1e-9);
+  if (!next) return;
+  const delta = clip.start + len - transitionOverlap(clip, next) - next.start;
+  if (delta <= 1e-9) return;
+  useEditor.setState((s) => ({
+    clips: s.clips
+      .map((c) =>
+        c.id !== id && c.track === clip.track && c.start >= next.start - 1e-9
+          ? { ...c, start: c.start + delta }
+          : c
+      )
+      .sort((a, b) => a.start - b.start),
+  }));
+}
+
+function settleAudioFootprint(id: string, patch: Partial<AudioClip>) {
+  const moved = touches(patch, ["start", "lane"]);
+  if (!moved && !touches(patch, ["in", "out", "speed"])) return;
+  const st = useEditor.getState();
+  const self = st.audioClips.find((a) => a.id === id);
+  if (!self) return;
+  const others = st.audioClips
+    .filter((a) => a.id !== id && (a.lane ?? 0) === (self.lane ?? 0))
+    .sort((a, b) => a.start - b.start);
+  const len = clipLen(self);
+  if (moved) {
+    const at = nextFreeStart(footprints(others), self.start, len);
+    if (Math.abs(at - self.start) > 1e-9) st.updateAudioTransient(id, { start: at });
+    return;
+  }
+  const next = others.find((a) => a.start >= self.start - 1e-9);
+  if (!next) return;
+  const delta = self.start + len - next.start;
+  if (delta <= 1e-9) return;
+  useEditor.setState((s) => ({
+    audioClips: s.audioClips.map((a) =>
+      a.id !== id && (a.lane ?? 0) === (self.lane ?? 0) && a.start >= next.start - 1e-9
+        ? { ...a, start: a.start + delta }
+        : a
+    ),
+  }));
+}
+
+/** Apply a committed title patch and settle its lane. A start move without an
+ * explicit end translates the title — its length rides along; an end change
+ * resizes in place and pushes the run. Writes are transient: callers own the
+ * history entry (exported for the AI's add_title, which patches inside the
+ * add's own undo step; everything else comes through `updateOverlay`). */
+export function applyOverlayPatchSettled(id: string, patch: Partial<TextOverlay>) {
+  const st = useEditor.getState();
+  const before = st.overlays.find((o) => o.id === id);
+  if (!before) return;
+  const p = { ...patch };
+  if ("start" in p && !("end" in p) && p.start !== undefined)
+    p.end = p.start + (before.end - before.start);
+  st.updateOverlayTransient(id, p);
+  settleOverlayFootprint(id, p);
+}
+
+function settleOverlayFootprint(id: string, patch: Partial<TextOverlay>) {
+  const moved = touches(patch, ["start", "lane"]);
+  if (!moved && !touches(patch, ["end"])) return;
+  const st = useEditor.getState();
+  const self = st.overlays.find((o) => o.id === id);
+  if (!self) return;
+  const others = st.overlays
+    .filter((o) => o.id !== id && (o.lane ?? 0) === (self.lane ?? 0))
+    .sort((a, b) => a.start - b.start);
+  const len = Math.max(0.2, self.end - self.start);
+  if (moved) {
+    const at = nextFreeStart(
+      others.map((o) => ({ start: o.start, end: o.end })),
+      self.start,
+      len
+    );
+    if (Math.abs(at - self.start) > 1e-9)
+      st.updateOverlayTransient(id, { start: at, end: at + len });
+    return;
+  }
+  const next = others.find((o) => o.start >= self.start - 1e-9);
+  if (!next) return;
+  const delta = self.end - next.start;
+  if (delta <= 1e-9) return;
+  useEditor.setState((s) => ({
+    overlays: s.overlays.map((o) =>
+      o.id !== id && (o.lane ?? 0) === (self.lane ?? 0) && o.start >= next.start - 1e-9
+        ? { ...o, start: o.start + delta, end: o.end + delta }
+        : o
+    ),
+  }));
+}
 
 /** Resize a clip's footprint to `newLen` (a trim or speed change), keeping its
  * own track sound: a live dissolve into the next clip stays a dissolve (the
@@ -1016,6 +1150,7 @@ export const useEditor = create<EditorState>((set, get) => {
     updateClip: (id, patch) => {
       push();
       get().updateClipTransient(id, patch);
+      settleClipFootprint(id, patch);
     },
 
     setClipSpeed: (id, speed) => {
@@ -1081,10 +1216,11 @@ export const useEditor = create<EditorState>((set, get) => {
     updateAudio: (id, patch) => {
       push();
       get().updateAudioTransient(id, patch);
+      settleAudioFootprint(id, patch);
     },
     updateOverlay: (id, patch) => {
       push();
-      get().updateOverlayTransient(id, patch);
+      applyOverlayPatchSettled(id, patch);
     },
 
     updateOverlayTransient: (id, patch) =>
@@ -2319,6 +2455,19 @@ export const useEditor = create<EditorState>((set, get) => {
           cues: s.subtitles.cues.map((c) => (c.id === id ? { ...c, ...patch } : c)),
         },
       })),
+
+    setCueTiming: (id, start, end) => {
+      const cue = get().subtitles.cues.find((c) => c.id === id);
+      if (!cue) return;
+      const len = Math.max(0.15, end - start);
+      const taken = get()
+        .subtitles.cues.filter((c) => c.id !== id && (c.lane ?? 0) === (cue.lane ?? 0))
+        .map((c) => ({ start: c.start, end: c.end }));
+      const at = nextFreeStart(taken, Math.max(0, start), len);
+      push();
+      get().updateCueTransient(id, { start: at, end: at + len, words: undefined });
+      get().sortCues();
+    },
 
     retimeCues: (entries) => {
       if (entries.length === 0) return;

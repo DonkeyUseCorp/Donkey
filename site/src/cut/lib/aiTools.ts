@@ -24,7 +24,7 @@ import { blobToInlineAudio, refToInlineAudio, type InlineImage } from "./refMedi
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
-import { track0Clips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
+import { applyOverlayPatchSettled, track0Clips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { synthesizeMusic } from "./audioGen";
@@ -476,7 +476,7 @@ export async function runAiTool(
       const cur = useEditor.getState();
       const sel = cur.selection;
       if (sel?.kind !== "text") throw new ToolError("Could not create the title.");
-      cur.updateOverlayTransient(sel.id, titlePatch({ ...input, id: sel.id }));
+      applyOverlayPatchSettled(sel.id, titlePatch({ ...input, id: sel.id }));
       const o = useEditor.getState().overlays.find((x) => x.id === sel.id)!;
       return { id: o.id, text: o.text, start: o.start, end: o.end };
     }
@@ -512,7 +512,14 @@ export async function runAiTool(
       if (!("duck" in patch) && Object.keys(patch).length === 0)
         throw new ToolError("Nothing to change.");
       s.updateAudio(a.id, patch);
-      return { id: a.id, ...patch };
+      // Report where the clip actually sits: the store slides a committed move
+      // to the lane's next free slot when the requested start overlaps.
+      const landed = useEditor.getState().audioClips.find((c) => c.id === a.id)!;
+      return {
+        id: a.id,
+        ...patch,
+        ...("start" in patch ? { start: round2(landed.start) } : {}),
+      };
     }
 
     case "set_framing": {
@@ -1420,9 +1427,7 @@ export async function runAiTool(
         const start = isNum(input.start) ? Math.max(0, input.start) : cue.start;
         const end = isNum(input.end) ? input.end : cue.end;
         if (end - start < 0.15) throw new ToolError("Cue must stay at least 0.15s long.");
-        s.pushHistory();
-        s.updateCueTransient(cue.id, { start, end, words: undefined });
-        s.sortCues();
+        s.setCueTiming(cue.id, start, end);
       }
       const next = useEditor.getState().subtitles.cues.find((c) => c.id === cue.id);
       return next ? { id: next.id, start: next.start, end: next.end, text: next.text } : { deleted: cue.id };
