@@ -5,7 +5,6 @@ import { apiFetch } from "./api";
 import {
   cancelExportJob,
   createExportJob,
-  downloadExport,
   type ExportDoc,
   type ExportSettings,
 } from "./exportClient";
@@ -40,43 +39,6 @@ export interface LocalRow {
   status: "preparing" | "error";
   error?: string;
   createdAt: number;
-}
-
-// Jobs this tab started, so this tab (and only this tab) auto-downloads them
-// when they finish — the same one-download-per-export the single export gave.
-// Other tabs still see the job and can download it by hand from the dock.
-// Persisted in sessionStorage (per-tab, so it never crosses tabs) so a reload
-// while an export is still rendering still auto-downloads the finished file on
-// completion, the way the old per-project reconnect did.
-const OWN_DOWNLOADS_KEY = "cut-own-exports";
-
-function loadOwnDownloads(): Set<string> {
-  try {
-    const raw = sessionStorage.getItem(OWN_DOWNLOADS_KEY);
-    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-const ownDownloads = loadOwnDownloads();
-
-function persistOwnDownloads() {
-  try {
-    sessionStorage.setItem(OWN_DOWNLOADS_KEY, JSON.stringify([...ownDownloads]));
-  } catch {
-    // Best-effort: without it, auto-download just won't survive a reload.
-  }
-}
-
-function rememberOwnDownload(id: string) {
-  ownDownloads.add(id);
-  persistOwnDownloads();
-}
-
-function forgetOwnDownload(id: string) {
-  ownDownloads.delete(id);
-  persistOwnDownloads();
 }
 
 interface ExportsState {
@@ -115,8 +77,7 @@ export const useExports = create<ExportsState>((set, get) => ({
       ],
     }));
     try {
-      const jobId = await createExportJob(projectId, doc, settings);
-      rememberOwnDownload(jobId);
+      await createExportJob(projectId, doc, settings);
       set((s) => ({ local: s.local.filter((r) => r.id !== localId) }));
       void get().refresh(); // show the queued job now, not on the next tick
     } catch (err) {
@@ -131,7 +92,6 @@ export const useExports = create<ExportsState>((set, get) => ({
 
   cancel: (id) => {
     cancelExportJob(id);
-    forgetOwnDownload(id);
     set((s) => ({
       jobs: s.jobs.map((j) =>
         j.id === id ? { ...j, status: "error", error: "Export canceled." } : j
@@ -169,13 +129,6 @@ export const useExports = create<ExportsState>((set, get) => ({
       list = (await res.json()) as ExportJob[];
     } catch {
       return;
-    }
-    for (const j of list) {
-      const settled = j.status === "done" || j.status === "error";
-      if (j.status === "done" && j.outName && ownDownloads.has(j.id)) {
-        downloadExport(j.id, j.outName);
-      }
-      if (settled) forgetOwnDownload(j.id);
     }
     set((s) => ({
       jobs: list,
