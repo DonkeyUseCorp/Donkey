@@ -59,6 +59,7 @@ import { useLocalPref } from "@/cut/lib/uiState";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
+import { usePanelRequestEffect, type SidePanelTab } from "@/cut/lib/panelRequest";
 import { CopyNameLabel } from "./AssetRefs";
 import { AudioCardFace, AudioPanel } from "./AudioPanel";
 import { FolderCrumb, FolderShelf } from "./desktopFolders";
@@ -77,7 +78,7 @@ const LIBRARY_MOVE_MIME = "application/x-cut-library-move";
 import { PlatformPreviewDialog, type ExportItem } from "./PlatformPreview";
 import { SubtitlesPanel } from "./SubtitlesPanel";
 
-type Tab = "media" | "video" | "image" | "library" | "audio" | "subtitles" | "publish";
+type Tab = SidePanelTab;
 
 const TABS: { id: Tab; label: string; icon: typeof Film }[] = [
   { id: "media", label: "Media", icon: Clapperboard },
@@ -151,6 +152,10 @@ export function SidePanel({
             : "image"
     );
   });
+
+  // The assistant's set_side_panel tool: open the tab it wants on screen, or
+  // collapse the panel so the canvas gets the room.
+  usePanelRequestEffect(setTab);
 
   return (
     <div className="flex min-h-0 border-r border-border bg-card">

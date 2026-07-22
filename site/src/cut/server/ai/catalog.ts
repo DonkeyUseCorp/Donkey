@@ -98,6 +98,18 @@ export const AI_TOOLS: AiToolDef[] = [
     }, ["kind"]),
   },
   {
+    name: "set_side_panel",
+    description:
+      "Open a side-panel tab, or collapse the panel to the icon rail with 'none' so the preview canvas takes the freed width — use 'none' when the user asks to clean up or maximize the workspace. 'publish' is the Details tab.",
+    inputSchema: obj({
+      panel: {
+        type: "string",
+        enum: ["media", "library", "video", "image", "audio", "subtitles", "publish", "none"],
+        description: "Tab to open, or 'none' to collapse the panel",
+      },
+    }, ["panel"]),
+  },
+  {
     name: "split_at",
     description:
       "Split the video (or a selected soundtrack/overlay clip) at a time, like pressing S. Omit t to split at the playhead.",
@@ -435,7 +447,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "library_organize",
     description:
-      "Organize the shared Library: create_folder / rename_folder / delete_folder (a deleted folder's assets drop to the root), move_asset files an asset into a folder (omit folder_id for the root), delete_asset / delete_template remove an item. Deletes are permanent — projects keep their own copies, but delete only what the user explicitly asked to remove.",
+      "Organize the shared Library: create_folder / rename_folder / delete_folder (a deleted folder's items drop to the root), move_asset files an asset or template into a folder (omit folder_id for the root), delete_asset / delete_template remove an item. Deletes are permanent — projects keep their own copies, but delete only what the user explicitly asked to remove.",
     inputSchema: obj({
       action: {
         type: "string",

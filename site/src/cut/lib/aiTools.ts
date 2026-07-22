@@ -14,11 +14,12 @@ import {
   deleteTemplate,
   fetchLibrary,
   importLibraryAsset,
-  moveLibraryAsset,
+  moveLibraryItem,
   renameLibraryFolder,
   saveAssetToLibrary,
 } from "./library";
 import { enrichAsset, ensurePeaks, importImage, importStockVideo, importUrlMedia } from "./media";
+import { requestSidePanel, SIDE_PANEL_TABS, type SidePanelTab } from "./panelRequest";
 import { blobToInlineAudio, refToInlineAudio, type InlineImage } from "./refMedia";
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
@@ -275,6 +276,14 @@ export async function runAiTool(
       const selKind = kind === "overlayClip" ? "clip" : (kind as "clip" | "audio" | "text");
       s.select({ kind: selKind, id });
       return { selection: { kind: selKind, id } };
+    }
+
+    case "set_side_panel": {
+      const panel = String(input.panel);
+      if (panel !== "none" && !SIDE_PANEL_TABS.some((t) => t === panel))
+        throw new ToolError(`Unknown panel: ${panel}`);
+      requestSidePanel(panel === "none" ? null : (panel as SidePanelTab));
+      return { panel };
     }
 
     case "split_at": {
@@ -1093,7 +1102,7 @@ export async function runAiTool(
         case "move_asset": {
           const folderId =
             typeof input.folder_id === "string" && input.folder_id ? input.folder_id : null;
-          await moveLibraryAsset(String(input.id ?? ""), folderId);
+          await moveLibraryItem(String(input.id ?? ""), folderId);
           return { moved: true, folderId };
         }
         case "delete_asset": {
