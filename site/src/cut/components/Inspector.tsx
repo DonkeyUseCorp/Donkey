@@ -20,7 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
-import { baseClips, clipWindow, useEditor, type EditorState } from "@/cut/lib/store";
+import { track0Clips, clipWindow, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import {
   parseNumberInput,
@@ -287,19 +287,19 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const updateClip = useEditor((s) => s.updateClip);
   // A transition hands this clip into the next one, so only offer it when
-  // there is a next clip on the base row — layer clips share the sorted array
-  // but sit outside the sequence, so position checks read the base row only.
+  // there is a next clip on track 0 — layer clips share the sorted array
+  // but sit outside the sequence, so position checks read track 0 only.
   const hasNext = useEditor((s) => {
-    const base = baseClips(s.clips);
-    const i = base.findIndex((c) => c.id === clip.id);
-    return i >= 0 && i < base.length - 1;
+    const row = track0Clips(s.clips);
+    const i = row.findIndex((c) => c.id === clip.id);
+    return i >= 0 && i < row.length - 1;
   });
   // The whole-video fades are project-level but live on the clips that show
   // them: fade in on the first clip's panel, fade out on the last clip's.
-  const isFirst = useEditor((s) => baseClips(s.clips)[0]?.id === clip.id);
+  const isFirst = useEditor((s) => track0Clips(s.clips)[0]?.id === clip.id);
   const isLast = useEditor((s) => {
-    const base = baseClips(s.clips);
-    return base[base.length - 1]?.id === clip.id;
+    const row = track0Clips(s.clips);
+    return row[row.length - 1]?.id === clip.id;
   });
   const fadeIn = useEditor((s) => s.fadeIn);
   const fadeOut = useEditor((s) => s.fadeOut);
@@ -603,8 +603,8 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
 
 /** Per-clip generated-audio block: the voice picker, "Generate audio for clip"
  * (which transcribes just this clip when it has no cues yet), and one volume
- * slider driving the voiceovers laid over the clip. Shared by the base-row and
- * layer clip panels. */
+ * slider driving the voiceovers laid over the clip. Shared by every clip
+ * panel on any track. */
 function ClipGeneratedAudio({ clip }: { clip: VideoClip }) {
   // Subtitle cues overlapping this clip's timeline span, for the per-clip
   // readout. A selector rather than a snapshot so the generate button reads

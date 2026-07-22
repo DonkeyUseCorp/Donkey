@@ -111,8 +111,8 @@ export function regionLabel(r: FrameRect): string {
 export interface VideoClip {
   id: string;
   assetId: string;
-  /** Which video track this clip sits on. Track 0 is the base row — its clips
-   * form the master sequence that carries transitions and drives playback.
+  /** Which video track this clip sits on. Track 0's clips form the sequence
+   * that carries transitions and drives playback.
    * Positive tracks composite above it (higher = closer to the top and wins
    * where clips overlap); negative tracks sit behind as a backdrop. Absent in
    * older docs, which are all track 0. */

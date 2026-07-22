@@ -30,7 +30,7 @@
 import type React from "react";
 import { refFromAsset, startPointerRefDrag } from "./assetRef";
 import { startDrag } from "./drag";
-import { baseClips, clipLen, getClipSpans, overlayLayers, projectDuration, transitionOverlap, useEditor } from "./store";
+import { track0Clips, clipLen, getClipSpans, overlayLayers, projectDuration, transitionOverlap, useEditor } from "./store";
 import type {
   AudioClip,
   MediaAsset,
@@ -42,12 +42,12 @@ import type {
 
 type S = ReturnType<typeof useEditor.getState>;
 
-// A drag lane. "clip" is the base row (track 0), "overlayClip" a layer track —
+// A drag lane. "clip" is track 0, "overlayClip" a layer track —
 // distinct adapters, but both select as a plain video-clip selection.
 export type LaneKind = "clip" | "audio" | "text" | "overlayClip" | "cue";
 
-/** The Selection kind a lane maps to. Base and layer video lanes both select as
- * `"clip"` — a video clip is a video clip whatever track it sits on. */
+/** The Selection kind a lane maps to. Track-0 and layer video lanes both select
+ * as `"clip"` — a video clip is a video clip whatever track it sits on. */
 const laneSelectionKind = (kind: LaneKind): NonNullable<Selection>["kind"] =>
   kind === "overlayClip" ? "clip" : kind;
 
@@ -107,7 +107,7 @@ const clipAdapter: LaneAdapter<VideoClip> = {
   // Verticality is the video placement system (upper tracks and insert
   // zones), fed in as the move gesture's `vertical` strategy.
   multiLane: false,
-  raws: (s) => baseClips(s.clips),
+  raws: (s) => track0Clips(s.clips),
   view: (c) => ({ id: c.id, start: c.start, len: clipLen(c), lane: 0 }),
   apply: (patches) => useEditor.getState().updateClipsTransient(patches),
   movePatch: (c, start) => ({ id: c.id, patch: { start } }),

@@ -24,7 +24,7 @@ import { blobToInlineAudio, refToInlineAudio, type InlineImage } from "./refMedi
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
-import { baseClips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
+import { track0Clips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { synthesizeMusic } from "./audioGen";
@@ -304,9 +304,9 @@ export async function runAiTool(
           "That clip is on an overlay track — use update_overlay_video to move it."
         );
       if (!isNum(input.toIndex)) throw new ToolError("toIndex is required.");
-      const base = baseClips(s.clips);
-      s.moveClip(clip.id, clamp(Math.round(input.toIndex), 0, base.length - 1));
-      return { order: baseClips(useEditor.getState().clips).map((c) => c.id) };
+      const row = track0Clips(s.clips);
+      s.moveClip(clip.id, clamp(Math.round(input.toIndex), 0, row.length - 1));
+      return { order: track0Clips(useEditor.getState().clips).map((c) => c.id) };
     }
 
     case "place_clip": {
@@ -1486,11 +1486,11 @@ export async function runAiTool(
 
     case "set_transition": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
-      // Transitions join the base sequence; a layer clip has no next clip.
+      // Transitions join the track-0 sequence; a layer clip has no next clip.
       if (clip.track !== 0)
         throw new ToolError("That clip is on an overlay track — transitions join timeline (track 0) clips.");
-      const base = baseClips(s.clips);
-      if (base.findIndex((c) => c.id === clip.id) === base.length - 1)
+      const row = track0Clips(s.clips);
+      if (row.findIndex((c) => c.id === clip.id) === row.length - 1)
         throw new ToolError("The last clip has no next clip to transition into.");
       if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the transition).");
       let style: TransitionStyle | undefined;
@@ -1822,7 +1822,7 @@ function placeAssetOnTimeline(asset: MediaAsset, input: Record<string, unknown>)
   return {
     id: c.id,
     kind: asset.type,
-    index: baseClips(useEditor.getState().clips).findIndex((x) => x.id === c.id),
+    index: track0Clips(useEditor.getState().clips).findIndex((x) => x.id === c.id),
     start: round2(c.start),
     len: round2(c.out - c.in),
   };

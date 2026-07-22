@@ -80,7 +80,7 @@ export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | nu
           speed: r(sp.clip.speed ?? 1),
         };
       }
-      // A layer clip carries no span (spans are the base row); describe its
+      // A layer clip carries no span (spans are track 0); describe its
       // compositing shape instead.
       const c = s.clips.find((x) => x.id === id);
       return c ? { kind, id, ...describeOverlayClip(c, assetById) } : { kind, id };

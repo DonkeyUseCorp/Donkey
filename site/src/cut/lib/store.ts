@@ -35,18 +35,18 @@ const uid = () => crypto.randomUUID().slice(0, 8);
 const MIN_LEN = 0.1;
 
 /** Where a video clip lands when dropped: an existing track or a brand-new
- * track inserted at z-level `level`. Track numbers are signed: track 0 is the
- * base row, positive tracks sit above it (higher = closer to the top), negative
- * tracks sit below it (more negative = further behind). Inserting shifts the
+ * track inserted at z-level `level`. Track numbers are signed: positive tracks
+ * sit above track 0 (higher = closer to the top), negative tracks sit below it
+ * (more negative = further behind). Inserting shifts the
  * tracks past `level` (up for positive, down for negative) to open the slot. */
 export type VideoTrackPlacement =
   | { kind: "track"; track: number }
   | { kind: "insert"; level: number };
 
-/** The base row (track 0) clips — the master sequence that carries transitions
- * and drives playback. */
-export const baseClips = (clips: VideoClip[]) => clips.filter((c) => c.track === 0);
-/** Every video clip not on the base row (track 0) — the composited layers. */
+/** The track-0 clips — the sequence that carries transitions and drives
+ * playback. */
+export const track0Clips = (clips: VideoClip[]) => clips.filter((c) => c.track === 0);
+/** Every video clip not on track 0 — the composited layers. */
 export const overlayLayers = (clips: VideoClip[]) => clips.filter((c) => c.track !== 0);
 
 /** Open a slot at a non-zero `level`, moving other clips out of the way: above
@@ -91,9 +91,9 @@ export interface EditorState {
   saveState: SaveState;
 
   assets: MediaAsset[];
-  /** Every video clip, on any track. Track 0 is the base row (the master
-   * sequence); other tracks composite around it (positive above, negative
-   * behind). A clip's `track` field is the only thing that places it. */
+  /** Every video clip, on any track. Track 0 carries the transition sequence;
+   * other tracks composite around it (positive above, negative behind). A
+   * clip's `track` field is the only thing that places it. */
   clips: VideoClip[];
   audioClips: AudioClip[];
   overlays: TextOverlay[];
@@ -150,7 +150,7 @@ export interface EditorState {
   /** Add a video clip from an asset onto video track 0 — at `start` (sliding
    * to the track's next free slot), or appended at the end when omitted. */
   addClipFromAsset: (assetId: string, start?: number) => void;
-  /** Drop a video/still onto base track 0 at pointer-time `t`: inserts at the
+  /** Drop a video/still onto track 0 at pointer-time `t`: inserts at the
    * drop and ripples later clips right, so a drop into a leading gap or between
    * clips lands there instead of sliding to the end (the drop gesture's
    * placement, distinct from `addClipFromAsset`'s slide-to-end). */
@@ -355,9 +355,9 @@ let laneEpoch = 0;
  * own track sound: a live dissolve into the next clip stays a dissolve (the
  * run follows the resize so the pair keeps its overlap); otherwise a longer
  * footprint pushes the run right by the overflow and a shorter one just opens
- * a gap. Everything is scoped to the clip's track — resizing a base clip never
- * drags the composited layers (or vice versa), so each track's annotations
- * keep the timing they were placed at. One undo step. */
+ * a gap. Everything is scoped to the clip's track — resizing a track-0 clip
+ * never drags the composited layers (or vice versa), so each track's
+ * annotations keep the timing they were placed at. One undo step. */
 function resizeClipFootprint(clip: VideoClip, patch: Partial<VideoClip>, newLen: number) {
   useEditor.getState().pushHistory();
   useEditor.getState().updateClipTransient(clip.id, patch);
@@ -416,18 +416,18 @@ export function footprints(items: (VideoClip | AudioClip)[]): { start: number; e
   return items.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
 }
 
-/** Where a `len`-long clip dropped at pointer-time `t` lands on the base row,
+/** Where a `len`-long clip dropped at pointer-time `t` lands on its row,
  * and how the clips after it slide to open room. The drop-at-pointer companion
  * to `nextFreeStart` (which only ever appends): clips whose center sits left of
  * the drop hold their place; the rest shift right as one run, so a clip dropped
  * into a leading gap or between two others inserts there instead of piling up at
  * the end when it is longer than the gap. */
-export function rippleInsertBase(
-  base: VideoClip[],
+export function rippleInsert(
+  row: VideoClip[],
   t: number,
   len: number
 ): { start: number; shifts: { id: string; start: number }[] } {
-  const items = base
+  const items = row
     .map((c) => ({ id: c.id, start: c.start, len: clipLen(c) }))
     .sort((a, b) => a.start - b.start);
   const center = t + len / 2;
@@ -625,23 +625,23 @@ export const useEditor = create<EditorState>((set, get) => {
         // Older docs stored video track 0 packed (array order implied the
         // position); bake explicit starts in once so every clip is free-placed.
         const legacy = (doc.clips as LegacyClip[]).some((c) => typeof c.start !== "number");
-        const base = (legacy ? packStarts(doc.clips as LegacyClip[]) : doc.clips).map((c) => ({
+        const folded = (legacy ? packStarts(doc.clips as LegacyClip[]) : doc.clips).map((c) => ({
           ...c,
           track: c.track ?? 0,
         }));
-        // Older docs kept non-base tracks in a separate `overlayClips` array;
+        // Older docs kept tracks other than 0 in a separate `overlayClips` array;
         // fold them into the one clip list (each already carries its `track`).
         // Entries whose id already sits in `clips` are the same clip persisted
         // twice by a version-skewed save (an older engine keeps overlayClips
         // after a merged client writes the folded list) — keep the folded copy.
         // Entries with track 0 were unreachable dead data under the split shape
         // (never rendered, never played); promoting them would insert them into
-        // the master sequence, so they stay dropped.
-        const seen = new Set(base.map((c) => c.id));
+        // track 0's sequence, so they stay dropped.
+        const seen = new Set(folded.map((c) => c.id));
         const legacyLayers = (doc.overlayClips ?? []).filter(
           (c) => c.track !== 0 && !seen.has(c.id)
         );
-        const merged = [...base, ...legacyLayers];
+        const merged = [...folded, ...legacyLayers];
         set({
           projectName: doc.name,
           assets,
@@ -900,13 +900,13 @@ export const useEditor = create<EditorState>((set, get) => {
       push();
       const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       const len = Math.max(MIN_LEN, out);
-      const base = baseClips(get().clips);
+      const row = track0Clips(get().clips);
       // An explicit target time always wins (a drop at the pointer, AI placing
       // b-roll against a voiceover). Without one: the first clip on an empty
-      // base row anchors at 0 — a lone clip with dead space before it reads as
+      // track 0 anchors at 0 — a lone clip with dead space before it reads as
       // broken — and later clips append at the end of the row.
-      const want = Math.max(0, start ?? (base.length === 0 ? 0 : totalDuration(get().clips)));
-      const taken = footprints(base);
+      const want = Math.max(0, start ?? (row.length === 0 ? 0 : totalDuration(get().clips)));
+      const taken = footprints(row);
       const clip: VideoClip = {
         id: uid(),
         assetId,
@@ -928,7 +928,7 @@ export const useEditor = create<EditorState>((set, get) => {
       push();
       const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       const len = Math.max(MIN_LEN, out);
-      const { start, shifts } = rippleInsertBase(baseClips(get().clips), Math.max(0, t), len);
+      const { start, shifts } = rippleInsert(track0Clips(get().clips), Math.max(0, t), len);
       const move = new Map(shifts.map((sh) => [sh.id, sh.start]));
       const clip: VideoClip = { id: uid(), assetId, track: 0, start, in: 0, out, muted: false };
       set((s) => ({
@@ -1049,8 +1049,8 @@ export const useEditor = create<EditorState>((set, get) => {
       // (and the run behind it, gaps preserved) so it starts `newOverlap`
       // before this clip ends — closing any gap, since a dissolve needs
       // contact. Clearing one pushes the pair back to a hard cut. Edge styles
-      // overlap nothing: they leave the layout alone. Only the base row moves:
-      // transitions are a base-sequence concept, and the composited layers
+      // overlap nothing: they leave the layout alone. Only track 0 moves:
+      // transitions live on its sequence, and the composited layers
       // stay pinned to the absolute times they annotate.
       if (next) {
         const oldOverlap = spans[idx].transitionOut;
@@ -1154,14 +1154,14 @@ export const useEditor = create<EditorState>((set, get) => {
       // its absolute time, so audio, titles, and captions stay synced to the
       // clips they annotate. Pointer drags never come here — they free-place
       // through the lane coordinator.
-      const base = baseClips(get().clips).sort((a, b) => a.start - b.start);
-      const from = base.findIndex((c) => c.id === id);
+      const row = track0Clips(get().clips).sort((a, b) => a.start - b.start);
+      const from = row.findIndex((c) => c.id === id);
       if (from < 0) return;
-      const to = Math.max(0, Math.min(base.length - 1, toIndex));
+      const to = Math.max(0, Math.min(row.length - 1, toIndex));
       if (to === from) return;
       push();
-      const moved = base[from];
-      const others = base.filter((c) => c.id !== id);
+      const moved = row[from];
+      const others = row.filter((c) => c.id !== id);
       const len = clipLen(moved);
       const anchor = to < others.length ? others[to] : null;
       const newStart = anchor ? anchor.start : totalDuration(others);
@@ -1182,7 +1182,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       push();
       if (place.kind === "track" && place.track === 0) {
-        const taken = footprints(baseClips(get().clips));
+        const taken = footprints(track0Clips(get().clips));
         const v: VideoClip = {
           id: uid(),
           assetId,
@@ -1221,12 +1221,12 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!src) return;
       // No checkpoint here: the lane coordinator's drag gesture already pushed
       // one at pointer-down, so the whole move is a single undo step.
-      const onBase = src.track === 0;
+      const onTrack0 = src.track === 0;
 
       if (place.kind === "track" && place.track === 0) {
-        if (onBase) return; // a same-track move commits through the lane coordinator
-        // Drop a layer clip down onto the base row: slide to its next free slot.
-        const taken = footprints(baseClips(get().clips));
+        if (onTrack0) return; // a same-track move commits through the lane coordinator
+        // Drop a layer clip down onto track 0: slide to its next free slot.
+        const taken = footprints(track0Clips(get().clips));
         const at = nextFreeStart(taken, Math.max(0, start), clipLen(src));
         set((st) => ({
           clips: st.clips.map((c) =>
@@ -1301,7 +1301,7 @@ export const useEditor = create<EditorState>((set, get) => {
         }
       }
 
-      // A layer clip (not on the base row) selected: slice it in place. A base
+      // A layer clip (off track 0) selected: slice it in place. A track-0
       // clip falls through to the playhead-driven span split below.
       if (selection?.kind === "clip") {
         const c = get().clips.find((x) => x.id === selection.id);
@@ -1445,7 +1445,7 @@ export const useEditor = create<EditorState>((set, get) => {
           if (sp) {
             add(sp.start, sp.start + sp.len);
           } else {
-            // A layer clip carries no span (spans are the base row); use its
+            // A layer clip carries no span (spans are track 0); use its
             // own footprint.
             const c = s.clips.find((x) => x.id === sel.id);
             if (c) {
@@ -1500,7 +1500,7 @@ export const useEditor = create<EditorState>((set, get) => {
           if (sp) {
             const mi = mediaFor(sp.clip.assetId);
             if (mi == null) continue;
-            // Base-row clips re-materialize onto track 0 (asClip), so a template
+            // Track-0 clips re-materialize onto track 0 (asClip), so a template
             // stands up its own video instead of an empty timeline.
             layers.push({ media: mi, start: sp.start - start0, in: sp.clip.in, out: sp.clip.out, frame: sp.clip.frame, fit: sp.clip.fit, muted: sp.clip.muted, speed: sp.clip.speed, track: 1, asClip: true });
           } else {
@@ -1583,7 +1583,7 @@ export const useEditor = create<EditorState>((set, get) => {
     insertTemplate: (template, assetIds, offset) => {
       push();
       const usable = template.layers.filter((l) => assetIds[l.media]);
-      // Templates saved before the base-track removal persisted `onBase`;
+      // Templates saved by older builds persisted `onBase`;
       // read it as asClip so their footage still lands on track 0.
       const isClip = (l: (typeof usable)[number]) =>
         l.asClip ?? (l as { onBase?: boolean }).onBase;
@@ -1611,8 +1611,8 @@ export const useEditor = create<EditorState>((set, get) => {
       // Template layers store `track` as the source track + 1 (so a track-1
       // layer saved as 2, a track −1 backdrop as 0). Above-layers stack on top
       // of the project's current top; a backdrop (stored ≤ 0) goes back behind
-      // the base row at its original negative level — never onto track 0, which
-      // would splice it into the master sequence.
+      // track 0 at its original negative level — never onto track 0 itself,
+      // which would splice it into the transition sequence.
       const newLayers: VideoClip[] = overlayLayerDefs.map((l) => ({
         id: uid(),
         assetId: assetIds[l.media],
@@ -1696,7 +1696,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const duration = projectDuration(s);
       const assetById = new Map(s.assets.map((a) => [a.id, a]));
       // Speech can live on the soundtrack or on a layer video track, not just
-      // the base row. Layer-clip audio mixes into the transcribe pass as a
+      // track 0. Layer-clip audio mixes into the transcribe pass as a
       // positioned source (exactly like a soundtrack clip), so dialogue carried
       // on a layer clip gets captioned and a layer-only cut still works.
       const audio = s.audioClips
@@ -2359,7 +2359,7 @@ export const useEditor = create<EditorState>((set, get) => {
         for (const cb of clipboard) {
           if (cb.kind === "clip") {
             // Collision is per-track: a clip lands clear of others on its own
-            // row (the base row, or its layer).
+            // row only.
             const taken = footprints(clips.filter((c) => c.track === cb.item.track));
             const clip: VideoClip = {
               ...cb.item,
@@ -2504,8 +2504,8 @@ export function getClipSpans(
   clips: VideoClip[],
   assets: MediaAsset[]
 ): ClipSpan[] {
-  // Spans are the base row (track 0): the master sequence that carries
-  // transitions and drives playback. Layer clips composite separately.
+  // Spans are track 0: the sequence that carries transitions and drives
+  // playback. Layer clips composite separately.
   // Map lookup, not a per-clip assets.find — this runs every playback frame.
   const byId = new Map(assets.map((a) => [a.id, a]));
   const present = clips

@@ -127,7 +127,7 @@ export async function deleteExport(projectId: string, file: string) {
 
 export interface ExportDoc {
   assets: MediaAsset[];
-  /** Every video clip, any track (track 0 = base row, others composite). */
+  /** Every video clip, any track (track 0 folds sequentially, others composite). */
   clips: VideoClip[];
   audioClips: AudioClip[];
   overlays: TextOverlay[];
@@ -152,7 +152,7 @@ async function buildExportForm(
   const duration = projectDuration(doc);
   const form = new FormData();
   const assetById = new Map(doc.assets.map((a) => [a.id, a]));
-  // Overlay-only cuts (empty track 0) still export: the base becomes a black bed
+  // Overlay-only cuts (empty track 0) still export: track 0 becomes a black bed
   // the length of the project and the overlays/soundtrack composite onto it —
   // the same path as a gap before the first track-0 clip. Refuse only a cut with
   // no renderable content at all.

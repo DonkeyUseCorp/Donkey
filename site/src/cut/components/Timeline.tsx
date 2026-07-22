@@ -34,7 +34,7 @@ import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
-import { baseClips, clipLen, clipSpeed, getClipSpans, overlayLayers, projectDuration, rippleInsertBase, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { track0Clips, clipLen, clipSpeed, getClipSpans, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -147,7 +147,7 @@ function draggingStockMusic(e: React.DragEvent): AssetRef | null {
 export function Timeline() {
   const clips = useEditor((s) => s.clips);
   const audioClips = useEditor((s) => s.audioClips);
-  // The composited layers (every clip off the base row), derived from the one
+  // The composited layers (every clip off track 0), derived from the one
   // clip list — the timeline draws them as the tracks around track 0.
   const overlayClips = useMemo(() => overlayLayers(clips), [clips]);
   const overlays = useEditor((s) => s.overlays);
@@ -734,7 +734,7 @@ export function Timeline() {
         // rippling later clips right, so the ghost sits where the segment will
         // actually land — a box under the pointer that lands minutes away lies.
         const cur = useEditor.getState();
-        const { start } = rippleInsertBase(baseClips(cur.clips), dropTimeAt(e.clientX), duration);
+        const { start } = rippleInsert(track0Clips(cur.clips), dropTimeAt(e.clientX), duration);
         setAssetDrop({ t: start, len: duration, thumb });
       }}
       onDragLeave={(e) => {
@@ -977,7 +977,7 @@ export function Timeline() {
           >
             {spans.length > 0 && laneRail(VIDEO_H - 2)}
             {/* An external asset drag previews as an on-track segment ghost
-                (below), so the base row skips the full-width dashed guide that
+                (below), so track 0 skips the full-width dashed guide that
                 would otherwise cover it; an internal clip move still shows it. */}
             {videoDragging && trackGuide(TRACK_ZERO)}
             {trackSlot(TRACK_ZERO, VIDEO_H - 4)}

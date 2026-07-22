@@ -149,8 +149,8 @@ function OverlayPipHandle({ stage }: { stage: { w: number; h: number } }) {
   const currentTime = useEditor((s) => s.currentTime);
 
   // Resolve the selected, live, regioned clip (any track) plus how to patch its
-  // rect. A clip's own footprint equals its span length, so one path serves the
-  // base row and the layers.
+  // rect. A clip's own footprint equals its span length, so one path serves
+  // every track.
   let rect: FrameRect | null = null;
   let apply: ((frame: FrameRect) => void) | null = null;
   if (selection?.kind === "clip") {

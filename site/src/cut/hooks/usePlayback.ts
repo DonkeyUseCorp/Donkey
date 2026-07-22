@@ -152,7 +152,7 @@ class Engine {
     return this.elFor(this.videoEls, clip.id, asset);
   }
 
-  /** Decode-ahead for the base track: build each soon-to-enter clip's element
+  /** Decode-ahead for track 0: build each soon-to-enter clip's element
    * and seek it to its entrance frame now, so its file is fetching and frame 0
    * is decoded before the playhead arrives. Only clips strictly ahead of `t`
    * are touched — the live master (and any dissolve partner) steers its own
@@ -636,7 +636,7 @@ class Engine {
     const s = useEditor.getState();
     const spans = getClipSpans(s.clips, s.assets);
     // Drop decoders for clips that no longer exist (deleted or replaced).
-    // videoEls holds base-row decoders only, so compare against the spans —
+    // videoEls holds track-0 decoders only, so compare against the spans —
     // gating on the whole clip list would let layer clips mask deletions and
     // keep dead <video> elements alive.
     if (this.videoEls.size > spans.length) {
