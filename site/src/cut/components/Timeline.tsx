@@ -2011,7 +2011,10 @@ function AudioView({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !asset?.peaks) return;
-    const width = Math.min(4000, Math.round(w));
+    // Cap the backing store below browser canvas limits; the element is
+    // CSS-stretched to the bar, so past the cap bars widen instead of the
+    // tail going bare (a canvas keeps its intrinsic width under inset-x-0).
+    const width = Math.min(16384, Math.round(w));
     const height = AUDIO_H - 8;
     canvas.width = width;
     canvas.height = height;
@@ -2054,7 +2057,7 @@ function AudioView({
       }}
       onPointerDown={(e) => startLaneMove(e, "audio", clip.id, ui)}
     >
-      <canvas ref={canvasRef} className="pointer-events-none absolute inset-x-0 inset-y-1" />
+      <canvas ref={canvasRef} className="pointer-events-none absolute inset-x-0 inset-y-1 w-full" />
       {(clip.fadeIn ?? 0) > 0 && (
         <div
           className="tl-fade-in pointer-events-none absolute inset-y-0 left-0 bg-gradient-to-r from-black/45 to-transparent"
