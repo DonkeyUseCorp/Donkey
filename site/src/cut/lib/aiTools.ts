@@ -26,6 +26,8 @@ import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
 import { applyOverlayPatchSettled, track0Clips, trackGapAt, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
+import { autoGradeFromImageData, normalizeGrade } from "./colorGrade";
+import { sampleClipFrameData } from "./previewCanvas";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { synthesizeMusic } from "./audioGen";
 import { composeMusicPrompt } from "./composeGen";
@@ -43,6 +45,7 @@ import {
   SPEED_FLOOR,
   TRANSITION_STYLE_IDS,
   type AudioClip,
+  type ColorGrade,
   type FontId,
   type MediaAsset,
   type Selection,
@@ -51,6 +54,8 @@ import {
 } from "./types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+const GRADE_KEYS = ["brightness", "contrast", "saturation", "exposure", "temperature", "hue"] as const;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -1499,6 +1504,23 @@ export async function runAiTool(
       s.setClipSpeed(clip.id, input.speed);
       const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
       return { id: next.id, speed: next.speed ?? 1 };
+    }
+
+    case "set_color_grade": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      let grade: ColorGrade = input.reset === true ? {} : { ...clip.grade };
+      if (input.auto === true) {
+        const data = sampleClipFrameData(clip.id);
+        if (!data)
+          throw new ToolError(
+            "No decoded frame for that clip yet — seek into it so it is on screen, then retry."
+          );
+        grade = { ...autoGradeFromImageData(data) };
+      }
+      for (const k of GRADE_KEYS) if (isNum(input[k])) grade[k] = input[k];
+      s.updateClip(clip.id, { grade: normalizeGrade(grade) });
+      const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
+      return { id: next.id, grade: next.grade ?? "neutral" };
     }
 
     case "set_transition": {

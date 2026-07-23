@@ -639,6 +639,22 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({ clipId: str("Video clip id"), speed: num("Playback rate (1 = normal, no upper limit)") }, ["clipId", "speed"]),
   },
   {
+    name: "set_color_grade",
+    description:
+      "Color-grade a video clip (any track; stills too). Fields patch the clip's current grade: only the ones you pass change, and every value 0 is neutral. reset:true clears the whole grade first; auto:true fits a starting grade from the clip's decoded frame (auto-tone: exposure to middle gray, contrast stretch, gray-world white balance — needs the clip's frame decoded, so seek into it first if this errors), and explicit fields then override it. Preview, timeline thumbnails, and export all render the same result.",
+    inputSchema: obj({
+      clipId: str("Video clip id"),
+      brightness: num("-50..50, 0 neutral"),
+      contrast: num("-50..50, 0 neutral"),
+      saturation: num("-50..50 (-50 = grayscale), 0 neutral"),
+      exposure: num("-50..50 (±1 stop), 0 neutral"),
+      temperature: num("-50..50, positive = warmer, 0 neutral"),
+      hue: num("Hue rotation in degrees, -180..180"),
+      auto: bool("Fit a starting grade from the clip's current frame"),
+      reset: bool("Clear the existing grade before applying fields"),
+    }, ["clipId"]),
+  },
+  {
     name: "set_transition",
     description:
       "Set the transition from this clip into the next clip on its track (any video track), in seconds (0 clears it, max 2). crossfade/crosszoom overlap the two clips so the cut shortens; fadeout/zoomin ramp the outgoing tail and fadein/zoomout the incoming head around a hard cut. On upper tracks fades are alpha fades (the tracks beneath show through). Only valid when a next same-track clip exists.",

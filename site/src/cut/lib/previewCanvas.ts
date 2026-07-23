@@ -32,3 +32,21 @@ export function registerSourceSampler(fn: SourceSampler | null) {
 export function sampleClipSource(clipId: string): CanvasImageSource | null {
   return sampler?.(clipId) ?? null;
 }
+
+/** A small RGBA readout of the clip's raw frame, for analysis (auto grade);
+ * null when no decoder is ready or the pixels are unreadable. */
+export function sampleClipFrameData(clipId: string, w = 96, h = 54): Uint8ClampedArray | null {
+  const src = sampleClipSource(clipId);
+  if (!src) return null;
+  const scratch = document.createElement("canvas");
+  scratch.width = w;
+  scratch.height = h;
+  const ctx = scratch.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  try {
+    ctx.drawImage(src, 0, 0, w, h);
+    return ctx.getImageData(0, 0, w, h).data;
+  } catch {
+    return null;
+  }
+}

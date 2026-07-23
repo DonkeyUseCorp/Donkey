@@ -55,7 +55,7 @@ import {
   type VideoClip,
 } from "@/cut/lib/types";
 import { autoGradeFromImageData, isNeutralGrade, normalizeGrade } from "@/cut/lib/colorGrade";
-import { getPreviewCanvas, sampleClipSource } from "@/cut/lib/previewCanvas";
+import { getPreviewCanvas, sampleClipFrameData } from "@/cut/lib/previewCanvas";
 import { cn } from "@/lib/utils";
 
 const SWATCHES = ["#FFFFFF", "#111114", "#FFD60A", "#FF375F", "#0A84FF", "#30D158"];
@@ -657,21 +657,8 @@ function ColorPanel({ clip, onBack }: { clip: VideoClip; onBack: () => void }) {
   // preview, which would fold the current grade back into the fit); the
   // sliders show the result and stay fully adjustable after.
   const autoGrade = () => {
-    const src = sampleClipSource(clip.id);
-    const scratch = document.createElement("canvas");
-    scratch.width = 96;
-    scratch.height = 54;
-    const ctx = scratch.getContext("2d", { willReadFrequently: true });
-    if (!src || !ctx) return;
-    try {
-      ctx.drawImage(src, 0, 0, scratch.width, scratch.height);
-      const grade = autoGradeFromImageData(
-        ctx.getImageData(0, 0, scratch.width, scratch.height).data
-      );
-      updateClip(clip.id, { grade });
-    } catch {
-      // Unreadable frame — leave the grade as it is.
-    }
+    const data = sampleClipFrameData(clip.id);
+    if (data) updateClip(clip.id, { grade: autoGradeFromImageData(data) });
   };
   return (
     <>

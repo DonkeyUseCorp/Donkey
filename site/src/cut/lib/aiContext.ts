@@ -181,6 +181,7 @@ export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | nu
       ...(sp.clip.fit === "fill"
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),
+      ...(sp.clip.grade ? { colorGrade: sp.clip.grade } : {}),
     })),
     // Video layers composited over track 0 in track order (the topmost
     // full-frame clip covers the rest). Each track carries its own
@@ -272,6 +273,7 @@ function describeOverlayClip(c: VideoClip, assets: Map<string, { name: string }>
     region: { x: r(rect.x), y: r(rect.y), w: r(rect.w), h: r(rect.h) },
     fit: c.fit ?? "fit",
     ...(speed !== 1 ? { speed: r(speed) } : {}),
+    ...(c.grade ? { colorGrade: c.grade } : {}),
   };
 }
 
