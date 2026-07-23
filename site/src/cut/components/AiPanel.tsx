@@ -1187,6 +1187,67 @@ function SourceQuote({ text }: { text: string }) {
   );
 }
 
+type ToolPartView = {
+  type: string;
+  toolName?: string;
+  toolCallId?: string;
+  state: string;
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+};
+
+const isToolPartType = (t: string) => t.startsWith("tool-") || t === "dynamic-tool";
+const toolPartName = (p: ToolPartView) => p.toolName ?? p.type.slice(5);
+
+/** One tool chip. `parts` holds a single call, or a run of settled same-name,
+ * same-outcome calls collapsed into one counted chip — nine add_title runs
+ * read as one row. The disclosure shows every call's payload. */
+function ToolChipGroup({ parts }: { parts: ToolPartView[] }) {
+  const p = parts[parts.length - 1];
+  const name = toolPartName(p);
+  const failed = p.state === "output-error";
+  const done = p.state === "output-available";
+  const single = parts.length === 1;
+  const took = single ? toolDuration(p.toolCallId, done || failed) : null;
+  // A call still running shows a live clock from its observed start (settled
+  // chips show `took`; a call first seen already-done shows neither — its
+  // real start is unknown).
+  const runningSince =
+    single && !done && !failed && p.toolCallId
+      ? (toolTimes.get(p.toolCallId)?.start ?? null)
+      : null;
+  const payload = single
+    ? { input: p.input, output: p.output, error: p.errorText }
+    : parts.map((c) => ({ input: c.input, output: c.output, error: c.errorText }));
+  return (
+    <details className="ai-tool group max-w-full">
+      <summary
+        className={cn(
+          "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden",
+          failed && "border-red-200 text-red-700",
+        )}
+      >
+        <Wrench className="size-3 shrink-0" />
+        <span className="font-mono">{name}</span>
+        {!single && (
+          <span className="tabular-nums text-[10px]">×{parts.length}</span>
+        )}
+        {done && <Check className="size-3 text-emerald-600" />}
+        {failed && <TriangleAlert className="size-3" />}
+        {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
+        {took && (
+          <span className="ml-auto tabular-nums text-[10px]">{took}</span>
+        )}
+        {runningSince != null && <RunningToolClock start={runningSince} />}
+      </summary>
+      <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
+        {JSON.stringify(payload, null, 2)}
+      </pre>
+    </details>
+  );
+}
+
 /** A collapsed disclosure for a reasoning block, styled like the tool row. */
 function ThoughtBlock({ text }: { text: string }) {
   return (
@@ -1254,12 +1315,41 @@ const MessageView = memo(function MessageView({
   const sourceTexts = toolOutputs
     .map((o) => (o && typeof o === "object" ? (o as { sourceText?: unknown }).sourceText : undefined))
     .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+  // Consecutive settled calls of the same tool with the same outcome collapse
+  // into one counted chip; running calls always stand alone.
+  type Block =
+    | { kind: "part"; index: number; part: (typeof message.parts)[number] }
+    | { kind: "tools"; index: number; parts: ToolPartView[] };
+  const blocks: Block[] = [];
+  message.parts.forEach((part, index) => {
+    if (!isToolPartType(part.type)) {
+      blocks.push({ kind: "part", index, part });
+      return;
+    }
+    const p = part as unknown as ToolPartView;
+    const settled = p.state === "output-available" || p.state === "output-error";
+    const last = blocks[blocks.length - 1];
+    if (
+      settled &&
+      last?.kind === "tools" &&
+      last.parts[0].state === p.state &&
+      toolPartName(last.parts[0]) === toolPartName(p)
+    ) {
+      last.parts.push(p);
+      return;
+    }
+    blocks.push({ kind: "tools", index, parts: [p] });
+  });
   return (
     <div className="ai-msg-assistant group mb-3 flex min-w-0 flex-col gap-1.5">
-      {message.parts.map((part, i) => {
+      {blocks.map((block) => {
+        if (block.kind === "tools") {
+          return <ToolChipGroup key={block.index} parts={block.parts} />;
+        }
+        const part = block.part;
         if (part.type === "text") {
           return (
-            <Fragment key={i}>
+            <Fragment key={block.index}>
               {splitThoughtSegments(part.text).map((seg, j) =>
                 seg.kind === "thought" ? (
                   <ThoughtBlock key={j} text={seg.text} />
@@ -1274,63 +1364,6 @@ const MessageView = memo(function MessageView({
                   </div>
                 ),
               )}
-            </Fragment>
-          );
-        }
-        if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
-          const p = part as unknown as {
-            type: string;
-            toolName?: string;
-            toolCallId?: string;
-            state: string;
-            input?: unknown;
-            output?: unknown;
-            errorText?: string;
-          };
-          const name = p.toolName ?? part.type.slice(5);
-          const failed = p.state === "output-error";
-          const done = p.state === "output-available";
-          const took = toolDuration(p.toolCallId, done || failed);
-          // A call still running shows a live clock from its observed start
-          // (settled chips show `took`; a call first seen already-done shows
-          // neither — its real start is unknown).
-          const runningSince =
-            !done && !failed && p.toolCallId
-              ? (toolTimes.get(p.toolCallId)?.start ?? null)
-              : null;
-          return (
-            <Fragment key={i}>
-              <details className="ai-tool group max-w-full">
-                <summary
-                  className={cn(
-                    "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden",
-                    failed && "border-red-200 text-red-700",
-                  )}
-                >
-                  <Wrench className="size-3 shrink-0" />
-                  <span className="font-mono">{name}</span>
-                  {done && <Check className="size-3 text-emerald-600" />}
-                  {failed && <TriangleAlert className="size-3" />}
-                  {!done && !failed && (
-                    <CircleDashed className="size-3 animate-spin" />
-                  )}
-                  {took && (
-                    <span className="ml-auto tabular-nums text-[10px]">
-                      {took}
-                    </span>
-                  )}
-                  {runningSince != null && (
-                    <RunningToolClock start={runningSince} />
-                  )}
-                </summary>
-                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
-                  {JSON.stringify(
-                    { input: p.input, output: p.output, error: p.errorText },
-                    null,
-                    2,
-                  )}
-                </pre>
-              </details>
             </Fragment>
           );
         }
