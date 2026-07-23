@@ -39,7 +39,8 @@ import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
 import { emptySubtitles, IMAGE_CLIP_SECONDS, TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
-import type { AudioClip, ClipSpan, MediaAsset, SubtitleCue, TextOverlay, TransitionStyle, VideoClip } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, ColorGrade, MediaAsset, SubtitleCue, TextOverlay, TransitionStyle, VideoClip } from "@/cut/lib/types";
+import { gradeTint, gradeToCssFilter } from "@/cut/lib/colorGrade";
 import { cn } from "@/lib/utils";
 
 const TRANSITION_ICONS: Record<TransitionStyle, LucideIcon> = {
@@ -1693,19 +1694,7 @@ function ClipView({
       }}
       onPointerDown={(e) => startLaneMove(e, "clip", clip.id, ui)}
     >
-      <div className="tl-filmstrip pointer-events-none absolute inset-0">
-        {filmstrip.map((f, k) => (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={k}
-            src={f.src}
-            alt=""
-            draggable={false}
-            className="absolute top-0 h-full object-cover"
-            style={{ left: f.left, width: f.width }}
-          />
-        ))}
-      </div>
+      <Filmstrip frames={filmstrip} grade={clip.grade} />
       {selected && (
         // A blue wash over the whole clip so a multi-selection reads at a
         // glance, not just from the thin border.
@@ -1849,6 +1838,42 @@ function ClipMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** A clip box's thumbnail strip, washed with the clip's color grade: the same
+ * CSS filter the preview uses plus the warm tint as a multiply blend, so the
+ * strip tracks the grade with no thumbnail regeneration (thumbs live on the
+ * shared asset; the wash is per clip). `isolate` keeps the blend inside the
+ * strip. */
+function Filmstrip({
+  frames,
+  grade,
+}: {
+  frames: { src: string; left: number; width: number }[];
+  grade?: ColorGrade;
+}) {
+  const tint = gradeTint(grade);
+  return (
+    <div
+      className="tl-filmstrip pointer-events-none absolute inset-0 isolate"
+      style={{ filter: gradeToCssFilter(grade) || undefined }}
+    >
+      {frames.map((f, k) => (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={k}
+          src={f.src}
+          alt=""
+          draggable={false}
+          className="absolute top-0 h-full object-cover"
+          style={{ left: f.left, width: f.width }}
+        />
+      ))}
+      {tint && (
+        <div className="absolute inset-0" style={{ backgroundColor: tint, mixBlendMode: "multiply" }} />
+      )}
+    </div>
   );
 }
 
@@ -2160,19 +2185,7 @@ function OverlayClipView({
       }}
       onPointerDown={(e) => startLaneMove(e, "overlayClip", clip.id, ui)}
     >
-      <div className="tl-filmstrip pointer-events-none absolute inset-0">
-        {filmstrip.map((f, k) => (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={k}
-            src={f.src}
-            alt=""
-            draggable={false}
-            className="absolute top-0 h-full object-cover"
-            style={{ left: f.left, width: f.width }}
-          />
-        ))}
-      </div>
+      <Filmstrip frames={filmstrip} grade={clip.grade} />
       {selected && (
         <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
       )}
