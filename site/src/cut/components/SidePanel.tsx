@@ -696,7 +696,7 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={remove}>
-              <Trash2 /> Remove from project
+              <Trash2 /> Delete
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
