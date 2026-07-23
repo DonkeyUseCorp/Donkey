@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftToLine, ArrowRight, ArrowRightToLine, ArrowUp, ArrowUpToLine, AudioLines, Blend, Check, Circle, Clapperboard, Droplets, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, FoldHorizontal, Loader2, Moon, Pause, Play, Scissors, SkipBack, Sun, Target, Trash2, Type, UnfoldHorizontal, Volume2, VolumeX, type LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftToLine, ArrowRight, ArrowRightToLine, ArrowUp, ArrowUpToLine, AudioLines, Blend, Check, Circle, Clapperboard, Droplets, EllipsisVertical, Expand, Eye, EyeOff, FolderOpen, FolderPlus, FoldHorizontal, Loader2, Moon, Pause, Play, Scissors, SkipBack, Sun, Target, Trash2, Type, UnfoldHorizontal, Volume2, VolumeX, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -33,7 +33,7 @@ import { originalSettings, type ExportDoc } from "@/cut/lib/exportClient";
 import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
-import { ensurePeaks, importImage, importStockMusic, importStockVideo } from "@/cut/lib/media";
+import { ensurePeaks, importImage, importStockMusic, importStockVideo, revealMedia } from "@/cut/lib/media";
 import { track0Clips, trackGapAt, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
@@ -1846,6 +1846,15 @@ function ClipMenu({
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => exportSegment(asset, clip)}>
           <ArrowDownToLine /> Export segment
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            const projectId = useEditor.getState().projectId;
+            if (!projectId) return;
+            void revealMedia(projectId, asset.fileName).catch(() => {});
+          }}
+        >
+          <FolderOpen /> Show in Finder
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
