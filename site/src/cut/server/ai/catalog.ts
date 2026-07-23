@@ -520,7 +520,8 @@ export const AI_TOOLS: AiToolDef[] = [
   },
   {
     name: "subtitles_remove_track",
-    description: "Remove a subtitle track and its captions; higher tracks shift down.",
+    description:
+      "Remove a subtitle track and its captions; higher tracks shift down. Removing the only track empties it — so this also answers \"delete the subtitles\".",
     inputSchema: obj({ track: num("Track to remove, 0-based") }, ["track"]),
   },
   {

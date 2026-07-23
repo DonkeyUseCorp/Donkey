@@ -2412,7 +2412,33 @@ export const useEditor = create<EditorState>((baseSet, get) => {
         s.subtitles.tracks?.length ?? 0,
         ...s.subtitles.cues.map((c) => (c.lane ?? 0) + 1)
       );
-      if (count <= 1) return;
+      if (count <= 1) {
+        // The editor always keeps one subtitle lane, so removing the only
+        // track empties it: cues, language, and dragged anchor all reset.
+        if (s.subtitles.cues.length === 0) return;
+        push();
+        laneEpoch++; // invalidate in-flight lane-targeted work
+        const keep = (sel: Selection) => !!sel && sel.kind !== "cue";
+        set((cur) => {
+          const multiSelection = cur.multiSelection.filter(keep);
+          return {
+            subtitles: {
+              ...cur.subtitles,
+              tracks: undefined,
+              locale: undefined,
+              x: undefined,
+              y: undefined,
+              cues: [],
+            },
+            subtitleLane: 0,
+            multiSelection,
+            selection: keep(cur.selection)
+              ? cur.selection
+              : multiSelection[multiSelection.length - 1] ?? null,
+          };
+        });
+        return;
+      }
       push();
       laneEpoch++; // lanes renumber: invalidate in-flight lane-targeted work
       const gone = new Set(

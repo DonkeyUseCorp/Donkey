@@ -1284,7 +1284,13 @@ export async function runAiTool(
       const lane = Math.round(input.track);
       const count = subtitleLaneCount(s.subtitles);
       if (lane < 0 || lane >= count) throw new ToolError(`No subtitle track ${lane}.`);
-      if (count <= 1) throw new ToolError("The last subtitle track can't be removed.");
+      if (count <= 1) {
+        // The editor always keeps one lane, so removing the only track
+        // empties it instead.
+        const cleared = laneCues(s.subtitles, 0).length;
+        s.removeSubtitleTrack(0);
+        return { track: 0, tracks: 1, clearedCues: cleared };
+      }
       s.removeSubtitleTrack(lane);
       return { removed: lane, tracks: count - 1 };
     }
