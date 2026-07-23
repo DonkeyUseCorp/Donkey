@@ -48,6 +48,7 @@ import {
   regionLabel,
   SPEED_FLOOR,
   TRANSITION_STYLE_IDS,
+  type AnimStyle,
   type AudioClip,
   type ColorGrade,
   type FontId,
@@ -58,6 +59,43 @@ import {
 } from "./types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** The model crosses the transition and animation vocabularies — the retired
+ * edge styles (fadein/zoomin/…) especially. Style ids arrive as structured
+ * tool input, so resolve each known synonym to the nearest supported style. */
+const TRANSITION_STYLE_SYNONYMS: Record<string, TransitionStyle> = {
+  fade: "crossfade",
+  fadein: "crossfade",
+  fadeout: "crossfade",
+  dissolve: "crossfade",
+  zoom: "crosszoom",
+  zoomin: "crosszoom",
+  zoomout: "crosszoom",
+  slideleft: "pushleft",
+  slideright: "pushright",
+  slideup: "pushup",
+  slidedown: "pushdown",
+};
+
+const ANIM_STYLE_SYNONYMS: Record<string, AnimStyle> = {
+  crossfade: "fade",
+  fadein: "fade",
+  fadeout: "fade",
+  dipblack: "fade",
+  dipwhite: "fade",
+  blur: "fade",
+  crosszoom: "zoom",
+  zoomin: "zoom",
+  zoomout: "zoom",
+  pushleft: "slideleft",
+  pushright: "slideright",
+  pushup: "slideup",
+  pushdown: "slidedown",
+  wipeleft: "slideleft",
+  wiperight: "slideright",
+  wipeup: "slideup",
+  wipedown: "slidedown",
+};
 
 const GRADE_KEYS = ["brightness", "contrast", "saturation", "exposure", "temperature", "hue"] as const;
 
@@ -1536,7 +1574,8 @@ export async function runAiTool(
       if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the transition).");
       let style: TransitionStyle | undefined;
       if (input.style !== undefined) {
-        style = TRANSITION_STYLE_IDS.find((x) => x === input.style);
+        const requested = TRANSITION_STYLE_SYNONYMS[input.style as string] ?? input.style;
+        style = TRANSITION_STYLE_IDS.find((x) => x === requested);
         if (!style) throw new ToolError(`Unknown style. Use one of: ${TRANSITION_STYLE_IDS.join(", ")}.`);
       }
       s.setClipTransition(clip.id, input.seconds, style);
@@ -1552,7 +1591,8 @@ export async function runAiTool(
         s.setClipAnim(clip.id, which, null);
         return { id: clip.id, which, style: "none" };
       }
-      const style = ANIM_STYLE_IDS.find((x) => x === input.style);
+      const requested = ANIM_STYLE_SYNONYMS[input.style as string] ?? input.style;
+      const style = ANIM_STYLE_IDS.find((x) => x === requested);
       if (!style)
         throw new ToolError(`Unknown style. Use one of: ${ANIM_STYLE_IDS.join(", ")}, none.`);
       if (clip.track > 0 && overlayAnimStyle(style) !== style)
