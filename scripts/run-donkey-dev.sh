@@ -18,7 +18,10 @@ CONTENTS_DIR="$DEV_APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
-APP_ICON_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey.icns"
+# The dev bundle wears the red icon (Donkey.icns hue-shifted, regenerate with
+# `magick -modulate 100,100,178` per iconset PNG + iconutil) so it never gets
+# mistaken for an installed release in the Dock.
+APP_ICON_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey-dev.icns"
 APP_ICONSET_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey.iconset"
 AUTH_CALLBACK_SCHEME="${DONKEY_AUTH_CALLBACK_SCHEME:-donkey-dev}"
 # The dev engine binds its own loopback port (baked into the dev Info.plist below,

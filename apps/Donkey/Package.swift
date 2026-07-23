@@ -76,6 +76,7 @@ let package = Package(
             ],
             exclude: [
                 "Resources/Donkey.icns",
+                "Resources/Donkey-dev.icns",
                 "Resources/Donkey.iconset"
             ],
             resources: [
