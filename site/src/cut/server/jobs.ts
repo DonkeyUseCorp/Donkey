@@ -7,8 +7,9 @@ import { createJobRegistry } from "./jobRegistry";
 import { exportsDir, mediaPath, projectDir, readProject } from "./projects";
 import { currentCutUser } from "./userScope";
 import { atempoChain, hasStream, num, videoColorInfo } from "./util";
-import { projectFadeSeconds, TRANSITION_ZOOM, type ColorGrade } from "../lib/types";
+import { projectFadeSeconds, TRANSITION_XFADE, TRANSITION_ZOOM, type ColorGrade, type TransitionStyle } from "../lib/types";
 import { gradeToFfmpegFilter } from "../lib/colorGrade";
+import { lookFilterLines } from "../lib/looks";
 
 export interface ExportSpec {
   projectId: string;
@@ -39,15 +40,22 @@ export interface ExportSpec {
     /** Region of the frame this clip fills; absent = full frame. */
     frame?: { x: number; y: number; w: number; h: number };
     speed?: number; // playback rate, default 1
-    /** Cross-dissolve into the next clip, in timeline seconds (overlap). */
+    /** Transition into the next clip, in timeline seconds (overlap). */
     transition?: number;
-    /** Edge-transition ramps, timeline seconds from this segment's head/tail:
-     * fades to/from black and zoom pushes. Cross zoom arrives as a tailZoom on
-     * one clip plus a headZoom on the next, riding the crossfade overlap. */
-    headFade?: number;
-    tailFade?: number;
-    headZoom?: number;
-    tailZoom?: number;
+    /** Transition look id, resolved to an xfade name through the
+     * TRANSITION_XFADE allowlist (unknown ids render as a plain fade). Cross
+     * zoom renders as the fade plus zoom ramps on both segments' overlap
+     * windows. */
+    transitionStyle?: string;
+    /** This clip's own entrance/exit animation, baked into the segment's
+     * head/tail window: fade (audio follows), zoom, pop, or a slide
+     * against black. Unknown styles render as a fade. */
+    animIn?: { style: string; seconds: number };
+    animOut?: { style: string; seconds: number };
+    /** Preset filter look id + strength 0..1, baked into the segment (the
+     * spec carries only the id — the chain is built server-side). */
+    look?: string;
+    lookAmount?: number;
     /** Hidden clips keep their slot but render black + silent. */
     hidden?: boolean;
     /** A still image: looped for the clip's length instead of trimmed. */
@@ -83,6 +91,10 @@ export interface ExportSpec {
     image?: boolean;
     /** Manual color adjustments, baked into this overlay's segment. */
     grade?: ColorGrade;
+    /** Preset filter look id + strength (footage overlays only — image
+     * overlays may carry alpha the look chain would flatten). */
+    look?: string;
+    lookAmount?: number;
   }[];
   audio: {
     file: string;
@@ -617,19 +629,24 @@ async function runExport(job: Job, spec: ExportSpec) {
   const clipDur = (c: ExportSpec["clips"][number]) =>
     c.file ? Math.max(0.1, (c.out - c.in) / clipRate(c)) : Math.max(0, c.out - c.in);
 
-  /** Emit `core` into `[out]` with zoom ramps confined to the head/tail
-   * windows and `fades` appended. Zoom runs zoompan over just the touched
-   * slice (split → ramp → concat) so the per-frame zoom stays inside the
-   * short transition window. A head ramp settles TRANSITION_ZOOM→1 (zoom
-   * out), a tail ramp pushes 1→TRANSITION_ZOOM (zoom in); zoompan clamps z
-   * below 1 itself, so the plain arithmetic needs no guards. `w`×`h` is the
-   * segment's constant frame size; `tag` uniquifies intermediate labels.
-   * Shared by the track-0 segments and the overlay-track segments. */
-  const pushZoomRamped = (
+  /** One edge effect on a segment's head or tail window. `zoom` ramps scale
+   * (settling in on the head, pushing in on the tail); `xfade` runs the named
+   * xfade transition against a backdrop — the label in `bg` (a neighbor's
+   * held frame), or a black frame when absent; `pop` scales the picture up
+   * from / down to 80% with a fade over the same backdrop. */
+  type EdgeFx = { kind: "zoom" | "pop" | "xfade"; secs: number; xfade?: string; bg?: string };
+
+  /** Emit `core` into `[out]` with the head/tail edge effects confined to
+   * their windows and `fades` appended. Each effected window is sliced out
+   * (split → trim → fx → concat) so per-frame effects stay inside the short
+   * ramp; plain fades ride `fades` inline instead. `w`×`h` is the segment's
+   * constant frame size; `tag` uniquifies intermediate labels. Shared by the
+   * track-0 segments and the overlay-track segments. */
+  const pushEdgeFx = (
     core: string,
     dur: number,
-    hz: number,
-    tz: number,
+    head: EdgeFx | null,
+    tail: EdgeFx | null,
     w: number,
     h: number,
     fmt: string,
@@ -637,7 +654,10 @@ async function runExport(job: Job, spec: ExportSpec) {
     out: string,
     tag: string
   ) => {
-    const ramp = (side: "head" | "tail", secs: number) => {
+    const zoomRamp = (side: "head" | "tail", secs: number) => {
+      // A head ramp settles TRANSITION_ZOOM→1 (zoom out), a tail ramp pushes
+      // 1→TRANSITION_ZOOM (zoom in); zoompan clamps z below 1 itself, so the
+      // plain arithmetic needs no guards.
       const frames = Math.max(1, Math.round(secs * fps) - 1);
       const k = num(TRANSITION_ZOOM - 1);
       const z =
@@ -649,44 +669,178 @@ async function runExport(job: Job, spec: ExportSpec) {
         `:d=1:s=${w}x${h}:fps=${fps},setsar=1,format=${fmt}`
       );
     };
-    if (hz <= 0.01 && tz <= 0.01) {
+    // Emit one sliced window's effect from `[inLab]` to `[outLab]`. The
+    // multi-input effects push their own filter lines.
+    const applyFx = (fx: EdgeFx, side: "head" | "tail", inLab: string, outLab: string) => {
+      const d = num(fx.secs);
+      if (fx.kind === "zoom") {
+        filters.push(`[${inLab}]${zoomRamp(side, fx.secs)}[${outLab}]`);
+        return;
+      }
+      // The backdrop behind the window: a neighbor's held frame when given
+      // (an abutting cut), else black (timeline ends and gaps).
+      let bg = fx.bg;
+      if (!bg) {
+        bg = `xb${tag}_${side}`;
+        filters.push(`color=c=black:s=${w}x${h}:r=${fps}:d=${d},format=${fmt}[${bg}]`);
+      }
+      if (fx.kind === "xfade") {
+        // Entering: the backdrop hands off to the picture; exiting: the
+        // picture hands off to the backdrop. Anim style ids map straight to
+        // xfade names (probed: slideleft moves the frame leftward, so it
+        // enters from the right edge and exits off the left; cover/reveal
+        // and wipes share the same direction footprints).
+        filters.push(
+          side === "head"
+            ? `[${bg}][${inLab}]xfade=transition=${fx.xfade}:duration=${d}:offset=0[${outLab}]`
+            : `[${inLab}][${bg}]xfade=transition=${fx.xfade}:duration=${d}:offset=0[${outLab}]`
+        );
+        return;
+      }
+      // Pop: scale 80%↔100% over the window (even dimensions for yuv420p),
+      // centered over the backdrop. With a held-frame backdrop the picture
+      // alpha-fades so the neighbor stays visible behind it; over black the
+      // plain fade is the same thing cheaper.
+      const p = side === "head" ? `min(t/${d},1)` : `1-min(t/${d},1)`;
+      const sc = `sc${tag}_${side}`;
+      const scaleExpr = `scale=w='trunc(iw*(0.8+0.2*(${p}))/2)*2':h=-2:eval=frame`;
+      if (fx.bg) {
+        filters.push(
+          `[${inLab}]format=yuva420p,` +
+            `fade=t=${side === "head" ? "in" : "out"}:st=0:d=${d}:alpha=1,${scaleExpr}[${sc}]`
+        );
+        filters.push(
+          `[${bg}][${sc}]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1,format=${fmt}[${outLab}]`
+        );
+        return;
+      }
+      filters.push(`[${inLab}]${scaleExpr}[${sc}]`);
+      filters.push(
+        `[${bg}][${sc}]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1,` +
+          `fade=t=${side === "head" ? "in" : "out"}:st=0:d=${d},format=${fmt}[${outLab}]`
+      );
+    };
+    const hs = head && head.secs > 0.01 ? head : null;
+    const ts = tail && tail.secs > 0.01 ? tail : null;
+    if (!hs && !ts) {
       filters.push(`${core}${fades}[${out}]`);
       return;
     }
-    const slices: { from: number; to: number; fx?: string }[] = [];
-    if (hz > 0.01) slices.push({ from: 0, to: hz, fx: ramp("head", hz) });
-    const mid0 = hz > 0.01 ? hz : 0;
-    const mid1 = tz > 0.01 ? dur - tz : dur;
-    if (mid1 - mid0 > 0.01) slices.push({ from: mid0, to: mid1 });
-    if (tz > 0.01) slices.push({ from: dur - tz, to: dur, fx: ramp("tail", tz) });
-    if (slices.length === 1) {
-      filters.push(`${core},${slices[0].fx}${fades}[${out}]`);
-      return;
-    }
+    const slices: { from: number; to: number; fx?: EdgeFx; side: "head" | "tail" }[] = [];
+    if (hs) slices.push({ from: 0, to: hs.secs, fx: hs, side: "head" });
+    const mid0 = hs ? hs.secs : 0;
+    const mid1 = ts ? dur - ts.secs : dur;
+    if (mid1 - mid0 > 0.01) slices.push({ from: mid0, to: mid1, side: "head" });
+    if (ts) slices.push({ from: dur - ts.secs, to: dur, fx: ts, side: "tail" });
     filters.push(`${core},split=${slices.length}${slices.map((_, k) => `[zs${tag}_${k}]`).join("")}`);
     slices.forEach((sl, k) => {
+      const cut = `zc${tag}_${k}`;
+      // setpts clears the constant-frame-rate metadata the slice xfades
+      // demand — re-stamp it on every cut.
       filters.push(
-        `[zs${tag}_${k}]trim=${num(sl.from)}:${num(sl.to)},setpts=PTS-STARTPTS` +
-          (sl.fx ? `,${sl.fx}` : "") +
-          `[zp${tag}_${k}]`
+        `[zs${tag}_${k}]trim=${num(sl.from)}:${num(sl.to)},setpts=PTS-STARTPTS,fps=${fps}[${cut}]`
       );
+      if (sl.fx) applyFx(sl.fx, sl.side, cut, `zp${tag}_${k}`);
+      else filters.push(`[${cut}]null[zp${tag}_${k}]`);
     });
+    // concat drops the stream's constant-frame-rate metadata and a downstream
+    // xfade join refuses a variable-rate input — re-stamp it.
     filters.push(
       slices.map((_, k) => `[zp${tag}_${k}]`).join("") +
-        `concat=n=${slices.length}:v=1:a=0${fades}[${out}]`
+        `concat=n=${slices.length}:v=1:a=0,fps=${fps}${fades}[${out}]`
     );
   };
+
+  /** The edge effect a clip animation asks for, or null when it's a plain
+   * fade (fades ride the inline `fade`/`afade` filters instead of a slice).
+   * Unknown styles fall back to the fade path. */
+  const animEdgeFx = (a: { style: string; seconds: number } | undefined, max: number): EdgeFx | null => {
+    if (!a || a.seconds <= 0.01 || max <= 0.01) return null;
+    const secs = Math.min(a.seconds, max);
+    if (a.style === "zoom") return { kind: "zoom", secs };
+    if (a.style === "pop") return { kind: "pop", secs };
+    if (/^slide(left|right|up|down)$/.test(a.style)) {
+      return { kind: "xfade", secs, xfade: a.style };
+    }
+    return null;
+  };
+
+  /** Whether an animation renders through the inline fade filters. */
+  const isFadeAnim = (a: { style: string; seconds: number } | undefined) =>
+    !!a && a.seconds > 0.01 && !animEdgeFx(a, Infinity);
+
+  // A clip animation at an abutting hard cut plays over the neighbor's held
+  // frame instead of black — an entrance covers the previous clip's last
+  // frame, an exit reveals the next clip's first frame. Black remains where
+  // there is no neighbor: the timeline's ends, gaps (the adjacent entry is a
+  // spacer), and hidden neighbors. Zoom never uncovers the frame, so it needs
+  // no backdrop. Precomputed so pass 1 can defer these animations and split
+  // off the freeze sources the second pass consumes.
+  const freezable = (c?: ExportSpec["clips"][number]) =>
+    !!c && !!c.file && !c.hidden && (!!c.image || !!videoPresence.get(c.file));
+  const effAnimIn = (j: number) => {
+    const p = spec.clips[j - 1];
+    return p && (p.transition ?? 0) > 0.01 ? undefined : spec.clips[j].animIn;
+  };
+  const effAnimOut = (j: number) => {
+    const n = spec.clips[j + 1];
+    return n && (spec.clips[j].transition ?? 0) > 0.01 ? undefined : spec.clips[j].animOut;
+  };
+  const backdropAnim = (a?: { style: string; seconds: number }) =>
+    a && a.seconds > 0.01 && a.style !== "zoom" ? a : undefined;
+  const headBd = spec.clips.map(
+    (c, j) => !!(freezable(c) && backdropAnim(effAnimIn(j)) && freezable(spec.clips[j - 1]))
+  );
+  const tailBd = spec.clips.map(
+    (c, j) => !!(freezable(c) && backdropAnim(effAnimOut(j)) && freezable(spec.clips[j + 1]))
+  );
+  const needFirstFreeze = spec.clips.map((_, j) => j > 0 && tailBd[j - 1]);
+  const needLastFreeze = spec.clips.map((_, j) => j < spec.clips.length - 1 && headBd[j + 1]);
 
   // Per-clip normalized video + audio segments for the join below.
   spec.clips.forEach((c, j) => {
     const idx = c.image ? imageClipInput.get(j)! : inputIndex.get(c.file)!;
     const speed = clipRate(c);
     const dur = clipDur(c);
-    // Edge-transition ramps, clamped so head+tail never overrun the segment.
-    const hz = Math.max(0, Math.min(c.headZoom ?? 0, dur));
-    const tz = Math.max(0, Math.min(c.tailZoom ?? 0, dur - hz));
-    const hf = Math.max(0, Math.min(c.headFade ?? 0, dur));
-    const tf = Math.max(0, Math.min(c.tailFade ?? 0, dur - hf));
+    const prevC = spec.clips[j - 1];
+    const nextC = spec.clips[j + 1];
+    // Cross zoom renders as the fade join plus zoom ramps riding the overlap
+    // window on both segments (clamped like the join clamps its overlap).
+    const czOverlap = (a: (typeof spec.clips)[number], aDur: number, bDur: number) =>
+      a.transitionStyle === "crosszoom"
+        ? Math.min(a.transition ?? 0, aDur * 0.9, bDur * 0.9)
+        : 0;
+    const czHead = prevC ? czOverlap(prevC, clipDur(prevC), dur) : 0;
+    const czTail = nextC ? czOverlap(c, dur, clipDur(nextC)) : 0;
+    // A transitioned joint owns its edges: with a live overlap into or out of
+    // this clip, that side's animation is held (running both would fight over
+    // the same window) — `transition` in the spec is already the clamped live
+    // overlap, so 0 means a hard cut and the animation plays. Matches the
+    // preview's suppression exactly.
+    const animIn = prevC && (prevC.transition ?? 0) > 0.01 ? undefined : c.animIn;
+    const animOut = nextC && (c.transition ?? 0) > 0.01 ? undefined : c.animOut;
+    // The clip's own animations own their edge windows (fade animations ride
+    // the inline fade filters below); cross zoom fills a side its animation
+    // leaves free. Clamped so head+tail never overrun the segment. Backdrop
+    // animations are deferred to the second pass, which runs them against the
+    // neighbor's held frame — only their audio fade stays here.
+    const animInNow = headBd[j] ? undefined : animIn;
+    const animOutNow = tailBd[j] ? undefined : animOut;
+    let headFx = animEdgeFx(animInNow, dur);
+    let tailFx = animEdgeFx(animOutNow, dur - (headFx?.secs ?? 0));
+    const hf = isFadeAnim(animInNow) ? Math.min(animInNow!.seconds, dur) : 0;
+    const tf = isFadeAnim(animOutNow) ? Math.min(animOutNow!.seconds, dur - hf) : 0;
+    // The sound of a fade animation follows the picture whether the fade
+    // renders inline (over black) or in the backdrop pass.
+    const ahf = animIn?.style === "fade" ? Math.min(animIn.seconds, dur) : 0;
+    const atf =
+      animOut?.style === "fade" ? Math.min(animOut.seconds, Math.max(0, dur - ahf)) : 0;
+    if (!headFx && hf <= 0.01 && czHead > 0.01) {
+      headFx = { kind: "zoom", secs: Math.min(czHead, dur) };
+    }
+    if (!tailFx && tf <= 0.01 && czTail > 0.01) {
+      tailFx = { kind: "zoom", secs: Math.min(czTail, dur - (headFx?.secs ?? 0)) };
+    }
     // A still's looped input is already the right length at `fps`; it has no
     // source span to trim. Footage trims `in..out` and re-times by speed.
     const timebase = c.image
@@ -719,11 +873,32 @@ async function runExport(job: Job, spec: ExportSpec) {
       // a still just replays its looped input.
       // The grade sits after the color conversion (so it acts on the same
       // BT.709 values the preview shows) and before the terminal format.
-      const core = `${timebase},fps=${fps},${frame},setsar=1,${colorFix.get(c.file) ?? ""}${gradeToFfmpegFilter(c.grade)}format=${clipFmt}`;
+      let core = `${timebase},fps=${fps},${frame},setsar=1,${colorFix.get(c.file) ?? ""}${gradeToFfmpegFilter(c.grade)}format=${clipFmt}`;
+      // The look bakes in after grade + framing, before the edge effects, so
+      // animations move already-graded pixels (matching the preview order).
+      if (c.look) {
+        const lines = lookFilterLines(`lki${j}`, `lko${j}`, c.look, c.lookAmount, H, clipFmt, `c${j}`);
+        if (lines) {
+          filters.push(`${core}[lki${j}]`);
+          filters.push(...lines);
+          core = `[lko${j}]null`;
+        }
+      }
       const fades =
         (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
-      pushZoomRamped(core, dur, hz, tz, W, H, clipFmt, fades, `v${j}`, `c${j}`);
+      // A neighbor's backdrop animation freezes a frame of this segment —
+      // split the copies it needs off the pre-backdrop picture.
+      const nFz = (needFirstFreeze[j] ? 1 : 0) + (needLastFreeze[j] ? 1 : 0);
+      const segOut = nFz > 0 ? `vseg${j}` : `v${j}`;
+      pushEdgeFx(core, dur, headFx, tailFx, W, H, clipFmt, fades, segOut, `c${j}`);
+      if (nFz > 0) {
+        filters.push(
+          `[vseg${j}]split=${nFz + 1}[v${j}]` +
+            (needFirstFreeze[j] ? `[vff${j}]` : "") +
+            (needLastFreeze[j] ? `[vfl${j}]` : "")
+        );
+      }
     } else {
       // No video stream, or a hidden clip: the slot plays black.
       filters.push(
@@ -735,8 +910,8 @@ async function runExport(job: Job, spec: ExportSpec) {
       const vol = (c.volume ?? 1) !== 1 ? `volume=${num(c.volume ?? 1)},` : "";
       // The picture's fade edges carry the sound with them; zoom edges don't.
       const afades =
-        (hf > 0.01 ? `,afade=t=in:st=0:d=${num(hf)}` : "") +
-        (tf > 0.01 ? `,afade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
+        (ahf > 0.01 ? `,afade=t=in:st=0:d=${num(ahf)}` : "") +
+        (atf > 0.01 ? `,afade=t=out:st=${num(Math.max(0, dur - atf))}:d=${num(atf)}` : "");
       filters.push(
         `[${idx}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,${tempo}` +
           `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,${vol}` +
@@ -749,10 +924,82 @@ async function runExport(job: Job, spec: ExportSpec) {
     }
   });
 
+  // Second pass: the backdrop animations. Each slices its edge window and
+  // runs the effect against the neighbor's held frame — frozen via tpad
+  // clone from the copies split off above, so a slide-in covers the previous
+  // clip's last frame and a slide-out reveals the next clip's first frame.
+  // Slides become cover/reveal (the backdrop stays put); pop alpha-blends
+  // over the frozen frame; fade — and any unknown stored style — crossfades.
+  const segLabel = spec.clips.map((_, j) => `v${j}`);
+  const backdropFx = (
+    a: { style: string; seconds: number },
+    side: "head" | "tail",
+    secs: number,
+    bg: string
+  ): EdgeFx => {
+    if (a.style === "pop") return { kind: "pop", secs, bg };
+    if (/^slide(left|right|up|down)$/.test(a.style)) {
+      const dir = a.style.slice(5);
+      return { kind: "xfade", secs, xfade: `${side === "head" ? "cover" : "reveal"}${dir}`, bg };
+    }
+    return { kind: "xfade", secs, xfade: "fade", bg };
+  };
+  spec.clips.forEach((c, j) => {
+    if (!headBd[j] && !tailBd[j]) return;
+    const dur = clipDur(c);
+    if (headBd[j]) {
+      const a = backdropAnim(effAnimIn(j))!;
+      const d = Math.min(a.seconds, dur);
+      const durPrev = clipDur(spec.clips[j - 1]);
+      // fps is re-stamped before tpad — cloning needs a live frame rate, and
+      // trim+setpts strip it (without this the freeze collapses to 1 frame).
+      filters.push(
+        `[vfl${j - 1}]trim=${num(Math.max(0, durPrev - 0.05))}:${num(durPrev)},setpts=PTS-STARTPTS,fps=${fps},` +
+          `tpad=stop_mode=clone:stop_duration=${num(d + 0.5)},trim=0:${num(d)},` +
+          `setpts=PTS-STARTPTS,fps=${fps}[fzh${j}]`
+      );
+      pushEdgeFx(
+        `[${segLabel[j]}]null`,
+        dur,
+        backdropFx(a, "head", d, `fzh${j}`),
+        null,
+        W,
+        H,
+        clipFmt,
+        "",
+        `vhb${j}`,
+        `hb${j}`
+      );
+      segLabel[j] = `vhb${j}`;
+    }
+    if (tailBd[j]) {
+      const a = backdropAnim(effAnimOut(j))!;
+      const d = Math.min(a.seconds, dur);
+      filters.push(
+        `[vff${j + 1}]trim=0:0.05,setpts=PTS-STARTPTS,fps=${fps},` +
+          `tpad=stop_mode=clone:stop_duration=${num(d + 0.5)},trim=0:${num(d)},` +
+          `setpts=PTS-STARTPTS,fps=${fps}[fzt${j}]`
+      );
+      pushEdgeFx(
+        `[${segLabel[j]}]null`,
+        dur,
+        null,
+        backdropFx(a, "tail", d, `fzt${j}`),
+        W,
+        H,
+        clipFmt,
+        "",
+        `vtb${j}`,
+        `tb${j}`
+      );
+      segLabel[j] = `vtb${j}`;
+    }
+  });
+
   // Join the segments. Adjacent clips with a transition cross-dissolve
   // (xfade/acrossfade, overlapping by the transition length); the rest hard-cut
   // (concat). Fold left so mixed sequences chain correctly.
-  let vAcc = "v0";
+  let vAcc = segLabel[0];
   let aAcc = "a0";
   let acc = clipDur(spec.clips[0]); // running timeline length of the accumulator
   for (let j = 1; j < spec.clips.length; j++) {
@@ -764,11 +1011,14 @@ async function runExport(job: Job, spec: ExportSpec) {
     const aOut = `aj${j}`;
     if (d > 0.01) {
       const offset = Math.max(0, acc - d);
-      filters.push(`[${vAcc}][v${j}]xfade=transition=fade:duration=${num(d)}:offset=${num(offset)}[${vOut}]`);
+      // The style id resolves through the allowlist map; anything unknown
+      // (or an old spec without a style) renders as a plain fade.
+      const kind = TRANSITION_XFADE[prev.transitionStyle as TransitionStyle] ?? "fade";
+      filters.push(`[${vAcc}][${segLabel[j]}]xfade=transition=${kind}:duration=${num(d)}:offset=${num(offset)}[${vOut}]`);
       filters.push(`[${aAcc}][a${j}]acrossfade=d=${num(d)}[${aOut}]`);
       acc = acc + durJ - d;
     } else {
-      filters.push(`[${vAcc}][v${j}]concat=n=2:v=1:a=0[${vOut}]`);
+      filters.push(`[${vAcc}][${segLabel[j]}]concat=n=2:v=1:a=0[${vOut}]`);
       filters.push(`[${aAcc}][a${j}]concat=n=2:v=0:a=1[${aOut}]`);
       acc = acc + durJ;
     }
@@ -835,9 +1085,32 @@ async function runExport(job: Job, spec: ExportSpec) {
     const timebase = oc.image
       ? `[${idx}:v]setpts=PTS-STARTPTS`
       : `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)}`;
-    const core = `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}${gradeToFfmpegFilter(oc.grade)}format=${fmt}`;
+    let core = `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}${gradeToFfmpegFilter(oc.grade)}format=${fmt}`;
+    // Looks bake into footage overlays only: an image may carry alpha, and a
+    // padded letterbox has transparent margins — the look chain's internal
+    // filters would flatten either onto black over the tracks beneath. The
+    // alpha fades stay safe: they apply after the look.
+    if (oc.look && !oc.image && !(ramped && !cover)) {
+      const lines = lookFilterLines(`olki${k}`, `olko${k}`, oc.look, oc.lookAmount, H, fmt, `o${k}`);
+      if (lines) {
+        filters.push(`${core}[olki${k}]`);
+        filters.push(...lines);
+        core = `[olko${k}]null`;
+      }
+    }
     const pre = `ovp${k}`;
-    pushZoomRamped(core, olen, hz, tz, boxW, boxH, fmt, fades, pre, `o${k}`);
+    pushEdgeFx(
+      core,
+      olen,
+      hz > 0.01 ? { kind: "zoom", secs: hz } : null,
+      tz > 0.01 ? { kind: "zoom", secs: tz } : null,
+      boxW,
+      boxH,
+      fmt,
+      fades,
+      pre,
+      `o${k}`
+    );
     // The zoom slices' concat drops the stream's frame-rate metadata, and
     // tpad converts start_duration to a frame count through it — without the
     // fps re-stamp it pads zero frames and the overlay lands early.

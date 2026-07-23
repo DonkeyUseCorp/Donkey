@@ -449,3 +449,88 @@ describe("upper-track transitions", () => {
     expect(right.transition).toBe(1);
   });
 });
+
+describe("transitioned joints own their edges", () => {
+  test("setting a transition clears the animations adjacent to its joint", () => {
+    const av = asset(4);
+    const a = vclip({
+      track: 0,
+      start: 0,
+      out: 4,
+      assetId: av.id,
+      animIn: { style: "fade", seconds: 0.5 },
+      animOut: { style: "slideleft", seconds: 0.5 },
+    });
+    const b = vclip({
+      track: 0,
+      start: 4,
+      out: 4,
+      assetId: av.id,
+      animIn: { style: "pop", seconds: 0.5 },
+      animOut: { style: "fade", seconds: 0.5 },
+    });
+    useEditor.setState({ assets: [av], clips: [a, b] });
+    s().setClipTransition(a.id, 0.8, "pushdown");
+    // The joint's own edges clear; the far edges stay.
+    expect(clipById(a.id).animOut).toBeUndefined();
+    expect(clipById(b.id).animIn).toBeUndefined();
+    expect(clipById(a.id).animIn).toEqual({ style: "fade", seconds: 0.5 });
+    expect(clipById(b.id).animOut).toEqual({ style: "fade", seconds: 0.5 });
+  });
+
+  test("clearing a transition leaves the neighbors' animations alone", () => {
+    const av = asset(4);
+    const a = vclip({ track: 0, start: 0, out: 4, assetId: av.id, transition: 0.8 });
+    const b = vclip({
+      track: 0,
+      start: 3.2,
+      out: 4,
+      assetId: av.id,
+      animOut: { style: "fade", seconds: 0.5 },
+    });
+    useEditor.setState({ assets: [av], clips: [a, b] });
+    s().setClipTransition(a.id, 0);
+    expect(clipById(a.id).transition).toBeUndefined();
+    expect(clipById(b.id).animOut).toEqual({ style: "fade", seconds: 0.5 });
+  });
+});
+
+describe("last pick wins per edge", () => {
+  test("an entrance animation on the following clip replaces the joint's transition", () => {
+    const av = asset(4);
+    const a = vclip({ track: 0, start: 0, out: 4, assetId: av.id });
+    const b = vclip({ track: 0, start: 4, out: 4, assetId: av.id });
+    useEditor.setState({ assets: [av], clips: [a, b] });
+    s().setClipTransition(a.id, 0.8, "pushdown");
+    expect(clipById(b.id).start).toBeCloseTo(3.2);
+    s().setClipAnim(b.id, "in", { style: "slideleft", seconds: 0.5 });
+    expect(clipById(a.id).transition).toBeUndefined();
+    expect(clipById(b.id).start).toBeCloseTo(4); // back to a hard cut
+    expect(clipById(b.id).animIn).toEqual({ style: "slideleft", seconds: 0.5 });
+  });
+
+  test("an exit animation on the leading clip replaces the joint's transition", () => {
+    const av = asset(4);
+    const a = vclip({ track: 0, start: 0, out: 4, assetId: av.id });
+    const b = vclip({ track: 0, start: 4, out: 4, assetId: av.id });
+    useEditor.setState({ assets: [av], clips: [a, b] });
+    s().setClipTransition(a.id, 0.8, "circleopen");
+    s().setClipAnim(a.id, "out", { style: "fade", seconds: 0.4 });
+    expect(clipById(a.id).transition).toBeUndefined();
+    expect(clipById(a.id).animOut).toEqual({ style: "fade", seconds: 0.4 });
+    expect(clipById(b.id).start).toBeCloseTo(4);
+  });
+
+  test("an animation on a far edge leaves an unrelated transition alone", () => {
+    const av = asset(4);
+    const a = vclip({ track: 0, start: 0, out: 4, assetId: av.id });
+    const b = vclip({ track: 0, start: 4, out: 4, assetId: av.id });
+    useEditor.setState({ assets: [av], clips: [a, b] });
+    s().setClipTransition(a.id, 0.8);
+    s().setClipAnim(a.id, "in", { style: "fade", seconds: 0.5 }); // A's entrance, not the joint
+    s().setClipAnim(b.id, "out", { style: "fade", seconds: 0.5 }); // B's exit, not the joint
+    expect(clipById(a.id).transition).toBeCloseTo(0.8);
+    expect(clipById(a.id).animIn).toEqual({ style: "fade", seconds: 0.5 });
+    expect(clipById(b.id).animOut).toEqual({ style: "fade", seconds: 0.5 });
+  });
+});

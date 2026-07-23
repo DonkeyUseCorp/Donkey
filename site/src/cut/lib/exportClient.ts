@@ -5,10 +5,11 @@ import { normalizeGrade } from "./colorGrade";
 import { clipSpeed, getClipSpans, overlayLayers, projectDuration, spanSequence } from "./store";
 import { captionStyle, cueOverlay, cueWordWindows, laneCues, subtitleLaneCount, trackPos } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
-import { FRAME } from "./types";
+import { FRAME, overlayAnimStyle } from "./types";
 import type {
   Aspect,
   AudioClip,
+  ClipAnim,
   MediaAsset,
   SubtitlesBlock,
   TextOverlay,
@@ -179,42 +180,20 @@ async function buildExportForm(
     frame: sp.clip.frame,
     speed: clipSpeed(sp.clip),
     transition: sp.transitionOut,
+    // The style rides along with the overlap; the server resolves it to an
+    // xfade name (and the cross-zoom ramps) itself, so the spec carries only
+    // the id.
+    transitionStyle: sp.clip.transitionStyle,
+    animIn: sp.clip.animIn,
+    animOut: sp.clip.animOut,
+    look: sp.clip.look,
+    lookAmount: sp.clip.lookAmount,
     hidden: sp.clip.hidden,
     // A still: the server loops the image for the clip's length instead of
     // trimming a source span.
     image: sp.asset.type === "image",
     grade: normalizeGrade(sp.clip.grade),
-    headFade: 0,
-    tailFade: 0,
-    headZoom: 0,
-    tailZoom: 0,
   }));
-
-  // Translate each joint's transition style into per-segment ramps so the
-  // server spec stays dumb. Cross zoom rides the crossfade overlap with a zoom
-  // ramp on both sides; edge styles ramp one clip's edge around a hard cut
-  // (their `transition` ships as 0 overlap, so the join stays a plain concat).
-  spans.forEach((sp, i) => {
-    const next = spans[i + 1];
-    if (!next) return;
-    const style = sp.clip.transitionStyle ?? "crossfade";
-    const d = sp.clip.transition ?? 0;
-    if (d <= 0) return;
-    const a = clipEntries[i];
-    const b = clipEntries[i + 1];
-    if (style === "crosszoom" && sp.transitionOut > 0) {
-      a.tailZoom = sp.transitionOut;
-      b.headZoom = sp.transitionOut;
-    } else if (style === "fadeout") {
-      a.tailFade = Math.min(d, sp.len);
-    } else if (style === "zoomin") {
-      a.tailZoom = Math.min(d, sp.len);
-    } else if (style === "fadein") {
-      b.headFade = Math.min(d, next.len);
-    } else if (style === "zoomout") {
-      b.headZoom = Math.min(d, next.len);
-    }
-  });
 
   // The server's video graph is a sequential fold, so gaps between the
   // free-placed clips ship as explicit spacer segments: no file, hidden and
@@ -233,10 +212,6 @@ async function buildExportForm(
     transition: 0,
     hidden: true,
     image: false,
-    headFade: 0,
-    tailFade: 0,
-    headZoom: 0,
-    tailZoom: 0,
   });
   // An overlay-only cut has no track-0 spans: the whole base is one black bed.
   const clips =
@@ -248,31 +223,40 @@ async function buildExportForm(
         ]);
 
   // Video tracks composited over track 0; hidden ones are dropped. Each
-  // track's transitions translate into per-clip head/tail ramps: on an upper
-  // track a fade is an alpha fade (transparent, so the tracks beneath show
-  // through), and a cross style blends the incoming clip in over the
-  // outgoing one — the incoming alpha-fades in for the overlap while the
-  // outgoing stays opaque underneath it.
+  // track's transitions and animations translate into per-clip head/tail
+  // ramps: on an upper track a fade is an alpha fade (transparent, so the
+  // tracks beneath show through), and a transition blends the incoming clip
+  // in over the outgoing one — the incoming alpha-fades in for the overlap
+  // while the outgoing stays opaque underneath it (cross zoom adds its zoom
+  // ramps). Animations map fade/zoom natively; the styles that need frame
+  // motion degrade to a fade up here.
   const overlayTracks = [...new Set(overlayLayers(doc.clips).map((c) => c.track))];
   const overlayVideos = overlayTracks.flatMap((track) => {
     const trackSpans = getClipSpans(doc.clips, doc.assets, track);
     const ramps = trackSpans.map(() => ({ headFade: 0, tailFade: 0, headZoom: 0, tailZoom: 0 }));
     trackSpans.forEach((sp, i) => {
-      const next = trackSpans[i + 1];
-      if (!next) return;
-      const style = sp.clip.transitionStyle ?? "crossfade";
-      const d = sp.clip.transition ?? 0;
-      if (d <= 0) return;
-      if (sp.transitionOut > 0) {
-        ramps[i + 1].headFade = sp.transitionOut;
-        if (style === "crosszoom") {
-          ramps[i].tailZoom = sp.transitionOut;
-          ramps[i + 1].headZoom = sp.transitionOut;
+      const r = ramps[i];
+      const applyAnim = (a: ClipAnim | undefined, side: "head" | "tail") => {
+        if (!a) return;
+        const secs = Math.min(a.seconds, sp.len);
+        if (overlayAnimStyle(a.style) === "zoom") {
+          r[side === "head" ? "headZoom" : "tailZoom"] = secs;
+        } else {
+          r[side === "head" ? "headFade" : "tailFade"] = secs;
         }
-      } else if (style === "fadeout") ramps[i].tailFade = Math.min(d, sp.len);
-      else if (style === "zoomin") ramps[i].tailZoom = Math.min(d, sp.len);
-      else if (style === "fadein") ramps[i + 1].headFade = Math.min(d, next.len);
-      else if (style === "zoomout") ramps[i + 1].headZoom = Math.min(d, next.len);
+      };
+      // A transitioned joint owns its edges: that side's animation is held so
+      // it never fights the transition's blend (mirrors preview and track 0).
+      if (!((trackSpans[i - 1]?.transitionOut ?? 0) > 0)) applyAnim(sp.clip.animIn, "head");
+      if (!(sp.transitionOut > 0)) applyAnim(sp.clip.animOut, "tail");
+      if (sp.transitionOut > 0 && trackSpans[i + 1]) {
+        const nr = ramps[i + 1];
+        nr.headFade = Math.max(nr.headFade, sp.transitionOut);
+        if ((sp.clip.transitionStyle ?? "crossfade") === "crosszoom") {
+          r.tailZoom = Math.max(r.tailZoom, sp.transitionOut);
+          nr.headZoom = Math.max(nr.headZoom, sp.transitionOut);
+        }
+      }
     });
     return trackSpans
       .map((sp, i) => ({ c: sp.clip, ramp: ramps[i] }))
@@ -292,6 +276,8 @@ async function buildExportForm(
         speed: c.speed,
         image: assetById.get(c.assetId)!.type === "image",
         grade: normalizeGrade(c.grade),
+        look: c.look,
+        lookAmount: c.lookAmount,
         ...ramp,
       }));
   });

@@ -2,16 +2,19 @@
 
 import { useEffect, type RefObject } from "react";
 import { clipSpeed, getClipSpans, overlayLayers, projectDuration, useEditor } from "@/cut/lib/store";
-import { isFullRect, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
-import type { AudioClip, ClipSpan, ColorGrade, FrameRect, MediaAsset, VideoClip } from "@/cut/lib/types";
+import { isFullRect, overlayAnimStyle, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
+import type { AudioClip, ClipAnim, ClipSpan, FrameRect, MediaAsset, TransitionStyle, VideoClip } from "@/cut/lib/types";
 import { gradeTint, gradeToCssFilter, isNeutralGrade } from "@/cut/lib/colorGrade";
+import { grainTile, lookCssFilter, lookPost } from "@/cut/lib/looks";
 import { registerSourceSampler } from "@/cut/lib/previewCanvas";
 
-/** The alpha/zoom/gain ramps a transition puts on one upper-track clip at
- * `t`. Cross styles blend the incoming clip in over the outgoing one (which
- * keeps full alpha and its audio until its footprint ends); edge styles ramp
- * a clip's own edge. On an upper track a fade ramps to transparent — the
- * tracks beneath show through — matching the export's alpha fades. */
+/** The alpha/zoom/gain ramps a transition or clip animation puts on one
+ * upper-track clip at `t`. A transition blends the incoming clip in over the
+ * outgoing one (which keeps full alpha and its audio until its footprint
+ * ends); a clip animation ramps the clip's own edge. On an upper track a fade
+ * ramps to transparent — the tracks beneath show through — and the animation
+ * styles that need frame motion degrade to a fade, both matching the export's
+ * alpha ramps. */
 function overlayTransitionFx(
   span: ClipSpan,
   prev: ClipSpan | undefined,
@@ -23,7 +26,7 @@ function overlayTransitionFx(
   let gain = 1;
   const style = span.clip.transitionStyle ?? "crossfade";
   const prevStyle = prev?.clip.transitionStyle ?? "crossfade";
-  // Incoming side of the previous clip's cross transition: blend in.
+  // Incoming side of the previous clip's transition: blend in.
   if (prev && prev.transitionOut > 0) {
     const rel = t - span.start;
     if (rel < prev.transitionOut) {
@@ -40,35 +43,109 @@ function overlayTransitionFx(
     const p = Math.min(1, (t - next.start) / span.transitionOut);
     zoom = 1 + (TRANSITION_ZOOM - 1) * p;
   }
-  // Edge style on this clip's own tail (fade out / zoom in).
-  if (next && span.transitionOut === 0 && (style === "fadeout" || style === "zoomin")) {
-    const d = Math.min(span.clip.transition ?? 0, span.len);
-    const left = span.start + span.len - t;
-    if (d > 0 && left < d) {
-      const p = 1 - left / d;
-      if (style === "fadeout") {
-        alpha = Math.min(alpha, 1 - p);
-        gain = Math.min(gain, 1 - p);
+  // The clip's own entrance/exit animations. A transitioned joint owns its
+  // edges: the transition plays there and the adjacent animation is held
+  // (running both would fight over the same window).
+  if (span.clip.animIn && !(prev && prev.transitionOut > 0)) {
+    const d = Math.min(span.clip.animIn.seconds, span.len);
+    const rel = t - span.start;
+    if (d > 0 && rel < d) {
+      const p = Math.max(0, rel / d);
+      if (overlayAnimStyle(span.clip.animIn.style) === "zoom") {
+        zoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
       } else {
-        zoom = 1 + (TRANSITION_ZOOM - 1) * p;
+        alpha = Math.min(alpha, p);
+        gain = Math.min(gain, p);
       }
     }
   }
-  // Edge style the previous clip set on this clip's head (fade in / zoom out).
-  if (prev && prev.transitionOut === 0 && (prevStyle === "fadein" || prevStyle === "zoomout")) {
-    const d = Math.min(prev.clip.transition ?? 0, span.len);
-    const rel = t - span.start;
-    if (d > 0 && rel < d) {
-      const p = rel / d;
-      if (prevStyle === "fadein") {
+  if (span.clip.animOut && span.transitionOut <= 0) {
+    const d = Math.min(span.clip.animOut.seconds, span.len);
+    const left = span.start + span.len - t;
+    if (d > 0 && left < d) {
+      const p = Math.max(0, left / d);
+      if (overlayAnimStyle(span.clip.animOut.style) === "zoom") {
+        zoom = 1 + (TRANSITION_ZOOM - 1) * (1 - p);
+      } else {
         alpha = Math.min(alpha, p);
         gain = Math.min(gain, p);
-      } else {
-        zoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
       }
     }
   }
   return { alpha, zoom, gain };
+}
+
+/** A track-0 clip's own entrance/exit animation state at `rel` seconds into
+ * its `len`-second footprint. Mirrors the export's per-segment ramps: fades
+ * veil to/from black with the audio following; zoom uses the shared
+ * TRANSITION_ZOOM ramps; pop scales from/to 80% with an alpha fade; slides
+ * translate the frame (fractions of the canvas, matching xfade against
+ * black); wipes reveal/conceal through a moving edge. */
+function clipAnimFx(
+  clip: VideoClip,
+  rel: number,
+  len: number,
+  // Edge context from the caller: a transitioned joint owns its edges (skip
+  // that side), and an abutting hard cut gives the side a backdrop — the
+  // neighbor's held frame — so a fade blends by alpha there instead of
+  // veiling to black.
+  edges?: { skipIn?: boolean; skipOut?: boolean; backdropIn?: boolean; backdropOut?: boolean }
+) {
+  const fx = {
+    alpha: 1,
+    zoom: 1,
+    gain: 1,
+    veil: 0, // fade-to-black amount, drawn by the caller's veil pass
+    dxFrac: 0, // frame translation, fraction of canvas width/height
+    dyFrac: 0,
+  };
+  const apply = (a: ClipAnim, side: "in" | "out") => {
+    const d = Math.min(a.seconds, len);
+    if (d <= 0) return;
+    // p runs 0→1 as the visible ramp progresses on either side: entrance
+    // completeness on the head, remaining presence on the tail.
+    const p =
+      side === "in"
+        ? Math.min(1, Math.max(0, rel / d))
+        : Math.min(1, Math.max(0, (len - rel) / d));
+    if (p >= 1) return;
+    switch (a.style) {
+      case "zoom":
+        // Entrance settles TRANSITION_ZOOM→1; exit pushes 1→TRANSITION_ZOOM.
+        fx.zoom *=
+          side === "in"
+            ? TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p
+            : 1 + (TRANSITION_ZOOM - 1) * (1 - p);
+        break;
+      case "pop":
+        fx.zoom *= 0.8 + 0.2 * p;
+        fx.alpha *= p;
+        break;
+      case "slideleft": // frame moves left: enters from the right, exits off the left
+        fx.dxFrac += side === "in" ? 1 - p : -(1 - p);
+        break;
+      case "slideright":
+        fx.dxFrac += side === "in" ? -(1 - p) : 1 - p;
+        break;
+      case "slideup": // frame moves up: enters from the bottom, exits off the top
+        fx.dyFrac += side === "in" ? 1 - p : -(1 - p);
+        break;
+      case "slidedown":
+        fx.dyFrac += side === "in" ? -(1 - p) : 1 - p;
+        break;
+      case "fade":
+      default:
+        // Fade — and the graceful fallback for a stored style this build no
+        // longer knows (the export treats unknown styles the same way).
+        if (side === "in" ? edges?.backdropIn : edges?.backdropOut) fx.alpha *= p;
+        else fx.veil = Math.max(fx.veil, 1 - p);
+        fx.gain = Math.min(fx.gain, p);
+        break;
+    }
+  };
+  if (clip.animIn && !edges?.skipIn) apply(clip.animIn, "in");
+  if (clip.animOut && !edges?.skipOut) apply(clip.animOut, "out");
+  return fx;
 }
 
 /** The gain everything else drops to at time `t` while a ducking voiceover
@@ -182,6 +259,10 @@ class Engine {
   // compositor stamps onto the main canvas. One instance suffices — every use
   // is draw-then-immediately-copy.
   private gradeCanvas: HTMLCanvasElement | null = null;
+  // Cached buffers for look post passes: a canvas-sized scratch for glow and
+  // ghost self-copies, and a footprint-sized vignette gradient.
+  private lookScratch: HTMLCanvasElement | null = null;
+  private vignetteCanvas: HTMLCanvasElement | null = null;
   // Wall-clock stamp for advancing time where track 0 has nothing playing —
   // in a gap or past its end there is no track-0 video element to act as the
   // master clock.
@@ -344,24 +425,31 @@ class Engine {
     return el && elReady(el) ? el : null;
   }
 
-  /** The clip's picture with its color grade applied, or the raw element when
-   * there is nothing to grade. Mirrors the export's lutrgb/hue chain: CSS
-   * filter first (gain/contrast/saturate/hue), then the warm tint as a
-   * multiply pass, with source alpha restored so transparent stills keep
-   * their transparency. */
-  private gradedSource(el: MediaEl, grade: ColorGrade | undefined): CanvasImageSource {
-    if (isNeutralGrade(grade)) return el;
+  /** The clip's picture with its color grade and look grading applied, or the
+   * raw element when there is nothing to apply. Mirrors the export's chain
+   * order — grade first (lutrgb/hue), then the look's color pass — as CSS
+   * filters, with the grade's warm tint as a multiply pass, and source alpha
+   * restored so transparent stills keep their transparency. The look's post
+   * passes (vignette, grain, glow…) draw over the composited layer instead —
+   * see applyLookPost. */
+  private gradedSource(el: MediaEl, clip: VideoClip | undefined): CanvasImageSource {
+    const grade = clip?.grade;
+    const lookCss = lookCssFilter(clip?.look, clip?.lookAmount);
+    if (isNeutralGrade(grade) && !lookCss) return el;
     const scratch = (this.gradeCanvas ??= document.createElement("canvas"));
     const w = elW(el);
     const h = elH(el);
+    // Match both dimensions — a transition alternates two differently-sized
+    // sources through this one scratch every frame, and a stale dimension
+    // leaves the previous clip's pixels in the draw.
     if (scratch.width !== w) scratch.width = w;
     if (scratch.height !== h) scratch.height = h;
     const ctx = scratch.getContext("2d");
-    // Without ctx.filter support, skip the whole grade (never half-apply the
-    // tint); export still renders it.
+    // Without ctx.filter support, skip the whole treatment (never half-apply
+    // the tint); export still renders it.
     if (!ctx || !("filter" in ctx)) return el;
     ctx.clearRect(0, 0, w, h);
-    ctx.filter = gradeToCssFilter(grade);
+    ctx.filter = [gradeToCssFilter(grade), lookCss].filter(Boolean).join(" ") || "none";
     ctx.drawImage(el, 0, 0, w, h);
     ctx.filter = "none";
     const tint = gradeTint(grade);
@@ -378,13 +466,122 @@ class Engine {
     return scratch;
   }
 
+  /** Draw a look's post passes over one composited layer's footprint (canvas
+   * pixels): vignette, animated grain, self-copy glow, color washes, chroma
+   * ghosts. `alpha` follows the layer so a dissolving clip's grain dissolves
+   * with it. Every buffer here is cached — no per-frame allocation or pixel
+   * reads. */
+  private applyLookPost(clip: VideoClip | undefined, rx: number, ry: number, rw: number, rh: number, alpha: number) {
+    const post = lookPost(clip?.look, clip?.lookAmount);
+    if (!post || alpha <= 0 || rw <= 0 || rh <= 0) return;
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx || !("filter" in ctx)) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rx, ry, rw, rh);
+    ctx.clip();
+    if (post.glow) {
+      // Copy the just-drawn region through a blur (and a highlight isolation
+      // for halation) and lay it back over itself.
+      const scratch = (this.lookScratch ??= document.createElement("canvas"));
+      if (scratch.width !== this.canvas.width) scratch.width = this.canvas.width;
+      if (scratch.height !== this.canvas.height) scratch.height = this.canvas.height;
+      const sctx = scratch.getContext("2d");
+      if (sctx && "filter" in sctx) {
+        const blurPx = Math.max(1, post.glow.blurFrac * this.canvas.height);
+        sctx.clearRect(rx, ry, rw, rh);
+        sctx.filter = post.glow.bright
+          ? `contrast(2.5) brightness(0.55) saturate(1.4) sepia(0.35) blur(${blurPx}px)`
+          : `blur(${blurPx}px)`;
+        sctx.drawImage(this.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+        sctx.filter = "none";
+        ctx.globalAlpha = post.glow.alpha * alpha;
+        ctx.globalCompositeOperation = post.glow.mode;
+        ctx.drawImage(scratch, rx, ry, rw, rh, rx, ry, rw, rh);
+      }
+    }
+    if (post.ghost) {
+      // VHS chroma fringing: warm and cool copies of the region nudged apart.
+      const scratch = (this.lookScratch ??= document.createElement("canvas"));
+      if (scratch.width !== this.canvas.width) scratch.width = this.canvas.width;
+      if (scratch.height !== this.canvas.height) scratch.height = this.canvas.height;
+      const sctx = scratch.getContext("2d");
+      if (sctx && "filter" in sctx) {
+        const shift = Math.max(1, post.ghost.shiftFrac * this.canvas.width);
+        sctx.clearRect(rx, ry, rw, rh);
+        sctx.filter = "sepia(1) saturate(4) hue-rotate(-40deg) brightness(0.55)";
+        sctx.drawImage(this.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+        sctx.filter = "none";
+        ctx.globalAlpha = post.ghost.alpha * alpha;
+        ctx.globalCompositeOperation = "lighter";
+        ctx.drawImage(scratch, rx, ry, rw, rh, rx + shift, ry, rw, rh);
+        if (sctx) {
+          sctx.clearRect(rx, ry, rw, rh);
+          sctx.filter = "sepia(1) saturate(4) hue-rotate(140deg) brightness(0.55)";
+          sctx.drawImage(this.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+          sctx.filter = "none";
+          ctx.drawImage(scratch, rx, ry, rw, rh, rx - shift, ry, rw, rh);
+        }
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+    for (const wash of post.washes ?? []) {
+      ctx.globalAlpha = wash.alpha * alpha;
+      ctx.globalCompositeOperation = wash.mode;
+      ctx.fillStyle = wash.color;
+      ctx.fillRect(rx, ry, rw, rh);
+    }
+    if (post.grain) {
+      const tile = grainTile(Math.floor(performance.now() / 80));
+      if (tile) {
+        ctx.globalAlpha = post.grain * alpha;
+        ctx.globalCompositeOperation = "overlay";
+        for (let y = ry; y < ry + rh; y += tile.height) {
+          for (let x = rx; x < rx + rw; x += tile.width) {
+            ctx.drawImage(tile, x, y);
+          }
+        }
+      }
+    }
+    if (post.vignette) {
+      // Cached radial gradient, rebuilt only when the footprint size changes.
+      const vg = (this.vignetteCanvas ??= document.createElement("canvas"));
+      if (vg.width !== Math.round(rw) || vg.height !== Math.round(rh)) {
+        vg.width = Math.max(1, Math.round(rw));
+        vg.height = Math.max(1, Math.round(rh));
+        const vctx = vg.getContext("2d");
+        if (vctx) {
+          const g = vctx.createRadialGradient(
+            vg.width / 2,
+            vg.height / 2,
+            Math.min(vg.width, vg.height) * 0.35,
+            vg.width / 2,
+            vg.height / 2,
+            Math.hypot(vg.width, vg.height) / 2
+          );
+          g.addColorStop(0, "rgba(0,0,0,0)");
+          g.addColorStop(1, "rgba(0,0,0,1)");
+          vctx.clearRect(0, 0, vg.width, vg.height);
+          vctx.fillStyle = g;
+          vctx.fillRect(0, 0, vg.width, vg.height);
+        }
+      }
+      ctx.globalAlpha = post.vignette * alpha;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.drawImage(vg, rx, ry, rw, rh);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
   private drawIntoRect(
     el: MediaEl,
     rect: FrameRect,
     fill: boolean,
     alpha: number,
     zoom = 1,
-    grade?: ColorGrade
+    clip?: VideoClip
   ) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
@@ -401,7 +598,7 @@ class Engine {
     const dh = vh * sc;
     const dx = rx + (rw - dw) / 2;
     const dy = ry + (rh - dh) / 2;
-    const src = this.gradedSource(el, grade);
+    const src = this.gradedSource(el, clip);
     const prevAlpha = ctx.globalAlpha;
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     if (fill || zoom > 1) {
@@ -415,9 +612,19 @@ class Engine {
       ctx.drawImage(src, dx, dy, dw, dh);
     }
     ctx.globalAlpha = prevAlpha;
+    this.applyLookPost(clip, rx, ry, rw, rh, alpha);
   }
 
-  private drawLayer(el: MediaEl | null, clip: VideoClip | undefined, clear: boolean, alpha: number, zoom = 1) {
+  /** Frame-motion effect a transition or animation puts on one layer draw:
+   * a whole-frame translation in canvas px. */
+  private drawLayer(
+    el: MediaEl | null,
+    clip: VideoClip | undefined,
+    clear: boolean,
+    alpha: number,
+    zoom = 1,
+    fx?: { dx?: number; dy?: number }
+  ) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
@@ -445,11 +652,21 @@ class Engine {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, H);
     }
+    const hasFx = !!fx && (!!fx.dx || !!fx.dy);
+    if (hasFx) {
+      // Motion runs in full-canvas space — the export translates the whole
+      // padded segment frame, so a regioned clip rides along with it.
+      // Whole-pixel translation: a fractional offset antialiases both frame
+      // edges and draws a hairline seam where a push's frames meet.
+      ctx.save();
+      ctx.translate(Math.round(fx!.dx ?? 0), Math.round(fx!.dy ?? 0));
+    }
     // A regioned track-0 clip (split-screen half) draws into its rect over the
     // black frame; the full-frame path below keeps the pan-crop behavior.
     const rect = rectOf(clip ?? {});
     if (!isFullRect(rect)) {
-      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha, zoom, clip?.grade);
+      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha, zoom, clip);
+      if (hasFx) ctx.restore();
       return;
     }
     const fill = clip?.fit === "fill";
@@ -469,15 +686,16 @@ class Engine {
     }
     const prevAlpha = ctx.globalAlpha;
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    ctx.drawImage(this.gradedSource(el, clip?.grade), dx, dy, dw, dh);
+    ctx.drawImage(this.gradedSource(el, clip), dx, dy, dw, dh);
     ctx.globalAlpha = prevAlpha;
+    this.applyLookPost(clip, 0, 0, W, H, alpha);
+    if (hasFx) ctx.restore();
   }
 
-  /** Draw `masterSpan` full-frame, plus any transition live at time `t`: a
-   * cross style blends (and for cross zoom, scales) the next clip over it — a
-   * true A·(1−α)+B·α blend — while an edge style fades or zooms the master's
-   * own edge around a hard cut. Returns the master element (the playback
-   * clock). */
+  /** Draw `masterSpan` full-frame, plus any transition live at time `t` in
+   * its style's geometry (blend, dip, push, wipe, shape reveal), plus the
+   * clips' own entrance/exit animations. Returns the master element (the
+   * playback clock). */
   private composite(masterSpan: ClipSpan, spans: ClipSpan[], t: number, play: boolean) {
     // A hidden clip is silent as well as black.
     const masterEl = this.prepare(masterSpan, t, play, masterSpan.clip.muted || !!masterSpan.clip.hidden);
@@ -500,11 +718,12 @@ class Engine {
       this.warmNext(next, t);
       keep.add(next.clip.id);
     }
-    // Cross styles: once the incoming footprint starts, blend it in over the
+    // Transitions: once the incoming footprint starts, blend it in over the
     // master. Each clip owns its element, so the two decode side by side — a
     // true blend even when they are trims of the same source.
+    let p = 0;
     if (masterSpan.transitionOut > 0 && next && t >= next.start) {
-      const p = Math.min(1, (t - next.start) / masterSpan.transitionOut);
+      p = Math.min(1, (t - next.start) / masterSpan.transitionOut);
       alpha = p;
       incEl = this.prepare(next, t, play, true); // the outgoing clip keeps the audio
       keep.add(next.clip.id);
@@ -514,35 +733,37 @@ class Engine {
         incZoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
       }
     }
-    // Edge style on this clip's own tail (fade out / zoom in).
-    if (next && (style === "fadeout" || style === "zoomin")) {
-      const d = Math.min(masterSpan.clip.transition ?? 0, masterSpan.len);
-      const left = masterSpan.start + masterSpan.len - t;
-      if (d > 0 && left < d) {
-        const p = 1 - left / d;
-        if (style === "fadeout") {
-          black = Math.max(black, p);
-          gain = Math.min(gain, 1 - p);
-        } else {
-          masterZoom = 1 + (TRANSITION_ZOOM - 1) * p;
-        }
-      }
-    }
-    // Edge style the previous clip set on this clip's head (fade in / zoom out).
-    const prevStyle = prev?.clip.transitionStyle ?? "crossfade";
-    if (prev && prev.transitionOut === 0 && (prevStyle === "fadein" || prevStyle === "zoomout")) {
-      const d = Math.min(prev.clip.transition ?? 0, masterSpan.len);
-      const rel = t - masterSpan.start;
-      if (d > 0 && rel < d) {
-        const p = rel / d;
-        if (prevStyle === "fadein") {
-          black = Math.max(black, 1 - p);
-          gain = Math.min(gain, p);
-        } else {
-          masterZoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
-        }
-      }
-    }
+    // The master's own entrance/exit animations; the export bakes the same
+    // ramps into the segment before the join. A transitioned joint owns its
+    // edges: with a live overlap behind or ahead, that side's animation is
+    // held so it never fights the transition's motion (the incoming clip's
+    // entrance is likewise held — its joint is this transition). An abutting
+    // hard cut gives the animation a backdrop: the neighbor's held frame
+    // shows behind it instead of black (black stays for the timeline's ends
+    // and across gaps).
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const rel = t - masterSpan.start;
+    const abutPrev =
+      !!prev &&
+      !prev.clip.hidden &&
+      prev.transitionOut <= 0 &&
+      Math.abs(prev.start + prev.len - masterSpan.start) < 0.02;
+    const abutNext =
+      !!next &&
+      !next.clip.hidden &&
+      masterSpan.transitionOut <= 0 &&
+      Math.abs(masterSpan.start + masterSpan.len - next.start) < 0.02;
+    const mAnim = clipAnimFx(masterSpan.clip, rel, masterSpan.len, {
+      skipIn: (prev?.transitionOut ?? 0) > 0,
+      skipOut: masterSpan.transitionOut > 0,
+      backdropIn: abutPrev,
+      backdropOut: abutNext,
+    });
+    const masterFx = { dx: mAnim.dxFrac * W, dy: mAnim.dyFrac * H };
+    masterZoom *= mAnim.zoom;
+    black = Math.max(black, mAnim.veil);
+    gain = Math.min(gain, mAnim.gain);
     // A live voiceover ducks the master clip's sound under it. The clip's own
     // volume rides on top (the element clamps at 1; export honors up to 1.5).
     const duck = duckGainAt(useEditor.getState().audioClips, t);
@@ -552,8 +773,32 @@ class Engine {
     this.pauseExcept(keep);
     // No clear here — the tick clears once before compositing, so a regioned
     // clip draws into its rect over the already-black frame.
-    this.drawLayer(masterEl, masterSpan.clip, false, 1, masterZoom);
-    if (incEl) this.drawLayer(incEl, next!.clip, false, alpha, incZoom);
+    // Backdrop for a live edge animation at an abutting cut: the previous
+    // clip's last frame behind an entrance, the next clip's first frame
+    // behind an exit. Zoom keeps the frame covered, so it skips the draw.
+    if (!incEl) {
+      const winLive = (a: ClipAnim | undefined, side: "in" | "out") => {
+        if (!a || a.style === "zoom") return false;
+        const d = Math.min(a.seconds, masterSpan.len);
+        return side === "in" ? rel < d : masterSpan.len - rel < d;
+      };
+      if (abutPrev && winLive(masterSpan.clip.animIn, "in")) {
+        this.drawBackdropFrame(prev!, prev!.clip.out - 0.05);
+      } else if (abutNext && winLive(masterSpan.clip.animOut, "out")) {
+        this.drawBackdropFrame(next!, next!.clip.in);
+      }
+    }
+    this.drawCrossJoin(style, p, {
+      masterEl,
+      masterClip: masterSpan.clip,
+      masterAlpha: mAnim.alpha,
+      masterZoom,
+      masterFx,
+      incEl,
+      incClip: next?.clip,
+      incAlpha: alpha,
+      incZoom,
+    });
     // Veil only the master clip's own footprint, like the export's per-clip
     // fade filter: a regioned clip darkens inside its rect while a track
     // behind shows through the margins; tracks drawn after (above) stay lit.
@@ -561,8 +806,174 @@ class Engine {
     return masterEl;
   }
 
+  /** Draw the master layer, and during a transition (`p` > 0, incoming
+   * element live) compose the incoming clip over it in the style's geometry.
+   * Everything runs in full-canvas space, matching the export's xfade over
+   * fully padded segment frames. */
+  private drawCrossJoin(
+    style: TransitionStyle,
+    p: number,
+    d: {
+      masterEl: MediaEl | null;
+      masterClip: VideoClip;
+      masterAlpha: number;
+      masterZoom: number;
+      masterFx: { dx: number; dy: number };
+      incEl: MediaEl | null;
+      incClip: VideoClip | undefined;
+      incAlpha: number;
+      incZoom: number;
+    }
+  ) {
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx) return;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const drawMaster = (fx = d.masterFx, alpha = d.masterAlpha) =>
+      this.drawLayer(d.masterEl, d.masterClip, false, alpha, d.masterZoom, fx);
+    // The blend styles ramp the incoming alpha; the geometric styles draw it
+    // opaque inside their own moving region.
+    const drawInc = (alpha = d.incAlpha, fx?: { dx: number; dy: number }) => {
+      if (d.incEl) this.drawLayer(d.incEl, d.incClip, false, alpha, d.incZoom, fx);
+    };
+    const clipped = (path: () => void, draw: () => void) => {
+      ctx.save();
+      ctx.beginPath();
+      path();
+      ctx.clip();
+      draw();
+      ctx.restore();
+    };
+    if (!d.incEl || p <= 0) {
+      drawMaster();
+      return;
+    }
+    switch (style) {
+      case "dipblack":
+      case "dipwhite": {
+        // Matches xfade fadeblack/fadewhite's measured plateau: out by ~30%,
+        // solid to ~60%, in over the rest.
+        const veil = Math.max(0, Math.min(1, Math.min(p / 0.3, (1 - p) / 0.4)));
+        if (p < 0.45) drawMaster();
+        else drawInc(1);
+        this.fillVeil(style === "dipwhite" ? "255,255,255" : "0,0,0", veil);
+        break;
+      }
+      case "blur": {
+        // Defocus blend: blur peaks mid-transition on both sides (isotropic
+        // here vs ffmpeg's horizontal hblur — reads the same). Without
+        // ctx.filter this degrades to the plain crossfade below.
+        const supports = "filter" in ctx;
+        const r = Math.max(0.5, (Math.min(W, H) / 24) * (1 - Math.abs(2 * p - 1)));
+        if (supports) ctx.filter = `blur(${r.toFixed(2)}px)`;
+        drawMaster();
+        drawInc();
+        if (supports) ctx.filter = "none";
+        break;
+      }
+      case "pushleft":
+      case "pushright":
+      case "pushup":
+      case "pushdown": {
+        // Both frames travel together; the incoming clip shoves the outgoing
+        // one off the named edge.
+        const [mx, my, ix, iy] =
+          style === "pushleft"
+            ? [-p * W, 0, (1 - p) * W, 0]
+            : style === "pushright"
+              ? [p * W, 0, -(1 - p) * W, 0]
+              : style === "pushup"
+                ? [0, -p * H, 0, (1 - p) * H]
+                : [0, p * H, 0, -(1 - p) * H];
+        drawMaster({ ...d.masterFx, dx: d.masterFx.dx + mx, dy: d.masterFx.dy + my });
+        drawInc(1, { dx: ix, dy: iy });
+        break;
+      }
+      case "wipeleft":
+      case "wiperight":
+      case "wipeup":
+      case "wipedown": {
+        // Hard reveal edge traveling in the named direction.
+        const r =
+          style === "wipeleft"
+            ? { x: (1 - p) * W, y: 0, w: p * W, h: H }
+            : style === "wiperight"
+              ? { x: 0, y: 0, w: p * W, h: H }
+              : style === "wipeup"
+                ? { x: 0, y: (1 - p) * H, w: W, h: p * H }
+                : { x: 0, y: 0, w: W, h: p * H };
+        drawMaster();
+        clipped(
+          () => ctx.rect(r.x, r.y, r.w, r.h),
+          () => drawInc(1)
+        );
+        break;
+      }
+      case "circleopen": {
+        drawMaster();
+        clipped(
+          () => ctx.arc(W / 2, H / 2, (p * Math.hypot(W, H)) / 2, 0, Math.PI * 2),
+          () => drawInc(1)
+        );
+        break;
+      }
+      case "circleclose": {
+        // The outgoing picture collapses into a shrinking circle over the
+        // incoming one.
+        drawInc(1);
+        clipped(
+          () => ctx.arc(W / 2, H / 2, ((1 - p) * Math.hypot(W, H)) / 2, 0, Math.PI * 2),
+          () => drawMaster()
+        );
+        break;
+      }
+      case "splitopen": {
+        // Barn doors part from the center.
+        drawMaster();
+        clipped(
+          () => ctx.rect(((1 - p) * W) / 2, 0, p * W, H),
+          () => drawInc(1)
+        );
+        break;
+      }
+      case "splitclose": {
+        // The incoming picture closes in from both side edges.
+        drawMaster();
+        clipped(
+          () => {
+            ctx.rect(0, 0, (p * W) / 2, H);
+            ctx.rect(W - (p * W) / 2, 0, (p * W) / 2, H);
+          },
+          () => drawInc(1)
+        );
+        break;
+      }
+      default: {
+        // crossfade / crosszoom: the classic A·(1−α)+B·α blend (zooms already
+        // folded into the layer zoom factors).
+        drawMaster();
+        drawInc();
+      }
+    }
+  }
+
   private overlayVideoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
     return this.elFor(this.overlayEls, clip.id, asset);
+  }
+
+  /** Draw a neighbor clip's held frame full-frame beneath an edge animation.
+   * A paused element parks on the wanted frame (the previous clip already
+   * rests at its out point after the handoff; warm-ahead parks the next one
+   * on its entrance frame); a pre-rolling element draws where it is — frames
+   * moments ahead of its entrance, close enough at the cut. Until the
+   * element has a decodable frame this draws nothing and the tick's black
+   * clear shows, same as before. */
+  private drawBackdropFrame(span: ClipSpan, at: number) {
+    const el = this.videoFor(span.clip, span.asset);
+    if (!isImageEl(el) && el.paused && !el.seeking && Math.abs(el.currentTime - at) > 0.15) {
+      el.currentTime = Math.max(0, at);
+    }
+    if (elReady(el)) this.drawLayer(el, span.clip, false, 1, 1);
   }
 
   private clearCanvas() {
@@ -584,18 +995,23 @@ class Engine {
     return Math.min(1, g);
   }
 
-  /** Paint an `amount` (0..1) black veil — over the whole frame, or clipped to
-   * `rect` for a per-clip fade. Shared by the edge-transition fade and the
-   * whole-video project fade so the two can never drift apart. */
-  private fillBlackVeil(amount: number, rect?: FrameRect) {
+  /** Paint an `amount` (0..1) color veil (`rgb` = "r,g,b") — over the whole
+   * frame, or clipped to `rect` for a per-clip fade. Shared by the fade
+   * animations, the dip transitions, and the whole-video project fade so
+   * they can never drift apart. */
+  private fillVeil(rgb: string, amount: number, rect?: FrameRect) {
     if (amount <= 0) return;
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
     const H = this.canvas.height;
-    ctx.fillStyle = `rgba(0,0,0,${Math.min(1, amount).toFixed(3)})`;
+    ctx.fillStyle = `rgba(${rgb},${Math.min(1, amount).toFixed(3)})`;
     if (rect) ctx.fillRect(rect.x * W, rect.y * H, rect.w * W, rect.h * H);
     else ctx.fillRect(0, 0, W, H);
+  }
+
+  private fillBlackVeil(amount: number, rect?: FrameRect) {
+    this.fillVeil("0,0,0", amount, rect);
   }
 
   /** The picture side of the project fade: a black veil over the whole frame
@@ -681,7 +1097,7 @@ class Engine {
       if (!elReady(el)) continue;
       const rect = rectOf(clip);
       const cover = clip.fit === "fill" || (clip.fit == null && isFullRect(rect));
-      this.drawIntoRect(el, rect, cover, alpha, zoom, clip.grade);
+      this.drawIntoRect(el, rect, cover, alpha, zoom, clip);
     }
   }
 
@@ -920,7 +1336,7 @@ class Engine {
           pauseEl(el);
         } else if (t >= total - 0.001) {
           // Track 0 and every other track finished.
-          useEditor.setState({ playing: false, currentTime: total });
+          useEditor.setState({ playing: false, currentTime: total, previewStopAt: null });
           pauseEl(el);
           this.drawOverlays(t, true, active);
           this.drawProjectFade(this.projectFadeGain(total, total));
@@ -939,7 +1355,7 @@ class Engine {
       this.lastPlayNow = now;
       t = t + dt;
       if (t >= total - 0.001) {
-        useEditor.setState({ playing: false, currentTime: total });
+        useEditor.setState({ playing: false, currentTime: total, previewStopAt: null });
         this.drawOverlays(t, true, active);
         this.drawProjectFade(this.projectFadeGain(total, total));
         this.cleanupOverlays(active);
@@ -963,6 +1379,17 @@ class Engine {
     }
     this.drawProjectFade(fadeGain);
     this.cleanupOverlays(active);
+    // A scoped effect preview auto-pauses at its stop mark (the frame this
+    // tick just painted is the stop frame — close enough at tick rate).
+    if (s.previewStopAt != null && t >= s.previewStopAt) {
+      useEditor.setState({
+        playing: false,
+        currentTime: Math.min(t, s.previewStopAt),
+        previewStopAt: null,
+      });
+      this.syncSoundtrack(Math.min(t, s.previewStopAt), false);
+      return;
+    }
     useEditor.setState({ currentTime: t });
     this.syncSoundtrack(t, true, fadeGain);
   }

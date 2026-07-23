@@ -4,8 +4,10 @@ import { create } from "zustand";
 import type {
   Aspect,
   AudioClip,
+  ClipAnim,
   ClipSpan,
   LibraryTemplate,
+  LookStyle,
   MediaAsset,
   ProjectDoc,
   Selection,
@@ -25,7 +27,7 @@ import type { VideoProject } from "./genvideo/types";
 import { fillSlot } from "./genvideo/fillSlot";
 import { apiFetch, apiJson } from "./api";
 import { trackLocale } from "./subtitles";
-import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, MAX_SUBTITLE_LANES, mediaUrl, SPEED_FLOOR, SPEED_MIN, TRANSITION_MAX } from "./types";
+import { ANIM_STYLE_IDS, emptySubtitles, IMAGE_CLIP_SECONDS, LOOK_IDS, MAX_SUBTITLE_LANES, mediaUrl, migrateLegacyTransitions, SPEED_FLOOR, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
 import { captureTimelineFrames } from "./visualFrames";
@@ -115,6 +117,9 @@ export interface EditorState {
   multiSelection: Selection[];
   currentTime: number;
   playing: boolean;
+  /** While playing a scoped effect preview, the time playback auto-pauses at;
+   * null otherwise. Manual seek/play/pause clears it. */
+  previewStopAt: number | null;
   pxPerSec: number;
   /** Timeline panel height in px (drag the panel's top border to change). */
   timelineH: number;
@@ -202,6 +207,11 @@ export interface EditorState {
   /** Set the transition into the next clip (seconds; 0 clears it), optionally
    * changing its style; omitting the style keeps the clip's current one. */
   setClipTransition: (id: string, seconds: number, style?: TransitionStyle) => void;
+  /** Set (or clear with null) a clip's own entrance/exit animation. Never
+   * moves the layout — an animation belongs to one clip's edge. */
+  setClipAnim: (id: string, which: "in" | "out", anim: ClipAnim | null) => void;
+  /** Set (or clear with null) a clip's preset filter look; amount 0..1. */
+  setClipLook: (id: string, style: LookStyle | null, amount?: number) => void;
   updateAudio: (id: string, patch: Partial<AudioClip>) => void;
   updateOverlay: (id: string, patch: Partial<TextOverlay>) => void;
   /** Live-drag updates that should not create undo entries. */
@@ -313,6 +323,10 @@ export interface EditorState {
   toggleSelect: (sel: NonNullable<Selection>) => void;
   seek: (t: number) => void;
   setPlaying: (p: boolean) => void;
+  /** Play just the [start, end] stretch in the preview: seek to `start`,
+   * play, and auto-pause at `end`. Effect pickers use it so choosing a
+   * transition/animation immediately shows the real footage doing it. */
+  previewRange: (start: number, end: number) => void;
   setPxPerSec: (v: number) => void;
   setTimelineH: (h: number) => void;
   setExportOpen: (v: boolean) => void;
@@ -722,6 +736,7 @@ export const useEditor = create<EditorState>((baseSet, get) => {
     multiSelection: [],
     currentTime: 0,
     playing: false,
+    previewStopAt: null,
     pxPerSec: 60,
     timelineH: TIMELINE_H_DEFAULT,
     skimTime: null,
@@ -762,6 +777,7 @@ export const useEditor = create<EditorState>((baseSet, get) => {
         multiSelection: [],
         currentTime: 0,
         playing: false,
+        previewStopAt: null,
         subtitles: emptySubtitles(),
         subtitleLane: 0,
         subtitleStatus: "idle",
@@ -809,7 +825,10 @@ export const useEditor = create<EditorState>((baseSet, get) => {
         // lowest row becomes track 0 — the bottom row is the spine now.
         const joined = [...folded, ...legacyLayers];
         const lift = Math.max(0, ...joined.map((c) => -c.track));
-        const merged = lift ? joined.map((c) => ({ ...c, track: c.track + lift })) : joined;
+        const lifted = lift ? joined.map((c) => ({ ...c, track: c.track + lift })) : joined;
+        // Docs saved when edge transition styles existed convert them into the
+        // equivalent clip animations.
+        const merged = migrateLegacyTransitions(lifted);
         set({
           projectName: doc.name,
           assets,
@@ -1215,7 +1234,12 @@ export const useEditor = create<EditorState>((baseSet, get) => {
         transition: value || undefined,
         // "crossfade" is the default — store it as absence to keep docs lean.
         transitionStyle: newStyle === "crossfade" ? undefined : newStyle,
+        // A transitioned joint owns its edges: the transition replaces the
+        // animations adjacent to it, so stored state always matches what
+        // plays (the picker disables those edges while the joint is live).
+        ...(value > 0 ? { animOut: undefined } : {}),
       });
+      if (value > 0 && next) get().updateClipTransient(next.id, { animIn: undefined });
       // A dissolve is a physical overlap: setting one slides the next clip
       // (and the run behind it, gaps preserved) so it starts `newOverlap`
       // before this clip ends — closing any gap, since a dissolve needs
@@ -1240,6 +1264,51 @@ export const useEditor = create<EditorState>((baseSet, get) => {
           }));
         }
       }
+    },
+
+    setClipAnim: (id, which, anim) => {
+      const s = get();
+      const clip = s.clips.find((c) => c.id === id);
+      if (!clip) return;
+      const value =
+        anim && ANIM_STYLE_IDS.includes(anim.style)
+          ? { style: anim.style, seconds: Math.max(0.1, Math.min(TRANSITION_MAX, anim.seconds)) }
+          : undefined;
+      // Last pick wins per edge: animating an edge a live transition owns
+      // replaces that transition (the pair slides back to a hard cut), just
+      // as setting a transition clears the animations adjacent to its joint.
+      // The clear and the animation land in one undo entry.
+      let pushed = false;
+      if (value) {
+        const row = s.clips
+          .filter((c) => c.track === clip.track)
+          .sort((a, b) => a.start - b.start);
+        const i = row.findIndex((c) => c.id === clip.id);
+        const lead = which === "in" ? row[i - 1] : row[i];
+        const follow = which === "in" ? row[i] : row[i + 1];
+        if (lead && follow && lead.id !== follow.id) {
+          const physical = lead.start + clipLen(lead) - follow.start;
+          if (Math.min(transitionOverlap(lead, follow), Math.max(0, physical)) > 1e-6) {
+            get().setClipTransition(lead.id, 0);
+            pushed = true;
+          }
+        }
+      }
+      if (!pushed) push();
+      get().updateClipTransient(id, { [which === "in" ? "animIn" : "animOut"]: value });
+    },
+
+    setClipLook: (id, style, amount) => {
+      const clip = get().clips.find((c) => c.id === id);
+      if (!clip) return;
+      const look = style && LOOK_IDS.includes(style) ? style : undefined;
+      const k = amount === undefined ? undefined : Math.max(0.05, Math.min(1, amount));
+      push();
+      get().updateClipTransient(id, {
+        look,
+        // Full strength is the default — store it as absence to keep docs lean.
+        lookAmount: look && k !== undefined && k < 1 ? k : undefined,
+      });
     },
 
     updateAudio: (id, patch) => {
@@ -1505,8 +1574,11 @@ export const useEditor = create<EditorState>((baseSet, get) => {
             const cutIn = c.in + (t - c.start) * sp;
             // The left half hard-cuts into the right; the right keeps the
             // original dissolve into whatever came after (same as track 0).
-            const left: VideoClip = { ...c, out: cutIn, transition: undefined, transitionStyle: undefined };
-            const right: VideoClip = { ...c, id: uid(), start: t, in: cutIn };
+            // The cut lands mid-footage, so the edges it creates stay plain:
+            // the exit animation belongs to the right half's tail and the
+            // entrance to the left half's head.
+            const left: VideoClip = { ...c, out: cutIn, transition: undefined, transitionStyle: undefined, animOut: undefined };
+            const right: VideoClip = { ...c, id: uid(), start: t, in: cutIn, animIn: undefined };
             set((s) => {
               const idx = s.clips.findIndex((x) => x.id === c.id);
               const next = [...s.clips];
@@ -1576,9 +1648,12 @@ export const useEditor = create<EditorState>((baseSet, get) => {
       // Source time advances `speed`× faster than timeline time.
       const cutAt = span.clip.in + (t - span.start) * clipSpeed(span.clip);
       // The left half hard-cuts into the right; the right keeps the original
-      // dissolve into whatever came after. Both halves stay in place.
-      const left: VideoClip = { ...span.clip, out: cutAt, transition: undefined, transitionStyle: undefined };
-      const right: VideoClip = { ...span.clip, id: uid(), in: cutAt, start: t };
+      // dissolve into whatever came after. Both halves stay in place. The cut
+      // lands mid-footage, so the edges it creates stay plain: the exit
+      // animation stays on the right half's tail, the entrance on the left's
+      // head.
+      const left: VideoClip = { ...span.clip, out: cutAt, transition: undefined, transitionStyle: undefined, animOut: undefined };
+      const right: VideoClip = { ...span.clip, id: uid(), in: cutAt, start: t, animIn: undefined };
       set((s) => {
         const idx = s.clips.findIndex((c) => c.id === span.clip.id);
         const next = [...s.clips];
@@ -1920,10 +1995,19 @@ export const useEditor = create<EditorState>((baseSet, get) => {
 
     seek: (t) => {
       const total = projectDuration(get());
-      set({ currentTime: Math.max(0, Math.min(total, t)) });
+      // A manual seek cancels any scoped effect preview.
+      set({ currentTime: Math.max(0, Math.min(total, t)), previewStopAt: null });
     },
 
-    setPlaying: (p) => set({ playing: p }),
+    // A manual play/pause cancels any scoped effect preview.
+    setPlaying: (p) => set({ playing: p, previewStopAt: null }),
+
+    previewRange: (start, end) => {
+      const total = projectDuration(get());
+      const from = Math.max(0, Math.min(total, start));
+      const to = Math.max(from + 0.05, Math.min(total, end));
+      set({ currentTime: from, playing: true, previewStopAt: to });
+    },
     setSkimTime: (t) => {
       if (get().skimTime !== t) set({ skimTime: t });
     },
@@ -2745,13 +2829,11 @@ export function clipLen(c: VideoClip | AudioClip) {
 }
 
 /** Overlap (timeline seconds) between a clip and its successor, clamped so it
- * can never swallow either clip whole. 0 when there is no next clip, no
- * transition set, or the style is an edge style (those ramp one clip's edge
- * around a hard cut instead of overlapping). */
+ * can never swallow either clip whole. 0 when there is no next clip or no
+ * transition set — every transition style is a physical overlap. */
 export function transitionOverlap(a: VideoClip, b: VideoClip | undefined): number {
   const d = a.transition ?? 0;
   if (!b || d <= 0) return 0;
-  if (!isCrossStyle(a.transitionStyle ?? "crossfade")) return 0;
   return Math.min(d, clipLen(a) * 0.9, clipLen(b) * 0.9);
 }
 

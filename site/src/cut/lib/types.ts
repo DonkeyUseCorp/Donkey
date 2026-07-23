@@ -139,13 +139,23 @@ export interface VideoClip {
    * (out-in)/speed timeline seconds, so >1 is faster and shorter. */
   speed?: number;
   /** Transition into the next clip on this clip's track, in timeline seconds
-   * (absent/0 = hard cut). Cross styles overlap the two clips by this much
-   * (the cut shortens); edge styles ramp one clip's edge over this window
-   * around a hard cut. On upper tracks the fades ramp to transparent instead
-   * of black, so the tracks beneath show through. */
+   * (absent/0 = hard cut). Every style overlaps the two clips by this much,
+   * so the cut shortens. On upper tracks a transition blends the incoming
+   * clip in over the outgoing one (the tracks beneath show through). */
   transition?: number;
   /** Look of that transition; absent = "crossfade". */
   transitionStyle?: TransitionStyle;
+  /** Entrance animation on this clip's own head (absent = none). Unlike a
+   * transition it belongs to one clip and never moves its neighbors. */
+  animIn?: ClipAnim;
+  /** Exit animation on this clip's own tail (absent = none). */
+  animOut?: ClipAnim;
+  /** Preset filter look baked over the clip's picture (absent = none).
+   * Composes with `grade`: the look is the base, manual adjustments ride on
+   * top of it. */
+  look?: LookStyle;
+  /** Look strength 0..1; absent = 1 (full). */
+  lookAmount?: number;
   /** Hidden clips stay on the timeline (grayed) but render as black — excluded
    * from the played/exported picture without disturbing the layout. */
   hidden?: boolean;
@@ -184,42 +194,228 @@ export function projectFadeSeconds(fade: number | undefined, duration: number): 
   return Math.max(0, Math.min(fade ?? 0, duration / 2));
 }
 
-/** How a clip hands off to the next one. Cross styles overlap the two clips;
- * edge styles ramp one side of a hard cut — the outgoing tail (fadeout,
- * zoomin) or the incoming head (fadein, zoomout). */
+/** How a clip hands off to the next one. Every style is a physical overlap:
+ * the two clips run together for the transition length and the cut shortens
+ * by it. Directional names describe the motion (pushleft pushes the frame
+ * leftward; wipeleft's reveal edge travels leftward). */
 export type TransitionStyle =
   | "crossfade"
   | "crosszoom"
-  | "zoomin"
-  | "zoomout"
-  | "fadein"
-  | "fadeout";
+  | "dipblack"
+  | "dipwhite"
+  | "blur"
+  | "pushleft"
+  | "pushright"
+  | "pushup"
+  | "pushdown"
+  | "wipeleft"
+  | "wiperight"
+  | "wipeup"
+  | "wipedown"
+  | "circleopen"
+  | "circleclose"
+  | "splitopen"
+  | "splitclose";
 
-export const TRANSITION_STYLE_IDS: TransitionStyle[] = [
-  "crossfade",
-  "crosszoom",
-  "zoomin",
-  "zoomout",
-  "fadein",
-  "fadeout",
+/** The ffmpeg xfade transition each style renders with on export. Doubles as
+ * the sanitizing allowlist: the server looks the style up here and falls back
+ * to plain "fade" for anything unknown. Cross zoom is a fade — its zoom
+ * ramps ride the overlap as segment-edge zooms. */
+export const TRANSITION_XFADE: Record<TransitionStyle, string> = {
+  crossfade: "fade",
+  crosszoom: "fade",
+  dipblack: "fadeblack",
+  dipwhite: "fadewhite",
+  blur: "hblur",
+  pushleft: "slideleft",
+  pushright: "slideright",
+  pushup: "slideup",
+  pushdown: "slidedown",
+  wipeleft: "wipeleft",
+  wiperight: "wiperight",
+  wipeup: "wipeup",
+  wipedown: "wipedown",
+  circleopen: "circleopen",
+  circleclose: "circleclose",
+  splitopen: "vertopen",
+  splitclose: "vertclose",
+};
+
+/** Picker layout: styles grouped by family, in display order. */
+export const TRANSITION_STYLE_GROUPS: { label: string; ids: TransitionStyle[] }[] = [
+  { label: "Fade", ids: ["crossfade", "dipblack", "dipwhite", "blur"] },
+  { label: "Zoom", ids: ["crosszoom"] },
+  { label: "Push", ids: ["pushleft", "pushright", "pushup", "pushdown"] },
+  { label: "Wipe", ids: ["wipeleft", "wiperight", "wipeup", "wipedown"] },
+  { label: "Shape", ids: ["circleopen", "circleclose", "splitopen", "splitclose"] },
 ];
+
+export const TRANSITION_STYLE_IDS: TransitionStyle[] = TRANSITION_STYLE_GROUPS.flatMap(
+  (g) => g.ids
+);
 
 export const TRANSITION_STYLE_LABELS: Record<TransitionStyle, string> = {
   crossfade: "Cross fade",
   crosszoom: "Cross zoom",
-  zoomin: "Zoom in",
-  zoomout: "Zoom out",
-  fadein: "Fade in",
-  fadeout: "Fade out",
+  dipblack: "Dip to black",
+  dipwhite: "Dip to white",
+  blur: "Blur",
+  pushleft: "Push left",
+  pushright: "Push right",
+  pushup: "Push up",
+  pushdown: "Push down",
+  wipeleft: "Wipe left",
+  wiperight: "Wipe right",
+  wipeup: "Wipe up",
+  wipedown: "Wipe down",
+  circleopen: "Circle open",
+  circleclose: "Circle close",
+  splitopen: "Split open",
+  splitclose: "Split close",
 };
-
-/** Cross styles overlap the clips they join; edge styles never do. */
-export function isCrossStyle(style: TransitionStyle): boolean {
-  return style === "crossfade" || style === "crosszoom";
-}
 
 /** Peak scale the zoom transitions push into (preview and export). */
 export const TRANSITION_ZOOM = 1.18;
+
+/** A clip's own entrance/exit animation. The same style id serves both sides:
+ * directional names describe the motion (slideleft moves the picture
+ * leftward — entering from the right edge, or exiting off the left one).
+ * Edge reveals (wipes, circles, splits) live on transitions only — as an
+ * animation they'd duplicate the same visual. */
+export type AnimStyle =
+  | "fade"
+  | "zoom"
+  | "pop"
+  | "slideleft"
+  | "slideright"
+  | "slideup"
+  | "slidedown";
+
+export interface ClipAnim {
+  style: AnimStyle;
+  /** Ramp length in timeline seconds, 0.1..TRANSITION_MAX. */
+  seconds: number;
+}
+
+export const ANIM_STYLE_IDS: AnimStyle[] = [
+  "fade",
+  "zoom",
+  "pop",
+  "slideleft",
+  "slideright",
+  "slideup",
+  "slidedown",
+];
+
+export const ANIM_STYLE_LABELS: Record<AnimStyle, string> = {
+  fade: "Fade",
+  zoom: "Zoom",
+  pop: "Pop",
+  slideleft: "Slide left",
+  slideright: "Slide right",
+  slideup: "Slide up",
+  slidedown: "Slide down",
+};
+
+export const ANIM_DEFAULT_SECONDS = 0.5;
+
+/** Animation styles an overlay-track clip can render natively (its segment
+ * composites via alpha, so fade and zoom map onto the existing alpha/zoom
+ * ramps; slides, wipes and pop would need per-frame overlay motion). Anything
+ * else degrades to a fade on upper tracks. */
+export function overlayAnimStyle(style: AnimStyle): "fade" | "zoom" {
+  return style === "zoom" ? "zoom" : "fade";
+}
+
+/** Preset filter looks: a named color/effect treatment baked over a clip's
+ * picture in both preview and export. */
+export type LookStyle =
+  | "vintage"
+  | "vhs"
+  | "horror"
+  | "halation"
+  | "tech"
+  | "noir"
+  | "grain"
+  | "pastel"
+  | "blockbuster"
+  | "dreamy";
+
+export const LOOK_IDS: LookStyle[] = [
+  "vintage",
+  "vhs",
+  "horror",
+  "halation",
+  "tech",
+  "noir",
+  "grain",
+  "pastel",
+  "blockbuster",
+  "dreamy",
+];
+
+export const LOOK_LABELS: Record<LookStyle, string> = {
+  vintage: "Vintage",
+  vhs: "VHS",
+  horror: "Analogue horror",
+  halation: "Halation",
+  tech: "Modern tech",
+  noir: "Noir",
+  grain: "Film grain",
+  pastel: "Pastel",
+  blockbuster: "Blockbuster",
+  dreamy: "Dreamy",
+};
+
+/** Migrate docs saved before per-clip animations existed: the retired edge
+ * transition styles (fadein/fadeout/zoomin/zoomout ramped one side of a hard
+ * cut) become the equivalent clip animation — fadeout/zoomin on the leading
+ * clip's own tail, fadein/zoomout on the following clip's head — and any
+ * unknown style falls back to crossfade. Visuals are unchanged; layout never
+ * moves (edge styles overlapped nothing, and animations don't either). */
+export function migrateLegacyTransitions(clips: VideoClip[]): VideoClip[] {
+  const LEGACY: Record<string, { side: "out" | "in"; style: AnimStyle }> = {
+    fadeout: { side: "out", style: "fade" },
+    zoomin: { side: "out", style: "zoom" },
+    fadein: { side: "in", style: "fade" },
+    zoomout: { side: "in", style: "zoom" },
+  };
+  const known = new Set<string>(TRANSITION_STYLE_IDS);
+  if (
+    !clips.some(
+      (c) => c.transitionStyle && !known.has(c.transitionStyle as string)
+    )
+  ) {
+    return clips;
+  }
+  const out = clips.map((c) => ({ ...c }));
+  const byTrack = new Map<number, VideoClip[]>();
+  for (const c of out) {
+    const row = byTrack.get(c.track) ?? [];
+    row.push(c);
+    byTrack.set(c.track, row);
+  }
+  for (const row of byTrack.values()) {
+    row.sort((a, b) => a.start - b.start);
+    row.forEach((c, i) => {
+      const raw = c.transitionStyle as string | undefined;
+      if (!raw || known.has(raw)) return;
+      const legacy = LEGACY[raw];
+      const seconds = Math.min(c.transition ?? 0, TRANSITION_MAX);
+      if (legacy && seconds > 0) {
+        const target = legacy.side === "out" ? c : row[i + 1];
+        if (target) {
+          const key = legacy.side === "out" ? "animOut" : "animIn";
+          target[key] ??= { style: legacy.style, seconds };
+        }
+      }
+      // The edge ramp never overlapped, so the joint itself was a hard cut.
+      c.transition = undefined;
+      c.transitionStyle = undefined;
+    });
+  }
+  return out;
+}
 
 /** A clip on the free-form soundtrack track. */
 export interface AudioClip {
