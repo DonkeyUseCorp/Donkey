@@ -3,7 +3,16 @@
 import React, { memo, useEffect, useRef, useState } from "react";
 import { AlertCircle, Captions, ChevronDown, Languages, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { parseNumberInput, ScrubValue } from "@/cut/components/ScrubValue";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import {
   CAPTION_STYLES,
@@ -18,7 +27,9 @@ import { useElapsed } from "@/cut/hooks/useElapsed";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
 import {
+  FONTS,
   fontStack,
+  type FontId,
   type SubtitleCue,
   type SubtitlesBlock,
   type WordAccentMode,
@@ -191,6 +202,50 @@ function OptionsTab() {
           }}
         />
       </label>
+      <div className="flex min-h-8 items-center justify-between text-xs font-medium">
+        Font
+        <Select
+          value={subtitles.font ?? captionStyle(subtitles.style).font}
+          items={Object.fromEntries(FONTS.map((f) => [f.id, f.label]))}
+          onValueChange={(v) => useEditor.getState().setSubtitlesView({ font: v as FontId })}
+        >
+          <SelectTrigger size="sm" className="sub-font w-28">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FONTS.map((f) => (
+              <SelectItem key={f.id} value={f.id}>
+                <span style={{ fontFamily: fontStack(f.id) }}>{f.label}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex min-h-8 items-center justify-between text-xs font-medium">
+        Size
+        <div className="sub-size flex items-center gap-2">
+          <Slider
+            className="data-horizontal:w-24"
+            min={24}
+            max={120}
+            step={1}
+            value={subtitles.size ?? captionStyle(subtitles.style).size}
+            onValueChange={(v) => useEditor.getState().setSubtitlesView({ size: Number(v) })}
+          />
+          <ScrubValue
+            label="Caption size"
+            className="w-7 text-muted-foreground"
+            value={subtitles.size ?? captionStyle(subtitles.style).size}
+            min={24}
+            max={120}
+            step={1}
+            format={(v) => String(Math.round(v))}
+            parse={parseNumberInput}
+            onScrub={(v) => useEditor.getState().setSubtitlesView({ size: v })}
+            onCommit={(v) => useEditor.getState().setSubtitlesView({ size: v })}
+          />
+        </div>
+      </div>
       <label className="flex min-h-8 items-center justify-between text-xs font-medium">
         Highlight spoken word
         <Switch
@@ -302,7 +357,9 @@ function StylesTab() {
               style === cs.id ? "bg-primary/10 ring-1 ring-primary" : "hover:bg-muted"
             )}
             aria-pressed={style === cs.id}
-            onClick={() => useEditor.getState().setSubtitlesView({ style: cs.id })}
+            // Picking a style hands the font back to the preset; the last
+            // choice — custom font or style — wins.
+            onClick={() => useEditor.getState().setSubtitlesView({ style: cs.id, font: undefined })}
           >
             <div className="grid h-12 place-items-center overflow-hidden rounded-md">
               <span

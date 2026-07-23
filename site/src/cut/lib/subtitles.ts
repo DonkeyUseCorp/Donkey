@@ -31,19 +31,22 @@ export function trackLocale(subs: SubtitlesBlock, lane: number): string {
   return subs.tracks?.[lane]?.locale ?? (lane === 0 ? subs.locale : undefined) ?? "en-US";
 }
 
-/** A track's effective caption anchor plus the block's karaoke overrides —
- * the `pos` argument `cueOverlay` takes. The track's own dragged spot wins,
- * then the block-level legacy spot (first track only), then the style's
- * default stacked upward per track so simultaneous languages never overlap. */
+/** A track's effective caption anchor plus the block's look overrides
+ * (karaoke accent, font size) — the `pos` argument `cueOverlay` takes. The
+ * track's own dragged spot wins, then the block-level legacy spot (first
+ * track only), then the style's default stacked upward per track so
+ * simultaneous languages never overlap. */
 export function trackPos(
   subs: SubtitlesBlock,
   style: CaptionStyle,
   lane: number
-): { x: number; y: number; accentMode?: WordAccentMode; accentColor?: string } {
+): { x: number; y: number; size?: number; font?: FontId; accentMode?: WordAccentMode; accentColor?: string } {
   const meta = subs.tracks?.[lane];
   return {
     x: meta?.x ?? (lane === 0 ? subs.x : undefined) ?? style.x,
     y: meta?.y ?? (lane === 0 ? subs.y : undefined) ?? Math.max(0.08, style.y - lane * 0.1),
+    size: subs.size,
+    font: subs.font,
     accentMode: subs.accentMode,
     accentColor: subs.accentColor,
   };
@@ -332,18 +335,21 @@ export function cueWordWindows(cue: SubtitleCue): { start: number; end: number }
 }
 
 /** A cue as a synthetic overlay, so captions ride the title pipeline. The style
- * preset drives the look; the opening cue can render bigger for a punchy hook;
- * a dragged caption position (frame fractions) overrides the preset's spot;
- * a word index marks that word for the karaoke accent. */
+ * preset drives the look; a user font or font size overrides the preset's
+ * (the opener emphasis still multiplies the size); a dragged caption position
+ * (frame fractions) overrides the preset's spot; a word index marks that word
+ * for the karaoke accent. */
 export function cueOverlay(
   cue: SubtitleCue,
   style: CaptionStyle = CAPTION_STYLES.clean,
   isOpener = false,
-  pos?: { x?: number; y?: number; accentMode?: WordAccentMode; accentColor?: string },
+  pos?: { x?: number; y?: number; size?: number; font?: FontId; accentMode?: WordAccentMode; accentColor?: string },
   wordIndex?: number
 ): TextOverlay {
   const kl = wordIndex !== undefined ? karaokeLook(style, pos) : null;
-  const size = Math.round(style.size * (isOpener && style.openerScale ? style.openerScale : 1));
+  const size = Math.round(
+    (pos?.size ?? style.size) * (isOpener && style.openerScale ? style.openerScale : 1)
+  );
   return {
     id: `sub-${cue.id}`,
     text: wrapCaptionForSize(cue.text, size),
@@ -352,7 +358,7 @@ export function cueOverlay(
     x: pos?.x ?? style.x,
     y: pos?.y ?? style.y,
     size,
-    font: style.font,
+    font: pos?.font ?? style.font,
     weight: style.weight,
     color: style.color,
     shadow: style.shadow,

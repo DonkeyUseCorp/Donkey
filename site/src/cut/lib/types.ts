@@ -607,6 +607,12 @@ export interface SubtitlesBlock {
   generatedAt?: number;
   /** Caption look preset; absent = the plain "clean" subtitle style. */
   style?: CaptionStyleId;
+  /** Caption font size (px at a 1080-wide frame); absent = the style
+   * preset's size. Applies to every track. */
+  size?: number;
+  /** Caption font override; absent = the style preset's font. Picking a
+   * style preset clears it, so the last choice — font or style — wins. */
+  font?: FontId;
   /** Legacy caption anchor for the first track; dragging now writes the
    * per-track anchor in `tracks`. Read as the lane-0 fallback. */
   x?: number;
