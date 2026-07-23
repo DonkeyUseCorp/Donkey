@@ -218,6 +218,7 @@ export function FolderShelf<F extends DeskFolder>({
   onRefDrop,
   creating = false,
   onCreatingChange,
+  rows = false,
 }: {
   folders: F[];
   statOf: (id: string) => { count: number; size?: number };
@@ -234,6 +235,9 @@ export function FolderShelf<F extends DeskFolder>({
   onRefDrop?: (ref: AssetRef, folderId: string) => void;
   creating?: boolean;
   onCreatingChange?: (creating: boolean) => void;
+  /** Stacked full-width rows — glyph left, then name over an item-count
+   * subtext — for narrow panels; default is the desktop tile grid. */
+  rows?: boolean;
 }) {
   // A folder tile accepts both an internal selection (its MIME) and, when the
   // host wires it up, OS files dragged from the desktop.
@@ -254,19 +258,27 @@ export function FolderShelf<F extends DeskFolder>({
     setEditingId(null);
   };
 
+  const editRowClass = rows
+    ? "flex items-center gap-2.5 rounded-lg px-2 py-1.5"
+    : "flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5";
+  const editGlyphClass = rows ? "size-7 shrink-0" : "size-[40px]";
+
   return (
-    <div className="-ml-2 mb-7 flex flex-wrap gap-2" data-no-marquee>
+    <div
+      className={cn(rows ? "mb-4 flex flex-col" : "-ml-2 mb-7 flex flex-wrap gap-2")}
+      data-no-marquee
+    >
       {folders.map((f) => {
         const s = statOf(f.id);
         const isOver = over === f.id;
         if (editingId === f.id)
           return (
-            <div key={f.id} className="flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5">
-              <FolderGlyph className="size-[40px]" />
+            <div key={f.id} className={editRowClass}>
+              <FolderGlyph className={editGlyphClass} />
               <Input
                 autoFocus
                 value={draft}
-                className="h-6 w-full text-[11px]"
+                className={cn("h-6 text-[11px]", rows ? "flex-1" : "w-full")}
                 onChange={(e) => setDraft(e.target.value)}
                 onBlur={closeRename}
                 onKeyDown={(e) => {
@@ -278,34 +290,96 @@ export function FolderShelf<F extends DeskFolder>({
               />
             </div>
           );
-        const tile = (
+        const interact = {
+          onClick: () => onOpen(f.id),
+          onDoubleClick: () => {
+            setDraft(f.name);
+            setEditingId(f.id);
+          },
+          onDragOver: (e: React.DragEvent) => {
+            if (!accepts(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = dragTypes(e).includes(mime) ? "move" : "copy";
+            setOver(f.id);
+          },
+          onDragLeave: () => setOver((o) => (o === f.id ? null : o)),
+          onDrop: (e: React.DragEvent) => {
+            if (!accepts(e)) return;
+            e.preventDefault();
+            setOver(null);
+            // Files land in this folder; stop the drop bubbling to the page's
+            // catch-all so it isn't also imported at the current level.
+            if (onDropFiles && dragTypes(e).includes("Files") && e.dataTransfer.files.length) {
+              e.stopPropagation();
+              onDropFiles(e.dataTransfer.files, f.id);
+              return;
+            }
+            onDropIds(readDragIds(e, mime), f.id);
+          },
+        };
+        const menu = (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Folder options"
+                  className={cn(
+                    "size-6 opacity-0 group-hover/f:opacity-100 data-[state=open]:opacity-100",
+                    rows
+                      ? "shrink-0 text-muted-foreground hover:text-foreground"
+                      : "absolute top-1 right-1 bg-black/25 text-white hover:bg-black/40 hover:text-white"
+                  )}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              }
+            >
+              <MoreHorizontal className="size-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenuItem
+                onClick={() => {
+                  setDraft(f.name);
+                  setEditingId(f.id);
+                }}
+              >
+                <Pencil /> Rename
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onClick={() => void onDelete(f.id)}>
+                <Trash2 /> Delete folder
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+        const tile = rows ? (
+          <div
+            className={cn(
+              "group/f flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/60",
+              isOver && "bg-primary/10"
+            )}
+            {...interact}
+          >
+            <FolderGlyph
+              className={cn(
+                "size-7 shrink-0 drop-shadow-sm transition-transform",
+                isOver && "scale-105 brightness-110"
+              )}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium">{f.name}</div>
+              <div className="text-[10px] text-muted-foreground tabular-nums">
+                {s.count} {s.count === 1 ? "item" : "items"}
+                {s.size != null ? ` · ${formatBytes(s.size)}` : ""}
+              </div>
+            </div>
+            {menu}
+          </div>
+        ) : (
           <div
             className="group/f relative flex w-[92px] cursor-pointer flex-col items-start rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-muted/60"
-            onClick={() => onOpen(f.id)}
-            onDoubleClick={() => {
-              setDraft(f.name);
-              setEditingId(f.id);
-            }}
-            onDragOver={(e) => {
-              if (!accepts(e)) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = dragTypes(e).includes(mime) ? "move" : "copy";
-              setOver(f.id);
-            }}
-            onDragLeave={() => setOver((o) => (o === f.id ? null : o))}
-            onDrop={(e) => {
-              if (!accepts(e)) return;
-              e.preventDefault();
-              setOver(null);
-              // Files land in this folder; stop the drop bubbling to the page's
-              // catch-all so it isn't also imported at the current level.
-              if (onDropFiles && dragTypes(e).includes("Files") && e.dataTransfer.files.length) {
-                e.stopPropagation();
-                onDropFiles(e.dataTransfer.files, f.id);
-                return;
-              }
-              onDropIds(readDragIds(e, mime), f.id);
-            }}
+            {...interact}
           >
             <div className={cn("grid place-items-center transition-transform", isOver && "scale-105")}>
               <FolderGlyph className={cn("size-[40px] drop-shadow-sm", isOver && "brightness-110")} />
@@ -317,42 +391,14 @@ export function FolderShelf<F extends DeskFolder>({
               {s.count}
               {s.size != null ? ` · ${formatBytes(s.size)}` : ""}
             </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Folder options"
-                    className="absolute top-1 right-1 size-6 bg-black/25 text-white opacity-0 group-hover/f:opacity-100 hover:bg-black/40 hover:text-white data-[state=open]:opacity-100"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                }
-              >
-                <MoreHorizontal className="size-3.5" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setDraft(f.name);
-                    setEditingId(f.id);
-                  }}
-                >
-                  <Pencil /> Rename
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={() => void onDelete(f.id)}>
-                  <Trash2 /> Delete folder
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {menu}
           </div>
         );
         return onRefDrop ? (
           <RefDropZone
             key={f.id}
             onRef={(r) => onRefDrop(r, f.id)}
-            activeClassName="rounded-xl bg-primary/10"
+            activeClassName={cn("bg-primary/10", rows ? "rounded-lg" : "rounded-xl")}
           >
             {tile}
           </RefDropZone>
@@ -362,13 +408,13 @@ export function FolderShelf<F extends DeskFolder>({
       })}
 
       {creating && (
-        <div className="flex w-[92px] flex-col items-start gap-1 px-2 pt-1.5">
-          <FolderGlyph className="size-[40px] opacity-60" />
+        <div className={editRowClass}>
+          <FolderGlyph className={cn(editGlyphClass, "opacity-60")} />
           <Input
             autoFocus
             value={draft}
             placeholder="Name"
-            className="h-6 w-full text-[11px]"
+            className={cn("h-6 text-[11px]", rows ? "flex-1" : "w-full")}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={closeCreate}
             onKeyDown={(e) => {

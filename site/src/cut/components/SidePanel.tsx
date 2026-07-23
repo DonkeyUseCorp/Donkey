@@ -832,41 +832,10 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       ) : (
         <PanelHead title="Library" />
       )}
-      {shownTemplates.length > 0 && (
-        <div className="shrink-0 px-3.5 pb-3">
-          <div className="flex flex-col gap-1.5">
-            {shownTemplates.map((t) => (
-              <TemplateCard
-                key={t.id}
-                template={t}
-                mediaSrc={libraryMediaUrl}
-                dragScope="library"
-                onDragStartExtra={(e) => {
-                  e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify([t.id]));
-                  e.dataTransfer.effectAllowed = "copyMove";
-                }}
-                addTitle="Add to this project"
-                onAdd={() => void addTemplateToProject(projectId, t)}
-                onRename={(name) => void commitTemplateRename(t.id, name)}
-                onDelete={() => void removeTemplate(t.id)}
-                onRefDrop={(r) => {
-                  if (r.scope !== "project") return;
-                  const asset = useEditor.getState().assets.find((a) => a.id === r.id);
-                  if (!asset) return;
-                  void addAssetToLibraryTemplate(projectId, t.id, asset)
-                    .then((updated) =>
-                      setTemplates((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
-                    )
-                    .catch(() => void reload());
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
       {openFolder === null && folders.length > 0 ? (
         <div className="shrink-0 px-3.5">
           <FolderShelf
+            rows
             folders={folders}
             mime={LIBRARY_MOVE_MIME}
             statOf={(id) => ({
@@ -905,6 +874,38 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           />
         </div>
       ) : null}
+      {shownTemplates.length > 0 && (
+        <div className="shrink-0 px-3.5 pb-3">
+          <div className="flex flex-col gap-1.5">
+            {shownTemplates.map((t) => (
+              <TemplateCard
+                key={t.id}
+                template={t}
+                mediaSrc={libraryMediaUrl}
+                dragScope="library"
+                onDragStartExtra={(e) => {
+                  e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify([t.id]));
+                  e.dataTransfer.effectAllowed = "copyMove";
+                }}
+                addTitle="Add to this project"
+                onAdd={() => void addTemplateToProject(projectId, t)}
+                onRename={(name) => void commitTemplateRename(t.id, name)}
+                onDelete={() => void removeTemplate(t.id)}
+                onRefDrop={(r) => {
+                  if (r.scope !== "project") return;
+                  const asset = useEditor.getState().assets.find((a) => a.id === r.id);
+                  if (!asset) return;
+                  void addAssetToLibraryTemplate(projectId, t.id, asset)
+                    .then((updated) =>
+                      setTemplates((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+                    )
+                    .catch(() => void reload());
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {assets === null ? (
         <div className="grid flex-1 place-items-center text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
