@@ -168,6 +168,49 @@ const EDITOR_STATE = {
   view: { pxPerSec: 60, timelineH: 260, exportDialogOpen: false },
 };
 
+/** Two abutting track-0 clips for the effects cases (transition, animation,
+ * and look control). Keys mirror buildAiContext, like EDITOR_STATE. */
+const TWO_CLIP_STATE = {
+  ...EDITOR_STATE,
+  videoTrack: [
+    {
+      index: 0,
+      id: "c1",
+      asset: "beach.mp4",
+      start: 0,
+      len: 6,
+      in: 0,
+      out: 6,
+      sourceDuration: 20,
+      muted: false,
+      framing: "fit",
+      speed: 1,
+    },
+    {
+      index: 1,
+      id: "c2",
+      asset: "beach.mp4",
+      start: 6,
+      len: 6.5,
+      in: 6,
+      out: 12.5,
+      sourceDuration: 20,
+      muted: false,
+      framing: "fit",
+      speed: 1,
+    },
+  ],
+};
+
+/** The same pair already joined by a crossfade, for the edge-override case. */
+const CROSSFADED_STATE = {
+  ...TWO_CLIP_STATE,
+  videoTrack: [
+    { ...TWO_CLIP_STATE.videoTrack[0], transitionToNext: { style: "crossfade", seconds: 0.5 } },
+    { ...TWO_CLIP_STATE.videoTrack[1], start: 5.5 },
+  ],
+};
+
 /** A user-imported narration file for the scene-production cases. */
 const NARRATION_ASSET = { id: "a-au1", name: "narration.mp3", type: "audio", duration: 24 };
 
@@ -722,6 +765,89 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
       requiredTools: ["trim_clip"],
       maxToolCalls: 2,
       stubs: { trim_clip: { in: 0, out: 5, len: 5 } },
+    },
+    {
+      // Effects: a styled transition ask is one set_transition on the LEADING
+      // clip with the catalog style id (a skill read on the way is fine).
+      name: "transition-ask-styled",
+      input: () => [
+        userTurn("add a push down transition between the two clips", { state: TWO_CLIP_STATE }),
+      ],
+      reply: /push|transition/i,
+      requiredTools: ["set_transition"],
+      maxToolCalls: 3,
+      state: TWO_CLIP_STATE,
+      simulate: () => (name, args) => {
+        if (name !== "set_transition") return undefined;
+        if (args.clipId !== "c1")
+          throw new Error(`set_transition on ${args.clipId} — the transition belongs to the leading clip c1`);
+        if (args.style !== "pushdown")
+          throw new Error(`style ${args.style} — expected pushdown`);
+        return { id: "c1", transition: Number(args.seconds) || 0.5, style: "pushdown" };
+      },
+    },
+    {
+      // Directional comprehension: slide names are the motion direction, so
+      // "slide in from the left" moves rightward — slideright on c2's "in".
+      name: "slide-in-direction-correct",
+      input: () => [
+        userTurn("make the second clip slide in from the left", { state: TWO_CLIP_STATE }),
+      ],
+      reply: /slide/i,
+      requiredTools: ["set_animation"],
+      maxToolCalls: 3,
+      state: TWO_CLIP_STATE,
+      simulate: () => (name, args) => {
+        if (name !== "set_animation") return undefined;
+        if (args.clipId !== "c2" || args.which !== "in")
+          throw new Error(`set_animation ${args.clipId}/${args.which} — expected c2 "in"`);
+        if (args.style !== "slideright")
+          throw new Error(`style ${args.style} — "from the left" moves rightward (slideright)`);
+        return { id: "c2", which: "in", style: "slideright", seconds: Number(args.seconds) || 0.5 };
+      },
+    },
+    {
+      // Looks route to set_look with a catalog id — not a hand-rolled
+      // set_color_grade approximation.
+      name: "look-ask-single-tool",
+      input: () => [
+        userTurn("give the second clip a retro VHS look", { state: TWO_CLIP_STATE }),
+      ],
+      reply: /vhs|retro|look/i,
+      requiredTools: ["set_look"],
+      maxToolCalls: 3,
+      state: TWO_CLIP_STATE,
+      simulate: () => (name, args) => {
+        if (name !== "set_look") return undefined;
+        if (args.clipId !== "c2") throw new Error(`set_look on ${args.clipId} — expected c2`);
+        if (args.style !== "vhs") throw new Error(`style ${args.style} — expected vhs`);
+        return { id: "c2", look: "vhs", amount: 1 };
+      },
+    },
+    {
+      // Last pick wins per edge: swapping a crossfading joint for an entrance
+      // animation is a set_animation — the override clears the transition
+      // itself (an explicit set_transition 0 first is fine, not required).
+      // "Pop" exists only as an animation, so the routing is unambiguous
+      // (a wipe ask could legitimately become a wipe *transition* instead).
+      name: "animation-overrides-transition",
+      input: () => [
+        userTurn("get rid of the crossfade — make the second clip pop in instead", {
+          state: CROSSFADED_STATE,
+        }),
+      ],
+      reply: /pop/i,
+      requiredTools: ["set_animation"],
+      maxToolCalls: 4,
+      state: CROSSFADED_STATE,
+      simulate: () => (name, args) => {
+        if (name === "set_transition") return { id: "c1", transition: 0, style: "crossfade" };
+        if (name !== "set_animation") return undefined;
+        if (args.clipId !== "c2" || args.which !== "in")
+          throw new Error(`set_animation ${args.clipId}/${args.which} — expected c2 "in"`);
+        if (args.style !== "pop") throw new Error(`style ${args.style} — expected pop`);
+        return { id: "c2", which: "in", style: "pop", seconds: 0.5 };
+      },
     },
     {
       // Driving the editor on the user's behalf: with a transcript in the

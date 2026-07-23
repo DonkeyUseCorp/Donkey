@@ -23,7 +23,7 @@
  */
 
 import { useEditor } from "../store";
-import type { TransitionStyle } from "../types";
+import { TRANSITION_STYLE_IDS, type TransitionStyle } from "../types";
 import { docPlaceGenAudio, docPlaceGenClip, projectWriteMode, withProjectDoc } from "./docWriter";
 import type { AudioClipInfo, EditorBridge, TimelineInfo } from "./editor";
 
@@ -152,13 +152,16 @@ export class StoreEditorBridge implements EditorBridge {
   }
 
   async addTransition(clipId: string, style: string, durationFrames: number): Promise<void> {
+    const safeStyle: TransitionStyle = TRANSITION_STYLE_IDS.includes(style as TransitionStyle)
+      ? (style as TransitionStyle)
+      : "crossfade";
     if ((await this.mode()) === "store") {
-      useEditor.getState().setClipTransition(clipId, toSec(durationFrames), style as TransitionStyle);
+      useEditor.getState().setClipTransition(clipId, toSec(durationFrames), safeStyle);
       return;
     }
     await withProjectDoc(this.projectId, (doc) => {
       doc.clips = doc.clips.map((c) =>
-        c.id === clipId ? { ...c, transition: toSec(durationFrames), transitionStyle: style as TransitionStyle } : c
+        c.id === clipId ? { ...c, transition: toSec(durationFrames), transitionStyle: safeStyle } : c
       );
     });
   }

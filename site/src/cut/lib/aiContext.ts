@@ -4,24 +4,30 @@ import { chatOwner } from "./chatAssets";
 import { useGenerate } from "./generate";
 import { getClipSpans, overlayLayers, totalDuration, useEditor } from "./store";
 import { laneCues, subtitleLaneCount } from "./subtitles";
-import { isCrossStyle, rectOf, regionLabel, type ClipSpan, type VideoClip } from "./types";
+import { rectOf, regionLabel, type ClipSpan, type VideoClip } from "./types";
 
 const r = (n: number) => Math.round(n * 100) / 100;
 
-/** The transition this clip applies into the next one, clamped the same way the
- * preview and export are: a cross dissolve to its overlap, an edge fade/zoom to
- * the clip it ramps. Null when there's no transition or no next clip. */
+/** The transition this clip applies into the next one, clamped to the live
+ * overlap the same way the preview and export are. Null when there's no
+ * transition or no next clip. */
 function transitionToNext(sp: ClipSpan, index: number, spans: ClipSpan[]) {
   const seconds = sp.clip.transition ?? 0;
   if (seconds <= 0 || index >= spans.length - 1) return null;
   const style = sp.clip.transitionStyle ?? "crossfade";
-  const next = spans[index + 1];
-  const applied = isCrossStyle(style)
-    ? sp.transitionOut
-    : style === "fadein" || style === "zoomout"
-      ? Math.min(seconds, next.len) // edge style ramps the next clip's head
-      : Math.min(seconds, sp.len); // edge style ramps this clip's tail
-  return { style, seconds: r(applied) };
+  return { style, seconds: r(sp.transitionOut) };
+}
+
+/** The clip's own effects — entrance/exit animations and filter look — in
+ * the shape set_animation/set_look take. */
+function clipEffects(clip: VideoClip) {
+  return {
+    ...(clip.animIn ? { animIn: { style: clip.animIn.style, seconds: r(clip.animIn.seconds) } } : {}),
+    ...(clip.animOut
+      ? { animOut: { style: clip.animOut.style, seconds: r(clip.animOut.seconds) } }
+      : {}),
+    ...(clip.look ? { look: clip.look, lookAmount: r(clip.lookAmount ?? 1) } : {}),
+  };
 }
 
 /**
@@ -182,6 +188,7 @@ export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | nu
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),
       ...(sp.clip.grade ? { colorGrade: sp.clip.grade } : {}),
+      ...clipEffects(sp.clip),
     })),
     // Video layers composited over track 0 in track order (the topmost
     // full-frame clip covers the rest). Each track carries its own
@@ -195,6 +202,7 @@ export function buildAiContext(opts?: { fullCues?: boolean; chatId?: string | nu
           const t = transitionToNext(sp, i, trackSpans);
           return t ? { transitionToNext: t } : {};
         })(),
+        ...clipEffects(sp.clip),
       }));
     }),
     soundtrack: s.audioClips.map((a) => ({ id: a.id, ...describeAudio(a, assetById) })),

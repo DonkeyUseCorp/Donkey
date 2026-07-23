@@ -35,11 +35,15 @@ import { stockAssetInDoc } from "./genvideo/docWriter";
 import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
 import { DUCK_DEFAULT, generateSubtitlesReadout } from "./voiceover";
 import {
+  ANIM_DEFAULT_SECONDS,
+  ANIM_STYLE_IDS,
   FRAME,
   IMAGE_CLIP_SECONDS,
   LAYOUTS,
+  LOOK_IDS,
   MAX_SUBTITLE_LANES,
   mediaUrl,
+  overlayAnimStyle,
   rectOf,
   regionLabel,
   SPEED_FLOOR,
@@ -1538,6 +1542,40 @@ export async function runAiTool(
       s.setClipTransition(clip.id, input.seconds, style);
       const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
       return { id: next.id, transition: next.transition ?? 0, style: next.transitionStyle ?? "crossfade" };
+    }
+
+    case "set_animation": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      const which = input.which === "in" || input.which === "out" ? input.which : null;
+      if (!which) throw new ToolError('which must be "in" or "out".');
+      if (input.style === "none") {
+        s.setClipAnim(clip.id, which, null);
+        return { id: clip.id, which, style: "none" };
+      }
+      const style = ANIM_STYLE_IDS.find((x) => x === input.style);
+      if (!style)
+        throw new ToolError(`Unknown style. Use one of: ${ANIM_STYLE_IDS.join(", ")}, none.`);
+      if (clip.track > 0 && overlayAnimStyle(style) !== style)
+        throw new ToolError("Upper-track clips animate with fade or zoom only.");
+      const seconds = isNum(input.seconds) ? input.seconds : ANIM_DEFAULT_SECONDS;
+      s.setClipAnim(clip.id, which, { style, seconds });
+      const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
+      const anim = which === "in" ? next.animIn : next.animOut;
+      return { id: next.id, which, style: anim?.style ?? "none", seconds: anim?.seconds ?? 0 };
+    }
+
+    case "set_look": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      if (input.style === "none") {
+        s.setClipLook(clip.id, null);
+        return { id: clip.id, look: "none" };
+      }
+      const style = LOOK_IDS.find((x) => x === input.style);
+      if (!style)
+        throw new ToolError(`Unknown look. Use one of: ${LOOK_IDS.join(", ")}, none.`);
+      s.setClipLook(clip.id, style, isNum(input.amount) ? input.amount : undefined);
+      const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
+      return { id: next.id, look: next.look ?? "none", amount: next.lookAmount ?? 1 };
     }
 
     case "merge_cue": {

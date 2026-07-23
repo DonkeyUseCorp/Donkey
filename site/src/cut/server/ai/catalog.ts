@@ -7,6 +7,8 @@
  * the exact same state the user sees.
  */
 
+import { ANIM_STYLE_IDS, LOOK_IDS, TRANSITION_STYLE_IDS } from "../../lib/types";
+
 export interface AiToolDef {
   name: string;
   description: string;
@@ -657,16 +659,45 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "set_transition",
     description:
-      "Set the transition from this clip into the next clip on its track (any video track), in seconds (0 clears it, max 2). crossfade/crosszoom overlap the two clips so the cut shortens; fadeout/zoomin ramp the outgoing tail and fadein/zoomout the incoming head around a hard cut. On upper tracks fades are alpha fades (the tracks beneath show through). Only valid when a next same-track clip exists.",
+      "Set the transition from this clip into the next clip on its track (any video track), in seconds (0 clears it, max 2). Every style overlaps the two clips, so the cut shortens by the duration. On upper tracks every style blends as an alpha dissolve (the tracks beneath show through). Only valid when a next same-track clip exists. Each edge holds one effect: setting a transition clears the animations adjacent to its joint (and set_animation on that edge replaces the transition). Read the transitions-and-fades skill before styling cuts.",
     inputSchema: obj({
       clipId: str("Video clip id (the clip the transition starts from)"),
       seconds: num("Transition length in seconds, 0–2 (0 = hard cut)"),
       style: {
         type: "string",
-        enum: ["crossfade", "crosszoom", "zoomin", "zoomout", "fadein", "fadeout"],
+        enum: [...TRANSITION_STYLE_IDS],
         description: "Transition look (default crossfade)",
       },
     }, ["clipId", "seconds"]),
+  },
+  {
+    name: "set_animation",
+    description:
+      "Animate one clip's own entrance (which:'in') or exit (which:'out'): fade, zoom, pop, or a slide named by its motion direction. style 'none' clears. Track-0 clips take every style; upper-track clips only fade and zoom. Each edge holds one effect, last pick wins: animating an edge a transition owns replaces that transition (the pair returns to a hard cut), and setting a transition clears the animations adjacent to its joint. At an abutting cut the animation plays over the neighbor's held frame; at the timeline's ends and across gaps it plays against black.",
+    inputSchema: obj({
+      clipId: str("Video clip id"),
+      which: { type: "string", enum: ["in", "out"], description: "Entrance or exit" },
+      style: {
+        type: "string",
+        enum: [...ANIM_STYLE_IDS, "none"],
+        description: "Animation style, or 'none' to clear",
+      },
+      seconds: num("Ramp length in seconds, 0.1–2 (default 0.5)"),
+    }, ["clipId", "which", "style"]),
+  },
+  {
+    name: "set_look",
+    description:
+      "Apply a preset filter look to a video clip's picture (any track; stills too): vintage, vhs, horror (analogue horror), halation (highlight bloom), tech, noir, grain, pastel, blockbuster (teal-orange), dreamy. amount 0.05–1 scales the strength (default 1); style 'none' clears. Composes with set_color_grade — the look is the base, the grade rides on top.",
+    inputSchema: obj({
+      clipId: str("Video clip id"),
+      style: {
+        type: "string",
+        enum: [...LOOK_IDS, "none"],
+        description: "Look id, or 'none' to clear",
+      },
+      amount: num("Strength 0.05–1 (default 1)"),
+    }, ["clipId", "style"]),
   },
   {
     name: "merge_cue",
@@ -727,7 +758,7 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 - A clip's timeline length is (out-in)/speed; total duration runs to the last clip's end, gaps included, minus cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
 - set_speed sets a clip's playback rate; it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
-- set_transition joins a clip into the next one (0–2s, six styles) — read the transitions-and-fades skill before styling cuts. Splitting or deleting clears the affected transition.
+- set_transition joins a clip into the next one (0–2s, 17 styles); set_animation animates one clip's own entrance/exit; set_look grades its picture with a preset filter — read the transitions-and-fades skill before styling cuts. Splitting or deleting clears the affected transition.
 - split_at cuts the track-0 clip under that time into two clips at the exact frame. With a soundtrack or overlay clip selected it splits that instead.
 - The user can multi-select (⌘/⇧-click) and delete several items at once; a hover chip on each video clip toggles its own audio.
 - detach_audio lifts a video clip's sound to the soundtrack track (and mutes the clip) so audio can be cut independently of video.
@@ -759,19 +790,18 @@ Time math (get this right):
 
 Cutting dead air well: leave ~0.2s of breathing room around speech; prefer split_at + delete_item, then place_clip to close the gap (a beat of black may be wanted — ask the cut, not the tool); trim_clip only tightens a clip's edges.`,
 
-  "transitions-and-fades": `# Transitions & fades
-Three fade-like features exist; route the ask to the right one:
-- set_transition: a styled join between one video clip and the next.
-- set_project_fade: the whole video fades in from black at the start and/or out to black at the end — picture and full mix (titles, captions, soundtrack). Survives clip reordering. For "fade in the video", "fade to black at the end", use this. Shown as "Fade in"/"Fade out" on the first/last clip's Inspector panel.
+  "transitions-and-fades": `# Transitions, animations, looks & fades
+Route the ask to the right feature:
+- set_transition: a styled join between one video clip and the next. Every style overlaps the clips, so the cut shortens by the duration.
+- set_animation: one clip's own entrance ("in") or exit ("out") — the clip fades/zooms/pops/slides on its own edge. Never moves neighbors. For "fade this clip in", "make it slide in", use this. A wipe is a transition, not an animation.
+- set_look: a preset filter over one clip's whole picture (vintage, vhs, horror, halation, tech, noir, grain, pastel, blockbuster, dreamy) with an amount knob.
+- set_project_fade: the whole video fades in from black at the start and/or out to black at the end — picture and full mix (titles, captions, soundtrack). Survives clip reordering. For "fade in the video", "fade to black at the end", use this.
 - update_audio fadeIn/fadeOut: audio-only ramps on one soundtrack clip ("fade the music out").
 
-set_transition(clipId, seconds, style): clipId is the leading clip of the joint; 0 clears, max 2s. Styles:
-- crossfade (default): A blends into B. Overlaps the clips, so the cut shortens by the duration.
-- crosszoom: the blend plus a zoom punch — A pushes in (1→1.18×) while B settles back. Also overlaps.
-- zoomin: A's tail zooms in across a hard cut (duration unchanged). zoomout: B's head settles from zoomed to normal.
-- fadeout: A's tail fades to black (its audio too), then a hard cut. fadein: B's head fades up from black.
-Picking for a vibe: "smooth/dissolve" → crossfade; "punchy/energetic/zoom" → crosszoom; "dramatic pause/scene change" → fadeout 0.5–0.8s; between clips 0.4–0.8s reads well, 1s+ is slow and cuts total duration for cross styles.
-UI: select a clip → Inspector "Transition" (style) + "Length"; a blue badge marks each styled joint on the timeline. Preview and export render the same look.`,
+set_transition styles (clipId = the leading clip; 0 clears, max 2s): crossfade blends; crosszoom adds a zoom punch; dipblack/dipwhite dip through a solid color; blur defocuses through the cut; pushleft/right/up/down shove the old frame out; wipeleft/right/up/down reveal with a hard traveling edge; circleopen/close and splitopen/close are shape reveals. Directional names describe the motion.
+set_animation styles: fade (audio follows), zoom, pop, slideleft/right/up/down — the slide names are the motion direction (slideleft enters from the right edge moving left, or exits off the left). Each edge holds one effect and the last pick wins: set_animation on a transitioned edge replaces that transition, set_transition clears the animations adjacent to its joint.
+Picking for a vibe: "smooth" → crossfade; "punchy/energetic" → crosszoom or a push; "dramatic scene change" → dipblack 0.5–0.8s; "dreamy" → blur (or the dreamy look); "retro" → vhs or vintage look. Between clips 0.4–0.8s reads well; 1s+ is slow and cuts total duration.
+UI: select a clip → Inspector "Effects" opens the panel (Transition / In / Out / Looks tabs); a blue badge marks each styled joint on the timeline. Preview and export render the same treatment.`,
 
   "titles": `# Titles (text overlays)
 Each overlay: text, start/end (seconds visible), x/y center (fractions 0..1 of the project frame), size (frame px; the design short side is 1080), font (sf=SF Pro, serif=New York, rounded, mono, impact), weight (400/700), color (any CSS color), shadow (bool), plate (translucent dark plate behind the text).
