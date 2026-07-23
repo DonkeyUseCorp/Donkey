@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
+import { track } from "@/lib/analytics";
 
 export function Hero() {
   return (
@@ -21,7 +22,12 @@ export function Hero() {
         your apps to finish it.
       </p>
       <div className="mt-9 flex flex-wrap gap-3">
-        <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
+        <PillButton
+          href={DONKEY_INSTALL_URL}
+          onClick={() => track("home_download_clicked", { location: "hero" })}
+          variant="primary"
+          size="lg"
+        >
           Download for Mac <ArrowRight size={18} />
         </PillButton>
       </div>

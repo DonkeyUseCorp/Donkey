@@ -5,6 +5,7 @@ import { useEffect, type ReactNode } from "react";
 import { signInHrefFor } from "@/app/_components/landing/useAppEntryHref";
 import { setEngineUser } from "@/cut/lib/api";
 import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
+import { useAppLoaded } from "@/lib/analytics";
 import { authClient } from "@/lib/auth-client";
 import { useCutBase } from "@/cut/lib/nav";
 
@@ -29,6 +30,8 @@ export function RequireSession({ children }: { children: ReactNode }) {
   const base = useCutBase();
 
   const signedOut = !isPending && !session;
+
+  useAppLoaded("cut", session?.user);
 
   useEffect(() => {
     if (!signedOut) return;

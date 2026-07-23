@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/cut/lib/api";
+import { track } from "@/lib/analytics";
 import { NavUser } from "@/cut/components/NavUser";
 import { homeHref, projectHref, tabForPath, useCutBase, type CutTab } from "@/cut/lib/nav";
 import type { ProjectSummary } from "@/cut/lib/types";
@@ -41,6 +42,7 @@ export function AppSidebar() {
         body: JSON.stringify({ name: name.trim() || "Untitled" }),
       });
       const project = (await res.json()) as ProjectSummary;
+      track("project_created", { source: "sidebar" });
       router.push(projectHref(base, project.id, tabForPath(pathname)));
     } finally {
       setBusy(false);

@@ -155,17 +155,17 @@ export function PillButton({
     ...variants[variant],
   };
 
-  if (href && !disabled && !onClick) {
+  if (href && !disabled) {
     if (isInternalHref(href) && !isAuthPassthroughHref(href)) {
       return (
-        <Link aria-label={ariaLabel} href={href} style={sharedStyle}>
+        <Link aria-label={ariaLabel} href={href} onClick={onClick} style={sharedStyle}>
           {children}
         </Link>
       );
     }
 
     return (
-      <a aria-label={ariaLabel} href={href} style={sharedStyle}>
+      <a aria-label={ariaLabel} href={href} onClick={onClick} style={sharedStyle}>
         {children}
       </a>
     );

@@ -16,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { track } from "@/lib/analytics";
 import { formatUsd } from "@/lib/credits/format-usd";
 
 export function ProCard() {
@@ -78,11 +79,12 @@ export function ProCard() {
         {isActive ? (
           <Button
             disabled={portal.isPending}
-            onClick={() =>
+            onClick={() => {
+              track("billing_portal_opened");
               portal.mutate(undefined, {
                 onSuccess: (result) => window.location.assign(result.url),
-              })
-            }
+              });
+            }}
             variant="secondary"
           >
             {portal.isPending ? "Opening…" : "Manage billing"}
@@ -90,11 +92,12 @@ export function ProCard() {
         ) : (
           <Button
             disabled={checkout.isPending}
-            onClick={() =>
+            onClick={() => {
+              track("pro_checkout_started");
               checkout.mutate("pro", {
                 onSuccess: (result) => window.location.assign(result.url),
-              })
-            }
+              });
+            }}
           >
             {checkout.isPending ? "Starting…" : "Subscribe to Pro"}
           </Button>

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader2, Plug, ShieldX } from "lucide-react";
 
 import { DONKEY_DOWNLOAD_URL } from "@/app/_components/landing/data";
+import { track } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import {
   ENGINE_LOST_EVENT,
@@ -196,6 +197,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
                 <div className="flex items-center gap-2">
                   <Button
                     onClick={() => {
+                      track("app_install_clicked", { source: "connect_gate_button" });
                       window.location.href = DONKEY_DOWNLOAD_URL;
                     }}
                   >
@@ -215,6 +217,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
                   <a
                     className="font-medium text-foreground underline underline-offset-2"
                     href={DONKEY_DOWNLOAD_URL}
+                    onClick={() => track("app_install_clicked", { source: "connect_gate_link" })}
                   >
                     Install it for Mac
                   </a>

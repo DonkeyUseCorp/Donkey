@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { track } from "@/lib/analytics";
 import { formatUsd } from "@/lib/credits/format-usd";
 import {
   creditTopUpDefaultDollars,
@@ -34,6 +35,7 @@ export function CreditsCard() {
   const [customAmount, setCustomAmount] = useState("");
 
   const startCheckout = (amountDollars: number) => {
+    track("credits_checkout_started", { amountDollars });
     checkout.mutate(amountDollars, {
       onSuccess: (result) => window.location.assign(result.url),
     });
@@ -136,6 +138,7 @@ function AutoReloadSection({ onNeedsCard }: { onNeedsCard: () => void }) {
     amountDollars: number;
   }) => {
     setNeedsCard(false);
+    track("credit_auto_reload_saved", next);
     update.mutate(next, {
       onError: (error) => {
         if (error instanceof ApiError && error.code === "no_payment_method") {

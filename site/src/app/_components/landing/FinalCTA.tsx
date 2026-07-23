@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
+import { track } from "@/lib/analytics";
 
 export function FinalCTA() {
   return (
@@ -24,7 +25,12 @@ export function FinalCTA() {
             Installs in 90 seconds.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
+            <PillButton
+              href={DONKEY_INSTALL_URL}
+              onClick={() => track("home_download_clicked", { location: "final_cta" })}
+              variant="primary"
+              size="lg"
+            >
               Download for Mac <ArrowRight size={18} />
             </PillButton>
           </div>

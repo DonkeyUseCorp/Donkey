@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { apiFetch, apiUrl, engineLost } from "@/cut/lib/api";
+import { track } from "@/lib/analytics";
 import { clearProjectThreads } from "@/cut/lib/chatThreads";
 import { useGenerate } from "@/cut/lib/generate";
 import { useGenScene } from "@/cut/lib/genScene";
@@ -132,6 +133,7 @@ export function ProjectsHome() {
     if (res.ok) {
       const f = (await res.json()) as ProjectFolder;
       setFolders((prev) => [...prev, f]);
+      track("folder_created");
     }
   };
 
@@ -192,6 +194,7 @@ export function ProjectsHome() {
         body: JSON.stringify({ name: name.trim() || "Untitled", folderId: openFolder }),
       });
       const project = (await res.json()) as ProjectSummary;
+      track("project_created", { source: "projects_home" });
       router.push(projectHref(base, project.id, "projects", openFolder));
     } finally {
       setBusy(false);
@@ -207,6 +210,7 @@ export function ProjectsHome() {
       body: JSON.stringify({ name: "Untitled", folderId }),
     });
     const project = (await res.json()) as ProjectSummary;
+    track("project_created", { source: "projects_home" });
     router.push(projectHref(base, project.id, "projects", folderId));
   };
 
@@ -220,6 +224,7 @@ export function ProjectsHome() {
       for (const file of media) {
         try {
           await createProjectFromFile(file, folderId);
+          track("project_created", { source: "file_import" });
         } catch {
           // A file the engine can't ingest is skipped; the rest still land.
         } finally {
