@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { SectionTitle } from "@/cut/components/SectionTitle";
+import { Slider } from "@/components/ui/slider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,7 +58,7 @@ import {
   type LibraryFolder,
 } from "@/cut/lib/library";
 import { revealMedia } from "@/cut/lib/media";
-import { mediaUrl, type LibraryTemplate } from "@/cut/lib/types";
+import { mediaUrl, TRANSITION_MAX, type LibraryTemplate } from "@/cut/lib/types";
 import { genPulseOverlay, isGenTab, useGenNotify, useGenPulse, useWatchGenTab } from "@/cut/lib/genNotify";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
@@ -978,11 +979,41 @@ function CopyChip({ text, label }: { text: string; label: string }) {
   );
 }
 
+/** Whole-video fade slider (project-level: veils picture, titles, captions,
+ * and the mix at the cut's start or end). Lives here — the only
+ * project-scoped panel — since per-clip fades moved into clip Effects. */
+function ProjectFadeRow({ label, value, onChange }: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-[12px] text-muted-foreground">
+      {label}
+      <span className="flex items-center gap-2">
+        <Slider
+          className={`project-${label.toLowerCase().replace(" ", "-")} data-horizontal:w-28`}
+          min={0}
+          max={TRANSITION_MAX}
+          step={0.1}
+          value={value}
+          onValueChange={(v) => onChange(Number(v))}
+        />
+        <span className="w-9 text-right font-mono text-[11.5px]">
+          {value < 0.05 ? "Off" : `${value.toFixed(1)}s`}
+        </span>
+      </span>
+    </label>
+  );
+}
+
 function PublishPanel() {
   const publish = useEditor((s) => s.publish);
   const setPublish = useEditor((s) => s.setPublish);
   const notes = useEditor((s) => s.notes);
   const setNotes = useEditor((s) => s.setNotes);
+  const fadeIn = useEditor((s) => s.fadeIn);
+  const fadeOut = useEditor((s) => s.fadeOut);
   const tagsLine = normalizeTags(publish.tags);
   const combined = [publish.caption.trim(), tagsLine].filter(Boolean).join("\n\n");
   const count = combined.length;
@@ -992,6 +1023,20 @@ function PublishPanel() {
     <>
       <PanelHead title="Details" />
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-3.5 pb-4">
+        <div className="flex flex-col gap-1.5">
+          <SectionTitle>Video</SectionTitle>
+          <ProjectFadeRow
+            label="Fade in"
+            value={fadeIn}
+            onChange={(v) => useEditor.getState().setProjectFade({ fadeIn: v })}
+          />
+          <ProjectFadeRow
+            label="Fade out"
+            value={fadeOut}
+            onChange={(v) => useEditor.getState().setProjectFade({ fadeOut: v })}
+          />
+        </div>
+
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
             <SectionTitle>Caption</SectionTitle>

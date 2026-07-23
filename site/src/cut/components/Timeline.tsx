@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowDownToLine, AudioLines, Blend, Check, Clapperboard, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowLeftToLine, ArrowRight, ArrowRightToLine, ArrowUp, ArrowUpToLine, AudioLines, Blend, Check, Circle, Clapperboard, Droplets, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, FoldHorizontal, Loader2, Moon, Pause, Play, Scissors, SkipBack, Sun, Target, Trash2, Type, UnfoldHorizontal, Volume2, VolumeX, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -46,10 +46,21 @@ import { cn } from "@/lib/utils";
 const TRANSITION_ICONS: Record<TransitionStyle, LucideIcon> = {
   crossfade: Blend,
   crosszoom: Expand,
-  zoomin: ZoomIn,
-  zoomout: ZoomOut,
-  fadein: Sunrise,
-  fadeout: Sunset,
+  dipblack: Moon,
+  dipwhite: Sun,
+  blur: Droplets,
+  pushleft: ArrowLeft,
+  pushright: ArrowRight,
+  pushup: ArrowUp,
+  pushdown: ArrowDown,
+  wipeleft: ArrowLeftToLine,
+  wiperight: ArrowRightToLine,
+  wipeup: ArrowUpToLine,
+  wipedown: ArrowDownToLine,
+  circleopen: Circle,
+  circleclose: Target,
+  splitopen: UnfoldHorizontal,
+  splitclose: FoldHorizontal,
 };
 
 const VIDEO_H = 64;

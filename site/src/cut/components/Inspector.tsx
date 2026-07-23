@@ -20,7 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
-import { track0Clips, clipWindow, useEditor, type EditorState } from "@/cut/lib/store";
+import { clipWindow, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import {
   parseNumberInput,
@@ -43,17 +43,14 @@ import {
   SPEED_FLOOR,
   SPEED_MAX,
   SPEED_MIN,
-  TRANSITION_MAX,
-  TRANSITION_STYLE_IDS,
-  TRANSITION_STYLE_LABELS,
   type AudioClip,
   type ColorGrade,
   type FrameRect,
   type LayoutId,
   type TextOverlay,
-  type TransitionStyle,
   type VideoClip,
 } from "@/cut/lib/types";
+import { ClipEffectsPanel, effectsSummary } from "@/cut/components/ClipEffectsPanel";
 import { autoGradeFromImageData, isNeutralGrade, normalizeGrade } from "@/cut/lib/colorGrade";
 import { getPreviewCanvas, sampleClipFrameData } from "@/cut/lib/previewCanvas";
 import { cn } from "@/lib/utils";
@@ -230,14 +227,20 @@ const Value = ({ children, className }: { children: React.ReactNode; className?:
 /** Matches the store's MIN_LEN: the shortest a trim can leave a clip. */
 const MIN_TRIM = 0.1;
 
-/** Sits at the right end of a row once its value has moved off the default. */
-function ResetButton({ title, onClick }: { title: string; onClick: () => void }) {
+/** Sits at the right end of a row, visible once its value has moved off the
+ * default. Always occupies its slot so the row doesn't shift when it appears. */
+function ResetButton({ title, show, onClick }: { title: string; show: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       title={title}
       aria-label={title}
-      className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:text-foreground"
+      aria-hidden={!show}
+      tabIndex={show ? undefined : -1}
+      className={cn(
+        "grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:text-foreground",
+        !show && "invisible",
+      )}
       onClick={onClick}
     >
       <RotateCcw className="size-3" />
@@ -246,7 +249,6 @@ function ResetButton({ title, onClick }: { title: string; onClick: () => void })
 }
 
 const formatSpeed = (v: number) => `${v.toFixed(2)}×`;
-const formatFade = (v: number) => (v < 0.05 ? "Off" : `${v.toFixed(1)}s`);
 const formatPercent = (v: number) => `${Math.round(v * 100)}%`;
 
 /** One-click frame layouts (Full / Top / Bottom / Left / Right / PiP) shared by
@@ -297,32 +299,26 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const hasNext = useEditor((s) =>
     s.clips.some((c) => c.track === clip.track && c.start > clip.start + 1e-6)
   );
-  // The whole-video fades are project-level but live on the clips that show
-  // them: fade in on the first clip's panel, fade out on the last clip's.
-  const isFirst = useEditor((s) => track0Clips(s.clips)[0]?.id === clip.id);
-  const isLast = useEditor((s) => {
-    const row = track0Clips(s.clips);
-    return row[row.length - 1]?.id === clip.id;
-  });
-  const fadeIn = useEditor((s) => s.fadeIn);
-  const fadeOut = useEditor((s) => s.fadeOut);
   const [speedDraft, setSpeedDraft] = useState<number | null>(null);
-  const [xfadeDraft, setXfadeDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
-  // The panel can push into the color-grade subview. The subview remembers
-  // which clip opened it, so selecting another clip lands back on the main
-  // view without an effect.
+  // The panel can push into the color-grade or effects subview. Each subview
+  // remembers which clip opened it, so selecting another clip lands back on
+  // the main view without an effect.
   const [colorFor, setColorFor] = useState<string | null>(null);
-  const view = colorFor === clip.id ? "color" : "main";
+  const [effectsFor, setEffectsFor] = useState<string | null>(null);
+  const view =
+    colorFor === clip.id ? "color" : effectsFor === clip.id ? "effects" : "main";
   const volume = volumeDraft ?? clip.volume ?? 1;
   const speed = speedDraft ?? clip.speed ?? 1;
-  const xfade = xfadeDraft ?? clip.transition ?? 0;
   const speedLen = (clip.out - clip.in) / (speed > 0 ? speed : 1);
   // Typing can trim out to the source's end but no further; an image has no
   // intrinsic duration, so its clip can be any length.
   const maxOut = asset && asset.type !== "image" ? asset.duration : Infinity;
   if (view === "color") {
     return <ColorPanel clip={clip} onBack={() => setColorFor(null)} />;
+  }
+  if (view === "effects") {
+    return <ClipEffectsPanel clip={clip} hasNext={hasNext} onBack={() => setEffectsFor(null)} />;
   }
   return (
     <>
@@ -358,12 +354,11 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             parse={parseTimeInput}
             onCommit={(v) => useEditor.getState().setClipTrim(clip.id, clip.in, v)}
           />
-          {Number.isFinite(maxOut) && (clip.in > 1e-3 || clip.out < maxOut - 1e-3) && (
-            <ResetButton
-              title="Reset trim"
-              onClick={() => useEditor.getState().setClipTrim(clip.id, 0, maxOut)}
-            />
-          )}
+          <ResetButton
+            title="Reset trim"
+            show={Number.isFinite(maxOut) && (clip.in > 1e-3 || clip.out < maxOut - 1e-3)}
+            onClick={() => useEditor.getState().setClipTrim(clip.id, 0, maxOut)}
+          />
         </Row>
         <Row label="Starts at">
           <ScrubValue
@@ -409,15 +404,14 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               setSpeedDraft(null);
             }}
           />
-          {Math.abs(speed - 1) > 1e-4 && (
-            <ResetButton
-              title="Reset speed"
-              onClick={() => {
-                useEditor.getState().setClipSpeed(clip.id, 1);
-                setSpeedDraft(null);
-              }}
-            />
-          )}
+          <ResetButton
+            title="Reset speed"
+            show={Math.abs(speed - 1) > 1e-4}
+            onClick={() => {
+              useEditor.getState().setClipSpeed(clip.id, 1);
+              setSpeedDraft(null);
+            }}
+          />
         </Row>
         <Row label="Color">
           <button
@@ -435,111 +429,16 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             <ChevronRight className="size-3.5" />
           </button>
         </Row>
-        {isFirst && (
-          <Row label="Fade in">
-            <Slider
-              className="project-fade-in data-horizontal:w-24"
-              min={0}
-              max={TRANSITION_MAX}
-              step={0.1}
-              value={fadeIn}
-              onValueChange={(v) => useEditor.getState().setProjectFade({ fadeIn: Number(v) })}
-            />
-            <ScrubValue
-              label="Fade in"
-              className="w-9 text-muted-foreground"
-              value={fadeIn}
-              min={0}
-              max={TRANSITION_MAX}
-              step={0.1}
-              format={formatFade}
-              parse={parseSecondsInput}
-              onScrub={(v) => useEditor.getState().setProjectFade({ fadeIn: v })}
-              onCommit={(v) => useEditor.getState().setProjectFade({ fadeIn: v })}
-            />
-          </Row>
-        )}
-        {isLast && (
-          <Row label="Fade out">
-            <Slider
-              className="project-fade-out data-horizontal:w-24"
-              min={0}
-              max={TRANSITION_MAX}
-              step={0.1}
-              value={fadeOut}
-              onValueChange={(v) => useEditor.getState().setProjectFade({ fadeOut: Number(v) })}
-            />
-            <ScrubValue
-              label="Fade out"
-              className="w-9 text-muted-foreground"
-              value={fadeOut}
-              min={0}
-              max={TRANSITION_MAX}
-              step={0.1}
-              format={formatFade}
-              parse={parseSecondsInput}
-              onScrub={(v) => useEditor.getState().setProjectFade({ fadeOut: v })}
-              onCommit={(v) => useEditor.getState().setProjectFade({ fadeOut: v })}
-            />
-          </Row>
-        )}
-        {hasNext && (
-          <>
-            <Row label="Transition">
-              <Select
-                value={clip.transitionStyle ?? "crossfade"}
-                items={TRANSITION_STYLE_LABELS}
-                onValueChange={(v) =>
-                  // Picking a style with the length still at zero turns the
-                  // transition on at a sensible default.
-                  useEditor
-                    .getState()
-                    .setClipTransition(clip.id, xfade >= 0.05 ? xfade : 0.5, v as TransitionStyle)
-                }
-              >
-                <SelectTrigger className="clip-transition-style h-7 w-[8.5rem] text-[12px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRANSITION_STYLE_IDS.map((id) => (
-                    <SelectItem key={id} value={id} className="text-[12px]">
-                      {TRANSITION_STYLE_LABELS[id]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Row>
-            <Row label="Length">
-              <Slider
-                className="clip-xfade data-horizontal:w-24"
-                min={0}
-                max={TRANSITION_MAX}
-                step={0.1}
-                value={xfade}
-                onValueChange={(v) => setXfadeDraft(Number(v))}
-                onValueCommitted={() => {
-                  if (xfadeDraft != null) useEditor.getState().setClipTransition(clip.id, xfadeDraft);
-                  setXfadeDraft(null);
-                }}
-              />
-              <ScrubValue
-                label="Transition length"
-                className="w-9 text-muted-foreground"
-                value={xfade}
-                min={0}
-                max={TRANSITION_MAX}
-                step={0.1}
-                format={formatFade}
-                parse={parseSecondsInput}
-                onScrub={setXfadeDraft}
-                onCommit={(v) => {
-                  useEditor.getState().setClipTransition(clip.id, v);
-                  setXfadeDraft(null);
-                }}
-              />
-            </Row>
-          </>
-        )}
+        <Row label="Effects">
+          <button
+            type="button"
+            className="clip-effects flex h-8 w-[8.5rem] items-center justify-between rounded-md border border-input px-2.5 text-[11.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setEffectsFor(clip.id)}
+          >
+            <span className="truncate">{effectsSummary(clip, hasNext)}</span>
+            <ChevronRight className="size-3.5 shrink-0" />
+          </button>
+        </Row>
 
         {/* Audio */}
         <div className="my-1.5 h-px bg-border" />
@@ -711,15 +610,14 @@ function ColorPanel({ clip, onBack }: { clip: VideoClip; onBack: () => void }) {
                   ck.end();
                 }}
               />
-              {value !== 0 && (
-                <ResetButton
-                  title={`Reset ${f.label.toLowerCase()}`}
-                  onClick={() => {
-                    setField(f.key, 0);
-                    ck.end();
-                  }}
-                />
-              )}
+              <ResetButton
+                title={`Reset ${f.label.toLowerCase()}`}
+                show={value !== 0}
+                onClick={() => {
+                  setField(f.key, 0);
+                  ck.end();
+                }}
+              />
             </Row>
           );
         })}
@@ -959,12 +857,11 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             parse={parseTimeInput}
             onCommit={(v) => commitAudio({ out: v })}
           />
-          {asset && (clip.in > 1e-3 || clip.out < asset.duration - 1e-3) && (
-            <ResetButton
-              title="Reset trim"
-              onClick={() => commitAudio({ in: 0, out: asset.duration })}
-            />
-          )}
+          <ResetButton
+            title="Reset trim"
+            show={!!asset && (clip.in > 1e-3 || clip.out < asset.duration - 1e-3)}
+            onClick={() => asset && commitAudio({ in: 0, out: asset.duration })}
+          />
         </Row>
         <Row label="Starts at">
           <ScrubValue
@@ -1004,9 +901,11 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onScrub={(v) => setAudio({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
             onCommit={(v) => commitAudio({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
           />
-          {Math.abs(speed - 1) > 1e-4 && (
-            <ResetButton title="Reset speed" onClick={() => commitAudio({ speed: undefined })} />
-          )}
+          <ResetButton
+            title="Reset speed"
+            show={Math.abs(speed - 1) > 1e-4}
+            onClick={() => commitAudio({ speed: undefined })}
+          />
         </Row>
         <Row label="Volume">
           <Slider
