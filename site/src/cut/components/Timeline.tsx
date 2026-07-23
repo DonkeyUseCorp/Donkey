@@ -1646,20 +1646,10 @@ function ClipView({
   // consumed so the filmstrip stays aligned under the inset edge.
   const filmIn = clip.in + leftXf * speed;
 
-  const filmstrip = useMemo(() => {
-    if (!asset.thumbs?.length || !asset.thumbStep) return [];
-    const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
-    const imgW = Math.max(26, Math.round((VIDEO_H - 4) * aspect));
-    const count = Math.min(120, Math.ceil(w / imgW));
-    return Array.from({ length: count }, (_, k) => {
-      const timeAt = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
-      const idx = Math.min(
-        asset.thumbs!.length - 1,
-        Math.max(0, Math.floor(timeAt / asset.thumbStep!))
-      );
-      return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
-    });
-  }, [asset, filmIn, w, pps, speed]);
+  const filmstrip = useMemo(
+    () => filmstripFrames(asset, filmIn, w, pps, speed, VIDEO_H - 4, 26),
+    [asset, filmIn, w, pps, speed]
+  );
 
   // The move gesture is the shared lane behavior (parting, snapping); its
   // verticality is the video placement system — upper tracks and insert
@@ -1859,6 +1849,33 @@ function ClipMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+/** Sample a clip's filmstrip tiles across its drawn width. Tiles keep the
+ * asset's aspect until the tile cap would leave the tail of a long clip bare;
+ * past that they widen so the capped count still spans the whole box. */
+function filmstripFrames(
+  asset: MediaAsset | undefined,
+  filmIn: number,
+  w: number,
+  pps: number,
+  speed: number,
+  tileH: number,
+  minTileW: number
+) {
+  if (!asset?.thumbs?.length || !asset.thumbStep) return [];
+  const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
+  const natural = Math.max(minTileW, Math.round(tileH * aspect));
+  const count = Math.max(1, Math.min(120, Math.ceil(w / natural)));
+  const imgW = Math.max(natural, w / count);
+  return Array.from({ length: count }, (_, k) => {
+    const timeAt = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
+    const idx = Math.min(
+      asset.thumbs!.length - 1,
+      Math.max(0, Math.floor(timeAt / asset.thumbStep!))
+    );
+    return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
+  });
 }
 
 /** A clip box's thumbnail strip, washed with the clip's color grade: the same
@@ -2144,20 +2161,10 @@ function OverlayClipView({
 
   // Same filmstrip as a track-0 clip so an overlay reads as a video, not a
   // featureless bar — sampled across the clip's trimmed span.
-  const filmstrip = useMemo(() => {
-    if (!asset?.thumbs?.length || !asset.thumbStep) return [];
-    const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
-    const imgW = Math.max(24, Math.round((OVERLAY_H - 4) * aspect));
-    const count = Math.min(120, Math.ceil(w / imgW));
-    return Array.from({ length: count }, (_, k) => {
-      const at = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
-      const idx = Math.min(
-        asset.thumbs!.length - 1,
-        Math.max(0, Math.floor(at / asset.thumbStep!))
-      );
-      return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
-    });
-  }, [asset, filmIn, speed, w, pps]);
+  const filmstrip = useMemo(
+    () => filmstripFrames(asset, filmIn, w, pps, speed, OVERLAY_H - 4, 24),
+    [asset, filmIn, speed, w, pps]
+  );
 
   if (!asset) return null;
 
