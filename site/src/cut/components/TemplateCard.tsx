@@ -176,7 +176,16 @@ export function TemplateCard({
             />
           </div>
         </div>
-        <div className="flex shrink-0 flex-col gap-1">
+        <div className="flex shrink-0 items-center gap-1">
+          {onAdd && (
+            <button
+              title={addTitle}
+              className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 hover:brightness-110 group-hover:opacity-100"
+              onClick={onAdd}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -207,15 +216,6 @@ export function TemplateCard({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {onAdd && (
-            <button
-              title={addTitle}
-              className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 hover:brightness-110 group-hover:opacity-100"
-              onClick={onAdd}
-            >
-              <Plus className="size-3.5" />
-            </button>
-          )}
         </div>
       </div>
       {expanded && parts.length > 0 && (
