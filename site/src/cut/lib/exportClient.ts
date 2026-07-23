@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch, apiJson, apiUrl } from "./api";
+import { normalizeGrade } from "./colorGrade";
 import { clipSpeed, getClipSpans, overlayLayers, projectDuration, spanSequence } from "./store";
 import { captionStyle, cueOverlay, cueWordWindows, laneCues, subtitleLaneCount, trackPos } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
@@ -182,6 +183,7 @@ async function buildExportForm(
     // A still: the server loops the image for the clip's length instead of
     // trimming a source span.
     image: sp.asset.type === "image",
+    grade: normalizeGrade(sp.clip.grade),
     headFade: 0,
     tailFade: 0,
     headZoom: 0,
@@ -289,6 +291,7 @@ async function buildExportForm(
         volume: c.volume,
         speed: c.speed,
         image: assetById.get(c.assetId)!.type === "image",
+        grade: normalizeGrade(c.grade),
         ...ramp,
       }));
   });

@@ -7,7 +7,8 @@ import { createJobRegistry } from "./jobRegistry";
 import { exportsDir, mediaPath, projectDir, readProject } from "./projects";
 import { currentCutUser } from "./userScope";
 import { atempoChain, hasStream, num, videoColorInfo } from "./util";
-import { projectFadeSeconds, TRANSITION_ZOOM } from "../lib/types";
+import { projectFadeSeconds, TRANSITION_ZOOM, type ColorGrade } from "../lib/types";
+import { gradeToFfmpegFilter } from "../lib/colorGrade";
 
 export interface ExportSpec {
   projectId: string;
@@ -51,6 +52,8 @@ export interface ExportSpec {
     hidden?: boolean;
     /** A still image: looped for the clip's length instead of trimmed. */
     image?: boolean;
+    /** Manual color adjustments, baked into this clip's segment. */
+    grade?: ColorGrade;
   }[];
   /** Video tracks composited over the track-0 `clips`, lowest track first. */
   overlayVideos?: {
@@ -78,6 +81,8 @@ export interface ExportSpec {
     tailZoom?: number;
     /** A still image: looped for the clip's length instead of trimmed. */
     image?: boolean;
+    /** Manual color adjustments, baked into this overlay's segment. */
+    grade?: ColorGrade;
   }[];
   audio: {
     file: string;
@@ -712,7 +717,9 @@ async function runExport(job: Job, spec: ExportSpec) {
       }
       // setpts/speed rescales the clip's duration on the timeline (footage);
       // a still just replays its looped input.
-      const core = `${timebase},fps=${fps},${frame},setsar=1,${colorFix.get(c.file) ?? ""}format=${clipFmt}`;
+      // The grade sits after the color conversion (so it acts on the same
+      // BT.709 values the preview shows) and before the terminal format.
+      const core = `${timebase},fps=${fps},${frame},setsar=1,${colorFix.get(c.file) ?? ""}${gradeToFfmpegFilter(c.grade)}format=${clipFmt}`;
       const fades =
         (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
@@ -828,7 +835,7 @@ async function runExport(job: Job, spec: ExportSpec) {
     const timebase = oc.image
       ? `[${idx}:v]setpts=PTS-STARTPTS`
       : `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)}`;
-    const core = `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}format=${fmt}`;
+    const core = `${timebase},fps=${fps},${framing},setsar=1,${colorFix.get(oc.file) ?? ""}${gradeToFfmpegFilter(oc.grade)}format=${fmt}`;
     const pre = `ovp${k}`;
     pushZoomRamped(core, olen, hz, tz, boxW, boxH, fmt, fades, pre, `o${k}`);
     // The zoom slices' concat drops the stream's frame-rate metadata, and

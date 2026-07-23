@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bold, Info, RotateCcw, Smile } from "lucide-react";
+import { Bold, ChevronLeft, ChevronRight, Info, RotateCcw, SlidersHorizontal, Smile, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmojiPicker } from "@/cut/components/EmojiPicker";
 import {
@@ -35,6 +35,8 @@ import { writeTextStyle } from "@/cut/lib/textStyle";
 import { formatTime } from "@/cut/lib/time";
 import {
   FONTS,
+  GRADE_HUE_MAX,
+  GRADE_MAX,
   LAYOUTS,
   rectOf,
   regionLabel,
@@ -45,12 +47,15 @@ import {
   TRANSITION_STYLE_IDS,
   TRANSITION_STYLE_LABELS,
   type AudioClip,
+  type ColorGrade,
   type FrameRect,
   type LayoutId,
   type TextOverlay,
   type TransitionStyle,
   type VideoClip,
 } from "@/cut/lib/types";
+import { autoGradeFromImageData, isNeutralGrade, normalizeGrade } from "@/cut/lib/colorGrade";
+import { getPreviewCanvas, sampleClipSource } from "@/cut/lib/previewCanvas";
 import { cn } from "@/lib/utils";
 
 const SWATCHES = ["#FFFFFF", "#111114", "#FFD60A", "#FF375F", "#0A84FF", "#30D158"];
@@ -304,6 +309,11 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const [speedDraft, setSpeedDraft] = useState<number | null>(null);
   const [xfadeDraft, setXfadeDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
+  // The panel can push into the color-grade subview. The subview remembers
+  // which clip opened it, so selecting another clip lands back on the main
+  // view without an effect.
+  const [colorFor, setColorFor] = useState<string | null>(null);
+  const view = colorFor === clip.id ? "color" : "main";
   const volume = volumeDraft ?? clip.volume ?? 1;
   const speed = speedDraft ?? clip.speed ?? 1;
   const xfade = xfadeDraft ?? clip.transition ?? 0;
@@ -311,6 +321,9 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   // Typing can trim out to the source's end but no further; an image has no
   // intrinsic duration, so its clip can be any length.
   const maxOut = asset && asset.type !== "image" ? asset.duration : Infinity;
+  if (view === "color") {
+    return <ColorPanel clip={clip} onBack={() => setColorFor(null)} />;
+  }
   return (
     <>
       <PanelTitle>Video clip</PanelTitle>
@@ -405,6 +418,22 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               }}
             />
           )}
+        </Row>
+        <Row label="Color">
+          <button
+            type="button"
+            className="clip-color flex h-8 w-[8.5rem] items-center justify-between rounded-md border border-input px-2.5 text-[11.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setColorFor(clip.id)}
+          >
+            <span className="flex items-center gap-1.5">
+              <SlidersHorizontal className="size-3.5" />
+              Adjust
+              {!isNeutralGrade(clip.grade) && (
+                <span className="size-1.5 rounded-full bg-violet-500" aria-label="Adjusted" />
+              )}
+            </span>
+            <ChevronRight className="size-3.5" />
+          </button>
         </Row>
         {isFirst && (
           <Row label="Fade in">
@@ -597,6 +626,189 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
       </div>
     </>
   );
+}
+
+const GRADE_FIELDS: { key: keyof ColorGrade; label: string; max: number }[] = [
+  { key: "brightness", label: "Brightness", max: GRADE_MAX },
+  { key: "contrast", label: "Contrast", max: GRADE_MAX },
+  { key: "saturation", label: "Saturation", max: GRADE_MAX },
+  { key: "exposure", label: "Exposure", max: GRADE_MAX },
+  { key: "temperature", label: "Temperature", max: GRADE_MAX },
+  { key: "hue", label: "Hue", max: GRADE_HUE_MAX },
+];
+
+const formatGradeValue = (key: keyof ColorGrade, v: number) =>
+  key === "hue" ? `${Math.round(v)}°` : v > 0 ? `+${Math.round(v)}` : `${Math.round(v)}`;
+
+/** The color-grade subview a clip panel pushes into: live histogram over the
+ * adjustment sliders. Slider drags stream through the transient updater under
+ * one history checkpoint, so the preview follows live and ⌘Z undoes the whole
+ * drag. */
+function ColorPanel({ clip, onBack }: { clip: VideoClip; onBack: () => void }) {
+  const ck = useSliderCheckpoint();
+  const updateClip = useEditor((s) => s.updateClip);
+  const setField = (key: keyof ColorGrade, v: number) => {
+    ck.begin();
+    useEditor.getState().updateClipTransient(clip.id, {
+      grade: normalizeGrade({ ...clip.grade, [key]: v }),
+    });
+  };
+  // Fit a starting grade from the clip's raw decoder frame (never the graded
+  // preview, which would fold the current grade back into the fit); the
+  // sliders show the result and stay fully adjustable after.
+  const autoGrade = () => {
+    const src = sampleClipSource(clip.id);
+    const scratch = document.createElement("canvas");
+    scratch.width = 96;
+    scratch.height = 54;
+    const ctx = scratch.getContext("2d", { willReadFrequently: true });
+    if (!src || !ctx) return;
+    try {
+      ctx.drawImage(src, 0, 0, scratch.width, scratch.height);
+      const grade = autoGradeFromImageData(
+        ctx.getImageData(0, 0, scratch.width, scratch.height).data
+      );
+      updateClip(clip.id, { grade });
+    } catch {
+      // Unreadable frame — leave the grade as it is.
+    }
+  };
+  return (
+    <>
+      <div className="flex h-10 shrink-0 items-center gap-1 px-2.5 text-sm font-semibold tracking-tight">
+        <button
+          type="button"
+          aria-label="Back"
+          className="clip-color-back grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:text-foreground"
+          onClick={onBack}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        Color
+        <button
+          type="button"
+          className="clip-grade-auto ml-auto flex items-center gap-1 rounded-md border border-input px-2 py-0.5 text-[11.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          onClick={autoGrade}
+        >
+          <Wand2 className="size-3" />
+          Auto
+        </button>
+      </div>
+      <div className="flex flex-col gap-1 px-3.5 pb-4">
+        <Histogram />
+        {GRADE_FIELDS.map((f) => {
+          const value = clip.grade?.[f.key] ?? 0;
+          return (
+            <Row key={f.key} label={f.label}>
+              <Slider
+                className={`clip-grade-${f.key} data-horizontal:w-24`}
+                min={-f.max}
+                max={f.max}
+                step={1}
+                value={value}
+                onValueChange={(v) => setField(f.key, Number(v))}
+                onValueCommitted={() => ck.end()}
+              />
+              <ScrubValue
+                label={f.label}
+                className="w-9 text-muted-foreground"
+                value={value}
+                min={-f.max}
+                max={f.max}
+                step={1}
+                format={(v) => formatGradeValue(f.key, v)}
+                parse={parseNumberInput}
+                onScrub={(v) => setField(f.key, v)}
+                onCommit={(v) => {
+                  setField(f.key, v);
+                  ck.end();
+                }}
+              />
+              {value !== 0 && (
+                <ResetButton
+                  title={`Reset ${f.label.toLowerCase()}`}
+                  onClick={() => {
+                    setField(f.key, 0);
+                    ck.end();
+                  }}
+                />
+              )}
+            </Row>
+          );
+        })}
+        {!isNeutralGrade(clip.grade) && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="clip-grade-reset mt-2"
+            onClick={() => updateClip(clip.id, { grade: undefined })}
+          >
+            Reset all
+          </Button>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Live RGB histogram of the composited preview frame: the three channel
+ * curves screen over each other so overlaps read light. Samples a small
+ * downscale of the preview canvas on a short interval while open. */
+function Histogram() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    const ctx = cv?.getContext("2d");
+    if (!cv || !ctx) return;
+    const sample = document.createElement("canvas");
+    sample.width = 96;
+    sample.height = 54;
+    const sctx = sample.getContext("2d", { willReadFrequently: true });
+    if (!sctx) return;
+    const BINS = 64;
+    const COLORS = ["#ff453a", "#32d74b", "#0a84ff"];
+    const draw = () => {
+      const src = getPreviewCanvas();
+      if (!src) return;
+      let data: Uint8ClampedArray;
+      try {
+        sctx.drawImage(src, 0, 0, sample.width, sample.height);
+        data = sctx.getImageData(0, 0, sample.width, sample.height).data;
+      } catch {
+        return; // unreadable canvas — keep whatever is drawn
+      }
+      const bins = [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)];
+      for (let i = 0; i < data.length; i += 4) {
+        bins[0][data[i] >> 2]++;
+        bins[1][data[i + 1] >> 2]++;
+        bins[2][data[i + 2] >> 2]++;
+      }
+      const W = cv.width;
+      const H = cv.height;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = "#101014";
+      ctx.fillRect(0, 0, W, H);
+      const peak = Math.max(1, ...bins.map((b) => Math.max(...b)));
+      ctx.globalCompositeOperation = "screen";
+      bins.forEach((b, ci) => {
+        ctx.fillStyle = COLORS[ci];
+        ctx.beginPath();
+        ctx.moveTo(0, H);
+        for (let i = 0; i < BINS; i++) {
+          // sqrt tames the peaks so midtone shape stays visible.
+          ctx.lineTo((i / (BINS - 1)) * W, H - Math.sqrt(b[i] / peak) * (H - 3));
+        }
+        ctx.lineTo(W, H);
+        ctx.closePath();
+        ctx.fill();
+      });
+      ctx.globalCompositeOperation = "source-over";
+    };
+    draw();
+    const id = setInterval(draw, 150);
+    return () => clearInterval(id);
+  }, []);
+  return <canvas ref={ref} width={256} height={80} className="mb-1.5 h-20 w-full rounded-md" />;
 }
 
 /** Per-clip generated-audio block: the voice picker, "Generate audio for clip"

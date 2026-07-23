@@ -3,7 +3,9 @@
 import { useEffect, type RefObject } from "react";
 import { clipSpeed, getClipSpans, overlayLayers, projectDuration, useEditor } from "@/cut/lib/store";
 import { isFullRect, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
-import type { AudioClip, ClipSpan, FrameRect, MediaAsset, VideoClip } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, ColorGrade, FrameRect, MediaAsset, VideoClip } from "@/cut/lib/types";
+import { gradeTint, gradeToCssFilter, isNeutralGrade } from "@/cut/lib/colorGrade";
+import { registerSourceSampler } from "@/cut/lib/previewCanvas";
 
 /** The alpha/zoom/gain ramps a transition puts on one upper-track clip at
  * `t`. Cross styles blend the incoming clip in over the outgoing one (which
@@ -175,6 +177,11 @@ class Engine {
   private raf = 0;
   private activeClipId: string | null = null;
   private disposed = false;
+  // Scratch surface for per-clip color grades: the source draws here through
+  // ctx.filter (+ a multiply tint), and the graded result is what the
+  // compositor stamps onto the main canvas. One instance suffices — every use
+  // is draw-then-immediately-copy.
+  private gradeCanvas: HTMLCanvasElement | null = null;
   // Wall-clock stamp for advancing time where track 0 has nothing playing —
   // in a gap or past its end there is no track-0 video element to act as the
   // master clock.
@@ -330,7 +337,55 @@ class Engine {
    * region and crops the overflow (clipped to the rect); "fit" contains the
    * whole picture inside it, centered. `zoom` scales the picture around the
    * region's center (zoom transitions), clipping the overflow to the rect. */
-  private drawIntoRect(el: MediaEl, rect: FrameRect, fill: boolean, alpha: number, zoom = 1) {
+  /** The clip's raw, ungraded decoder frame for analysis (the color panel's
+   * Auto), or null when no ready decoder exists for the clip. */
+  sourceFor(clipId: string): CanvasImageSource | null {
+    const el = this.videoEls.get(clipId) ?? this.overlayEls.get(clipId);
+    return el && elReady(el) ? el : null;
+  }
+
+  /** The clip's picture with its color grade applied, or the raw element when
+   * there is nothing to grade. Mirrors the export's lutrgb/hue chain: CSS
+   * filter first (gain/contrast/saturate/hue), then the warm tint as a
+   * multiply pass, with source alpha restored so transparent stills keep
+   * their transparency. */
+  private gradedSource(el: MediaEl, grade: ColorGrade | undefined): CanvasImageSource {
+    if (isNeutralGrade(grade)) return el;
+    const scratch = (this.gradeCanvas ??= document.createElement("canvas"));
+    const w = elW(el);
+    const h = elH(el);
+    if (scratch.width !== w) scratch.width = w;
+    if (scratch.height !== h) scratch.height = h;
+    const ctx = scratch.getContext("2d");
+    // Without ctx.filter support, skip the whole grade (never half-apply the
+    // tint); export still renders it.
+    if (!ctx || !("filter" in ctx)) return el;
+    ctx.clearRect(0, 0, w, h);
+    ctx.filter = gradeToCssFilter(grade);
+    ctx.drawImage(el, 0, 0, w, h);
+    ctx.filter = "none";
+    const tint = gradeTint(grade);
+    if (tint) {
+      ctx.globalCompositeOperation = "multiply";
+      ctx.fillStyle = tint;
+      ctx.fillRect(0, 0, w, h);
+      // Multiply painted the transparent areas solid; carve the source's
+      // alpha back in.
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.drawImage(el, 0, 0, w, h);
+      ctx.globalCompositeOperation = "source-over";
+    }
+    return scratch;
+  }
+
+  private drawIntoRect(
+    el: MediaEl,
+    rect: FrameRect,
+    fill: boolean,
+    alpha: number,
+    zoom = 1,
+    grade?: ColorGrade
+  ) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
@@ -346,6 +401,7 @@ class Engine {
     const dh = vh * sc;
     const dx = rx + (rw - dw) / 2;
     const dy = ry + (rh - dh) / 2;
+    const src = this.gradedSource(el, grade);
     const prevAlpha = ctx.globalAlpha;
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     if (fill || zoom > 1) {
@@ -353,10 +409,10 @@ class Engine {
       ctx.beginPath();
       ctx.rect(rx, ry, rw, rh);
       ctx.clip();
-      ctx.drawImage(el, dx, dy, dw, dh);
+      ctx.drawImage(src, dx, dy, dw, dh);
       ctx.restore();
     } else {
-      ctx.drawImage(el, dx, dy, dw, dh);
+      ctx.drawImage(src, dx, dy, dw, dh);
     }
     ctx.globalAlpha = prevAlpha;
   }
@@ -393,7 +449,7 @@ class Engine {
     // black frame; the full-frame path below keeps the pan-crop behavior.
     const rect = rectOf(clip ?? {});
     if (!isFullRect(rect)) {
-      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha, zoom);
+      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha, zoom, clip?.grade);
       return;
     }
     const fill = clip?.fit === "fill";
@@ -413,7 +469,7 @@ class Engine {
     }
     const prevAlpha = ctx.globalAlpha;
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    ctx.drawImage(el, dx, dy, dw, dh);
+    ctx.drawImage(this.gradedSource(el, clip?.grade), dx, dy, dw, dh);
     ctx.globalAlpha = prevAlpha;
   }
 
@@ -625,7 +681,7 @@ class Engine {
       if (!elReady(el)) continue;
       const rect = rectOf(clip);
       const cover = clip.fit === "fill" || (clip.fit == null && isFullRect(rect));
-      this.drawIntoRect(el, rect, cover, alpha, zoom);
+      this.drawIntoRect(el, rect, cover, alpha, zoom, clip.grade);
     }
   }
 
@@ -917,6 +973,10 @@ export function usePlayback(canvasRef: RefObject<HTMLCanvasElement | null>) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const engine = new Engine(canvas);
-    return () => engine.dispose();
+    registerSourceSampler((clipId) => engine.sourceFor(clipId));
+    return () => {
+      registerSourceSampler(null);
+      engine.dispose();
+    };
   }, [canvasRef]);
 }

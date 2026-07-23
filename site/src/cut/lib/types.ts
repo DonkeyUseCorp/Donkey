@@ -149,7 +149,24 @@ export interface VideoClip {
   /** Hidden clips stay on the timeline (grayed) but render as black — excluded
    * from the played/exported picture without disturbing the layout. */
   hidden?: boolean;
+  /** Manual color adjustments; absent when every value is neutral. */
+  grade?: ColorGrade;
 }
+
+/** Per-clip manual color adjustments. Integer sliders, 0 = neutral; the whole
+ * field is absent when every value is 0, so untouched clips carry nothing. */
+export interface ColorGrade {
+  brightness?: number; // -50..50
+  contrast?: number; // -50..50
+  saturation?: number; // -50..50
+  exposure?: number; // -50..50 (±1 EV)
+  temperature?: number; // -50..50, positive = warm
+  hue?: number; // -180..180 degrees
+}
+
+/** Slider range for every grade parameter except hue. */
+export const GRADE_MAX = 50;
+export const GRADE_HUE_MAX = 180;
 
 /** Speed slider range. Typed entry and tools may go beyond it; SPEED_FLOOR is
  * the only hard bound, keeping rates positive so length math stays finite. */

@@ -5,6 +5,7 @@ import { usePlayback } from "@/cut/hooks/usePlayback";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { startDrag } from "@/cut/lib/drag";
 import { getClipSpans, useEditor } from "@/cut/lib/store";
+import { setPreviewCanvas } from "@/cut/lib/previewCanvas";
 import { FRAME, isFullRect, rectOf, type Aspect, type ClipSpan, type FrameRect, type MediaAsset, type VideoClip } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { OverlayLayer } from "./OverlayLayer";
@@ -41,6 +42,11 @@ export function Preview() {
   const frame = FRAME[aspect];
 
   usePlayback(canvasRef);
+
+  useEffect(() => {
+    setPreviewCanvas(canvasRef.current);
+    return () => setPreviewCanvas(null);
+  }, []);
 
   useEffect(() => {
     const wrap = wrapRef.current;
