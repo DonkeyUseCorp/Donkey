@@ -420,7 +420,7 @@ function EmptyState({
       <div className="sub-generating flex flex-col items-center gap-3 px-6 pt-10 text-center">
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
         <p className="text-[13px] font-medium">
-          {translating ? "Translating your captions…" : "Transcribing on this Mac…"}{" "}
+          {translating ? "Translating your captions…" : "Transcribing…"}{" "}
           <SubtitleElapsed />
         </p>
         <p className="text-[11.5px] leading-relaxed text-muted-foreground">
