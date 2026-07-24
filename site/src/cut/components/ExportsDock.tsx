@@ -174,14 +174,25 @@ function ExportRow({ job }: { job: ExportJob }) {
       </div>
       <div className="flex items-center">
         {(job.status === "running" || job.status === "queued") && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Cancel export"
-            onClick={() => useExports.getState().cancel(job.id)}
-          >
-            <X />
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground hover:text-destructive"
+              onClick={() => useExports.getState().cancel(job.id)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Dismiss"
+              title="Hide — the export keeps running"
+              onClick={() => useExports.getState().dismiss(job.id)}
+            >
+              <X />
+            </Button>
+          </>
         )}
         {job.status === "done" && (
           <>

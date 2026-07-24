@@ -37,7 +37,8 @@ import {
 import type { AssetRef } from "@/cut/lib/assetRef";
 import { RefDropZone } from "./RefDropZone";
 import { deleteExport, downloadProjectExport, revealExport } from "@/cut/lib/exportClient";
-import { useExports, useWatchExportLands } from "@/cut/lib/exportStore";
+import { useExports, useWatchExportLands, type ExportJob } from "@/cut/lib/exportStore";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import {
   addAssetToLibraryTemplate,
   addLibraryAssetToProject,
@@ -334,6 +335,43 @@ function ExportPulse({ file }: { file: string }) {
   return pulse ? <div aria-hidden className={genPulseOverlay} /> : null;
 }
 
+/** A queued or still-rendering export in the Exports list: spinner, live
+ * progress, and a cancel that stops the render (the dock's X only hides the
+ * notification). */
+function ExportingRow({ job }: { job: ExportJob }) {
+  const elapsed = useElapsed(job.status === "running" ? job.startedAt ?? null : null);
+  const pct = Math.round(job.progress * 100);
+  return (
+    <div className="relative flex w-full items-center gap-2.5 overflow-hidden rounded-lg border border-border p-1.5">
+      <div className="grid h-11 w-[25px] shrink-0 place-items-center rounded-[4px] bg-muted">
+        <Loader2 className="size-3.5 animate-spin text-primary" />
+      </div>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[11.5px] font-medium">Exporting…</span>
+        <span className="block text-[10.5px] text-muted-foreground tabular-nums">
+          {job.status === "running" ? `${pct}%${elapsed ? ` · ${elapsed}` : ""}` : "Queued"}
+        </span>
+      </span>
+      <Button
+        variant="ghost"
+        size="xs"
+        className="shrink-0 text-muted-foreground hover:text-destructive"
+        onClick={() => useExports.getState().cancel(job.id)}
+      >
+        Cancel
+      </Button>
+      {job.status === "running" && (
+        <div className="absolute inset-x-0 bottom-0 h-0.5 bg-secondary">
+          <div
+            className="h-full bg-primary transition-[width] duration-300"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MediaPanel({
   projectId,
   onImport,
@@ -361,6 +399,16 @@ function MediaPanel({
       s.jobs.filter(
         (j) => j.projectId === projectId && (j.status === "done" || j.status === "error")
       ).length
+  );
+  // This project's exports still in flight: queued/running jobs plus the brief
+  // client-only "preparing" window before the engine hands back a job id.
+  const exportJobs = useExports((s) => s.jobs);
+  const exportLocal = useExports((s) => s.local);
+  const exporting = exportJobs.filter(
+    (j) => j.projectId === projectId && (j.status === "queued" || j.status === "running")
+  );
+  const preparing = exportLocal.filter(
+    (r) => r.projectId === projectId && r.status === "preparing"
   );
   const inputRef = useRef<HTMLInputElement>(null);
   const [exports, setExports] = useState<ExportItem[]>([]);
@@ -400,7 +448,14 @@ function MediaPanel({
 
   return (
     <>
-      <PanelHead title="Media" />
+      <PanelHead
+        title="Media"
+        action={
+          exporting.length + preparing.length > 0 ? (
+            <Loader2 className="mr-1 size-4 animate-spin text-muted-foreground" />
+          ) : undefined
+        }
+      />
       <div className="px-3.5 pb-3">
         <Button variant="outline" className="w-full" onClick={() => inputRef.current?.click()}>
           <Upload data-icon="inline-start" /> Upload
@@ -467,10 +522,27 @@ function MediaPanel({
           </div>
         )}
 
-        {exports.length > 0 && (
+        {exports.length + exporting.length + preparing.length > 0 && (
           <div className="mt-5 px-3.5">
             <div className="mb-2 text-[13px] font-semibold tracking-tight">Exports</div>
             <div className="flex flex-col gap-1.5">
+              {preparing.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex w-full items-center gap-2.5 rounded-lg border border-border p-1.5"
+                >
+                  <div className="grid h-11 w-[25px] shrink-0 place-items-center rounded-[4px] bg-muted">
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                  </div>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11.5px] font-medium">Exporting…</span>
+                    <span className="block text-[10.5px] text-muted-foreground">Preparing…</span>
+                  </span>
+                </div>
+              ))}
+              {exporting.map((j) => (
+                <ExportingRow key={j.id} job={j} />
+              ))}
               {exports.map((it) => (
                 <div
                   key={it.file}
