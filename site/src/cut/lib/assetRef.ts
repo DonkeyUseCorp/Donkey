@@ -117,18 +117,37 @@ export const sameRef = (a: AssetRef, b: AssetRef) => a.scope === b.scope && a.id
 export const addRefOnce = (list: AssetRef[], ref: AssetRef): AssetRef[] =>
   list.some((r) => sameRef(r, ref)) ? list : [...list, ref];
 
+/** A ref's fetchable URL, re-read from the live catalogs. Cloud asset URLs are
+ * short-lived signed R2 URLs, so a ref persisted in a saved chat thread
+ * outlives its `url`; project and clip refs resolve through the current asset
+ * instead. Library/stock/file URLs are stable routes or data: URLs, and a ref
+ * whose asset is gone keeps the persisted URL (its fetch fails either way). */
+function liveRefUrl(scope: AssetRefScope, id: string, url: string): string {
+  const s = useEditor.getState();
+  if (scope === "project") return s.assets.find((a) => a.id === id)?.url ?? url;
+  if (scope === "clip") {
+    const assetId =
+      s.clips.find((c) => c.id === id)?.assetId ??
+      s.audioClips.find((c) => c.id === id)?.assetId;
+    return s.assets.find((a) => a.id === assetId)?.url ?? url;
+  }
+  return url;
+}
+
 /** Tolerant reader for refs persisted before the scope/kind shape (old chat
- * threads stored `{ id, name, type, duration, url }`). */
+ * threads stored `{ id, name, type, duration, url }`). Every persisted ref is
+ * rehydrated through here, so this is also where its URL comes back to life. */
 export function normalizeRef(v: unknown): AssetRef | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Partial<AssetRef> & { type?: AssetRefKind };
   if (!o.id || !o.name || !o.url) return null;
+  const scope = o.scope ?? "project";
   return {
-    scope: o.scope ?? "project",
+    scope,
     id: o.id,
     name: o.name,
     kind: o.kind ?? o.type ?? "video",
-    url: o.url,
+    url: liveRefUrl(scope, o.id, o.url),
     duration: o.duration,
   };
 }
