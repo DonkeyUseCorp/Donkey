@@ -3,11 +3,10 @@
 import { createContext, useContext, type ReactNode } from "react";
 
 // The Cut app's routes live under /cut/app/*. A proxy rewrite (src/proxy.ts)
-// serves them at "/…" on cut.donkeyuse.com (base "") and at "/app/…" on
-// donkeycut.com (base "/app"). In local dev the app is served from the apex
-// under /cut/app so its session cookie is same-origin, and links carry the
-// full "/cut/app" base. The base is resolved on the server from the request
-// host (see the cut layout) and handed to the client here.
+// serves them at "/app/…" on donkeycut.com and in local dev (base "/app");
+// the hosted apex serves them unrewritten at /cut/app (base "/cut/app"). The
+// base is resolved on the server from the request host (see the cut layout)
+// and handed to the client here.
 const CutBaseContext = createContext("");
 
 export function CutBaseProvider({ base, children }: { base: string; children: ReactNode }) {

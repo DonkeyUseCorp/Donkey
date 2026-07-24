@@ -1,6 +1,6 @@
 // Cut's client reaches its engine two ways. Served locally (cut.localhost,
 // localhost) the page and the engine share an origin, so paths stay relative.
-// Served from the hosted domain (cut.donkeyuse.com) the page is just static
+// Served from the hosted domain (donkeycut.com) the page is just static
 // html/js — the Cut APIs are switched off on that host — so every API call
 // targets the engine running on this Mac instead. Loopback is a trustworthy
 // origin, so the https page may call it; the engine grants the hosted origin

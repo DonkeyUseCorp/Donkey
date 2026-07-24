@@ -1,13 +1,10 @@
 /**
  * One CORS policy for Cut's engine, shared by the Next dev server (src/proxy.ts)
  * and the packaged engine's http server (src/cut/engine/serve.ts). The hosted
- * Cut pages are the only browser origins allowed to reach the engine
+ * Cut page is the only browser origin allowed to reach the engine
  * cross-origin; every other origin is refused before any handler runs.
  */
-export const CUT_CLIENT_ORIGINS = new Set([
-  "https://donkeycut.com",
-  "https://cut.donkeyuse.com",
-]);
+export const CUT_CLIENT_ORIGINS = new Set(["https://donkeycut.com"]);
 
 /** The echo-back origin for an allowed caller, else null. */
 export function allowedOrigin(origin: string): string | null {

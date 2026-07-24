@@ -5,10 +5,8 @@ import { useEffect, type ReactNode } from "react";
 import { authHrefFor } from "@/app/_components/landing/useAppEntryHref";
 import { setEngineUser } from "@/cut/lib/api";
 import { syncAccountFlags } from "@/cut/lib/flags";
-import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
 import { useAppLoaded } from "@/lib/analytics";
 import { authClient } from "@/lib/auth-client";
-import { useCutBase } from "@/cut/lib/nav";
 
 // Session gate for the whole Cut app surface. The landing CTAs already route
 // signed-out clicks through /sign-in (useAppEntryHref); this covers direct
@@ -21,14 +19,8 @@ import { useCutBase } from "@/cut/lib/nav";
 // children until the id is bound makes that impossible; the session check is
 // a fast same-origin cookie read, and the ConnectGate's own connect flow
 // covers the moment visually.
-//
-// The legacy host (base "") has no /sign-in of its own — donkeycut.com owns
-// auth — so its URLs redirect to the canonical host, mapped onto the same app
-// under /app. Project state lives in the local engine, so it survives the host
-// move.
 export function RequireSession({ children }: { children: ReactNode }) {
   const { data: session, isPending } = authClient.useSession();
-  const base = useCutBase();
 
   const signedOut = !isPending && !session;
 
@@ -45,12 +37,8 @@ export function RequireSession({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!signedOut) return;
     const here = window.location.pathname + window.location.search;
-    window.location.replace(
-      base === ""
-        ? `${DONKEYCUT_CANONICAL}${authHrefFor("/sign-in", here === "/" ? "/app" : `/app${here}`)}`
-        : authHrefFor("/sign-in", here),
-    );
-  }, [signedOut, base]);
+    window.location.replace(authHrefFor("/sign-in", here));
+  }, [signedOut]);
 
   if (!session) return null;
   setEngineUser(session.user.id);

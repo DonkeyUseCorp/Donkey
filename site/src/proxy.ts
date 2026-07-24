@@ -3,23 +3,23 @@ import { NextResponse, type NextRequest } from "next/server";
 import { allowedOrigin, corsHeaders, preflightHeaders } from "@/cut/server/cors";
 import {
   DONKEYCUT_CANONICAL,
-  isCutHost,
   isDonkeycutHost,
   isLocalHost,
 } from "@/cut/lib/hosts";
 
 // Cut (the video editor, publicly "Donkey Cut") lives under /cut in this single
 // site app: the marketing landing at /cut and the app under /cut/app. The proxy
-// maps its two production hosts onto that tree while the apex host keeps
-// serving Donkey:
+// maps its production host onto that tree while the apex host keeps serving
+// Donkey:
 //
 //   donkeycut.com       "/" → landing, "/app/…" → editor app (generic
 //                       "/…" → "/cut/…" rewrite). The auth pages (/sign-in,
 //                       /sign-up, /mac-auth), "/install", and the legal pages
 //                       pass through so the shared apex routes serve them
 //                       same-host. www. 308s to the apex.
-//   cut.donkeyuse.com   legacy host, unchanged URLs: "/…" → "/cut/app/…" so
-//                       "/", "/library", "/p/[id]" keep working.
+//
+// Old cut.donkeyuse.com links are redirected to donkeycut.com at the edge
+// (Cloudflare) and never reach this app.
 //
 // Local dev (localhost) mirrors donkeycut.com — Cut is the default product, so
 // "/" is the Cut landing and "/app/…" the editor — while Donkey Use stays
@@ -135,14 +135,7 @@ export function proxy(req: NextRequest) {
     return NextResponse.rewrite(url);
   }
 
-  if (!isCutHost(host)) return NextResponse.next();
-
-  if (underPath(pathname, "/cut") || underPath(pathname, "/api")) {
-    return NextResponse.next();
-  }
-  const url = req.nextUrl.clone();
-  url.pathname = `/cut/app${pathname === "/" ? "" : pathname}`;
-  return NextResponse.rewrite(url);
+  return NextResponse.next();
 }
 
 export const config = {

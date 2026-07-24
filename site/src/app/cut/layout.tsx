@@ -15,7 +15,6 @@ export const metadata: Metadata = {
 // while the app subtree under /cut/app paints its own white product surface.
 //
 // The app's routes live under /cut/app/*. Per host they are served as:
-//   cut.donkeyuse.com  → proxy rewrites "/…" → "/cut/app/…"   (base "")
 //   donkeycut.com      → proxy rewrites "/app/…" → "/cut/app/…" (base "/app")
 //   local dev          → same mapping as donkeycut.com (base "/app")
 //   hosted apex        → no rewrite, served at /cut/app directly (base "/cut/app")

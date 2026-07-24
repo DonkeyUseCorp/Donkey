@@ -4,7 +4,7 @@
 // the tools and files aren't there and because those routes are unauthenticated
 // by design (fine on localhost, an exposure on a public host).
 //
-// On a hosted deploy, cut.donkeyuse.com still serves Cut's client bundle, but
+// On a hosted deploy, donkeycut.com still serves Cut's client bundle, but
 // every server API is switched off — so nothing reads local disk, spawns a
 // process, or reaches any model, including our production models. Cut's AI only
 // ever uses the user's local claude/codex logins; it has no path to hosted

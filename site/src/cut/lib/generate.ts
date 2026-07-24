@@ -193,17 +193,12 @@ const promptName = (prompt: string) => {
   return line.length > 60 ? `${line.slice(0, 57)}…` : line;
 };
 
-/** The Donkey sign-in URL for the current host (cut.* → apex). Image, video,
- * and voiceover all run on the user's Donkey account, so every generation
- * surface links here when signed out. */
+/** The Donkey sign-in URL, same-host, returning to the Cut page the user
+ * started from. Image, video, and voiceover all run on the user's Donkey
+ * account, so every generation surface links here when signed out. */
 export function signInUrl(): string {
   if (typeof window === "undefined") return "/sign-in";
-  const { protocol, host, href } = window.location;
-  // Sign-in runs on the auth-owning host (Google's redirect_uri is pinned
-  // there) and returns to the Cut page the user started from. donkeycut.com owns
-  // auth directly; the legacy cut.* host strips to its apex.
-  const apex = `${protocol}//${host.replace(/^cut\./, "")}`;
-  return `${apex}/sign-in?callbackURL=${encodeURIComponent(href)}`;
+  return `/sign-in?callbackURL=${encodeURIComponent(window.location.href)}`;
 }
 
 /** Shown for any 402 (empty balance) across chat and generation tiles. The
