@@ -48,6 +48,25 @@ model CutMediaObject {
   @@index([projectId, kind])
 }
 
+// One saved AI chat thread — the chat panel's per-project history, stored
+// server-side so cloud chats follow the account across browsers. The id is the
+// client-minted thread uuid. `messages` holds the slimmed UIMessage list the
+// panel persists (bulky frame payloads already stripped); `sessions` the
+// provider-native session ids. `updatedAt` mirrors the client's thread clock
+// so ordering matches the panel's Threads list.
+model CutChatThread {
+  id        String   @id
+  userId    String
+  projectId String
+  title     String
+  messages  Json
+  sessions  Json
+  updatedAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, projectId, updatedAt])
+}
+
 model CutLibraryAsset {
   id            String   @id @default(cuid())
   userId        String
