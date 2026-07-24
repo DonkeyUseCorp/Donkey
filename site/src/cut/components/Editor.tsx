@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Clapperboard, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, setCutMode } from "@/cut/lib/backend";
+import { syncProjectThreads } from "@/cut/lib/chatThreads";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
@@ -60,6 +61,9 @@ export function Editor({
     void resolveProjectMode(projectId).then((mode) => {
       if (!alive) return;
       setCutMode(mode);
+      // Pull the account's chat threads into the local mirror alongside the
+      // doc, so the AI panel and the render-resume guard read fresh history.
+      void syncProjectThreads(projectId);
       void useEditor
         .getState()
         .loadProject(projectId)

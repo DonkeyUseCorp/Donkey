@@ -41,12 +41,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { engineReady } from "@/cut/lib/api";
-import { apiFetch, apiUrl } from "@/cut/lib/backend";
+import { apiFetch, apiUrl, cutMode } from "@/cut/lib/backend";
 import { useCutCaps } from "@/cut/lib/backend/hooks";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
-import { activeChatKey, threadsKey } from "@/cut/lib/chatThreads";
+import {
+  activeChatKey,
+  pushThread,
+  pushThreadDelete,
+  syncProjectThreads,
+  threadsKey,
+} from "@/cut/lib/chatThreads";
 import {
   beginChatTurn,
   deleteChatAssets,
@@ -98,7 +104,8 @@ interface ModelsInfo {
   providers: Record<string, { available: boolean; note: string; installed?: boolean }>;
 }
 
-/** A saved chat thread, persisted per project in localStorage. */
+/** A saved chat thread, persisted per project in localStorage (the mirror the
+ * cloud copy syncs through — see lib/chatThreads.ts). */
 interface ChatThread {
   id: string;
   title: string;
@@ -125,10 +132,10 @@ function readThreads(projectId: string): ChatThread[] {
  * watch_video result carries ~1MB of contact sheets and localStorage holds a
  * few MB per origin. The live thread keeps its images; replayed turns only
  * ever reuse text parts, so nothing downstream misses them. */
-function slimForStorage(list: ChatThread[]): ChatThread[] {
+function slimThread(t: ChatThread): ChatThread {
   const bulky = (v: unknown) =>
     typeof v === "string" && v.startsWith("data:image/");
-  return list.map((t) => ({
+  return {
     ...t,
     messages: t.messages.map((m) => ({
       ...m,
@@ -152,7 +159,7 @@ function slimForStorage(list: ChatThread[]): ChatThread[] {
         } as typeof p;
       }),
     })),
-  }));
+  };
 }
 
 function writeThreads(projectId: string, list: ChatThread[]) {
@@ -166,15 +173,19 @@ function writeThreads(projectId: string, list: ChatThread[]) {
       .filter((t) => threadOwnsAssets(t.id) || threadHasLiveRun(t.id)),
   ];
   // A pruned thread is gone the way a deleted one is — anything it still
-  // owned (by construction nothing live) dies with it.
+  // owned (by construction nothing live) dies with it, locally and on the
+  // account copy.
   const keptIds = new Set(kept.map((t) => t.id));
   for (const t of list) {
-    if (!keptIds.has(t.id)) useGenScene.getState().killThread(t.id);
+    if (!keptIds.has(t.id)) {
+      useGenScene.getState().killThread(t.id);
+      pushThreadDelete(projectId, t.id);
+    }
   }
   try {
     localStorage.setItem(
       threadsKey(projectId),
-      JSON.stringify(slimForStorage(kept)),
+      JSON.stringify(kept.map(slimThread)),
     );
   } catch {
     // Storage full/blocked — history just won't persist.
@@ -242,6 +253,21 @@ export function AiPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [threads, setThreads] = useState<ChatThread[]>([]);
 
+  // Cloud threads live on the account: pull them into the local mirror before
+  // the chat mounts, so a conversation started in another browser resumes
+  // here. Local mode has nothing to pull and renders immediately.
+  const [threadsReady, setThreadsReady] = useState(() => cutMode() !== "cloud");
+  useEffect(() => {
+    if (threadsReady) return;
+    let alive = true;
+    void syncProjectThreads(projectId).finally(
+      () => alive && setThreadsReady(true),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [threadsReady, projectId]);
+
   useEffect(() => {
     // The models probe asks the engine which CLIs are installed; without the
     // localCliChat cap there is no engine to ask (mergedInfo synthesizes the
@@ -277,6 +303,7 @@ export function AiPanel({
       projectId,
       readThreads(projectId).filter((t) => t.id !== id),
     );
+    pushThreadDelete(projectId, id);
     setThreads((p) => p.filter((t) => t.id !== id));
     // The thread's chat-only assets go with it; anything placed or filed
     // into Media/Library stays.
@@ -405,14 +432,16 @@ export function AiPanel({
         </>
       )}
 
-      <ChatSession
-        key={activeChat}
-        projectId={projectId}
-        threadId={activeChat}
-        info={mergedInfo}
-        model={model}
-        onModelChange={selectModel}
-      />
+      {threadsReady && (
+        <ChatSession
+          key={activeChat}
+          projectId={projectId}
+          threadId={activeChat}
+          info={mergedInfo}
+          model={model}
+          onModelChange={selectModel}
+        />
+      )}
     </aside>
   );
 }
@@ -645,16 +674,16 @@ function ChatSession({
         .trim()
         .slice(0, 80) || "New chat";
     const rest = readThreads(projectId).filter((t) => t.id !== threadId);
-    writeThreads(projectId, [
-      {
-        id: threadId,
-        title,
-        updatedAt: Date.now(),
-        messages,
-        sessions: { ...providerSessions.current },
-      },
-      ...rest,
-    ]);
+    const thread: ChatThread = {
+      id: threadId,
+      title,
+      updatedAt: Date.now(),
+      messages,
+      sessions: { ...providerSessions.current },
+    };
+    writeThreads(projectId, [thread, ...rest]);
+    // The account copy gets the same slimmed thread, debounced per thread.
+    pushThread(projectId, slimThread(thread));
   }, [messages, threadId, projectId]);
 
   // Stay glued to the newest message while the user sits at the bottom;
