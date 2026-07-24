@@ -40,8 +40,11 @@ even when there are no active tasks.
 3. **Cut project sharing (read-only links)** — `plans/cut-project-sharing.md`.
    Google-doc-style share links for cloud Cut projects: a stable revocable
    token, an unauthenticated read-only `/api/cut-share/:token/*` surface with a
-   sanitized doc, and a viewer page that live-follows the owner's autosaves by
-   polling the doc version. Cloud projects only; not started.
+   settings-aware sanitized doc, and a viewer page that live-follows the
+   owner's autosaves by polling the doc version. Share options (allow copy,
+   AI panel, advanced tab toggles) ride one flexible JSON settings column;
+   Library and Details stay hidden always. Single editor; cloud projects only;
+   not started.
 
 ## Invariants
 
