@@ -769,16 +769,19 @@ export function remintProjectMediaUrls(): Promise<boolean> {
 }
 
 /** Foreground check: re-mint when the current project's signed URLs expire
- * within the hour. */
+ * within the hour. Cloud projects only. */
 export function remintExpiringMediaUrls() {
+  if (getBackend().kind !== "cloud") return;
   const { projectId } = useEditor.getState();
   if (projectId && signedUrlsExpireSoon(projectId)) void remintProjectMediaUrls();
 }
 
-/** Failure path: `failedUrl` just failed to load. If it is a project asset's
- * URL, re-mint and resolve with that asset's fresh URL — null when nothing
- * changed (not a project asset, cooldown, or the mint returned the same URL). */
+/** Failure path: `failedUrl` just failed to load. If it is a cloud project
+ * asset's URL, re-mint and resolve with that asset's fresh URL — null when
+ * nothing changed (local project, not a project asset, cooldown, or the mint
+ * returned the same URL). */
 export async function remintAfterMediaFailure(failedUrl: string): Promise<string | null> {
+  if (getBackend().kind !== "cloud") return null;
   const asset = useEditor.getState().assets.find((a) => a.url === failedUrl);
   if (!asset) return null;
   if (!(await remintProjectMediaUrls())) return null;
