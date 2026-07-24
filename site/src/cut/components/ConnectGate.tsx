@@ -159,6 +159,14 @@ export function ConnectGate({ children }: { children: ReactNode }) {
   const [cloudTrying, setCloudTrying] = useState(false);
   const [cloudError, setCloudError] = useState(false);
   const tryCloud = async () => {
+    track("cut_cloud_enable_clicked", {
+      source:
+        gate === "blocked"
+          ? "connect_gate_blocked"
+          : needsAsk
+            ? "connect_gate_ask"
+            : "connect_gate_install",
+    });
     setCloudTrying(true);
     setCloudError(false);
     const ok = await enableWebMode();

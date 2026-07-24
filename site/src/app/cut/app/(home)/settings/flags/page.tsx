@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { track } from "@/lib/analytics";
 import { Switch } from "@/components/ui/switch";
 import { applyWebModeLocal } from "@/cut/lib/flags";
 
@@ -32,7 +33,10 @@ export default function CutFeatureFlagsPage() {
 
   const toggle = (id: string, enabled: boolean) => {
     setFlags((cur) => cur?.map((f) => (f.id === id ? { ...f, enabled } : f)) ?? cur);
-    if (id === "cut-web-mode") applyWebModeLocal(enabled);
+    if (id === "cut-web-mode") {
+      applyWebModeLocal(enabled);
+      if (enabled) track("cut_cloud_enable_clicked", { source: "settings_flags" });
+    }
     void fetch("/api/account/feature-flags", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
