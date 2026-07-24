@@ -67,6 +67,25 @@ export async function deleteMedia(id: string, fileName: string) {
   await rm(mediaPath(id, fileName), { force: true });
 }
 
+const ORPHAN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** Delete media files the doc doesn't reference. Everything under media/ is
+ * written to become a doc asset, so an unreferenced file landed for a client
+ * that never adopted it — a chat import finishing after the page closed. A day
+ * of mtime grace keeps anything a live client might still register. */
+export async function sweepOrphanMedia(id: string, doc: ProjectDoc): Promise<void> {
+  const dir = mediaDir(id);
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const referenced = new Set(doc.assets.map((a) => a.fileName));
+  const cutoff = Date.now() - ORPHAN_MAX_AGE_MS;
+  for (const name of names) {
+    if (referenced.has(name) || name.startsWith(".")) continue;
+    const p = path.join(dir, name);
+    const info = await stat(p).catch(() => null);
+    if (info?.isFile() && info.mtimeMs < cutoff) await rm(p, { force: true });
+  }
+}
+
 const docPath = (id: string) => path.join(projectDir(id), "project.json");
 
 export async function readProject(id: string): Promise<ProjectDoc | null> {

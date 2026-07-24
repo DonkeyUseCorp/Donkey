@@ -19,6 +19,7 @@ import {
   readProject,
   renameProjectFolder,
   saveMedia,
+  sweepOrphanMedia,
   writeProject,
 } from "../projects";
 import { serveFileRange } from "../serveFile";
@@ -94,6 +95,7 @@ export const projectsApi = {
   async get(_req: Request, { id }: { id: string }) {
     const doc = await readProject(id).catch(() => null);
     if (!doc) return err("Project not found.", 404);
+    void sweepOrphanMedia(id, doc).catch(() => {});
     return Response.json(doc);
   },
 
