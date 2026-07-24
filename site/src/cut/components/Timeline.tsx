@@ -23,6 +23,7 @@ import {
   hasTemplateDrag,
 } from "@/cut/lib/assetDrag";
 import { audioClipRefs, draggingRef, hasRefDrag, type AssetRef } from "@/cut/lib/assetRef";
+import { useCutCaps } from "@/cut/lib/backend/hooks";
 import {
   addProjectTemplateToTimeline,
   addTemplateToProject,
@@ -1798,6 +1799,7 @@ function ClipMenu({
   clip: VideoClip | AudioClip;
   children?: ReactNode;
 }) {
+  const caps = useCutCaps();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -1837,15 +1839,17 @@ function ClipMenu({
         <DropdownMenuItem onClick={() => exportSegment(asset, clip)}>
           <ArrowDownToLine /> Export segment
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => {
-            const projectId = useEditor.getState().projectId;
-            if (!projectId) return;
-            void revealMedia(projectId, asset.fileName).catch(() => {});
-          }}
-        >
-          <FolderOpen /> Show in Finder
-        </DropdownMenuItem>
+        {caps.revealInFinder && (
+          <DropdownMenuItem
+            onClick={() => {
+              const projectId = useEditor.getState().projectId;
+              if (!projectId) return;
+              void revealMedia(projectId, asset.fileName).catch(() => {});
+            }}
+          >
+            <FolderOpen /> Show in Finder
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -119,6 +119,20 @@ export async function revealExport(
   );
 }
 
+/** Download a rendered export by file name — what stands in for revealExport
+ * when the backend has no Finder (the cloud route 302s to a signed R2 URL with
+ * attachment disposition). */
+export function downloadProjectExport(projectId: string, file: string) {
+  const a = document.createElement("a");
+  a.href = getBackend().url(
+    `/api/cut/projects/${projectId}/exports/${encodeURIComponent(file)}?download=1`
+  );
+  a.download = file;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 /** Delete a rendered export from the project folder. Throws on failure so the
  * UI can stay truthful instead of optimistically dropping a file that's still
  * on disk (which is why deleted exports used to reappear on the next refresh). */

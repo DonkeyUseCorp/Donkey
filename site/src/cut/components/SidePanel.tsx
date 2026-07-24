@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Captions, Check, Clapperboard, ClipboardList, Copy, Ellipsis, Film, FolderOpen, FolderPlus, Image as ImageIcon, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
+import { Captions, Check, Clapperboard, ClipboardList, Copy, Download, Ellipsis, Film, FolderOpen, FolderPlus, Image as ImageIcon, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
@@ -36,7 +36,7 @@ import {
 } from "@/cut/lib/assetDrag";
 import type { AssetRef } from "@/cut/lib/assetRef";
 import { RefDropZone } from "./RefDropZone";
-import { deleteExport, revealExport } from "@/cut/lib/exportClient";
+import { deleteExport, downloadProjectExport, revealExport } from "@/cut/lib/exportClient";
 import { useExports, useWatchExportLands } from "@/cut/lib/exportStore";
 import {
   addAssetToLibraryTemplate,
@@ -343,6 +343,7 @@ function MediaPanel({
   onImport: (files: FileList) => void;
   importing: boolean;
 }) {
+  const caps = useCutCaps();
   // Only user-imported media lives here; anything Cut created (recordings, AI
   // generations, voiceovers, freeze frames, stock adds) is tagged with an
   // `origin` and stays where it was made.
@@ -504,15 +505,27 @@ function MediaPanel({
                     </span>
                   </button>
                   <div className="flex shrink-0 items-center gap-0.5 pr-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label="Show in Finder"
-                      title="Show in Finder"
-                      onClick={() => void revealExport(projectId, it.file).catch(() => {})}
-                    >
-                      <FolderOpen />
-                    </Button>
+                    {caps.revealInFinder ? (
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="Show in Finder"
+                        title="Show in Finder"
+                        onClick={() => void revealExport(projectId, it.file).catch(() => {})}
+                      >
+                        <FolderOpen />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="Download export"
+                        title="Download"
+                        onClick={() => downloadProjectExport(projectId, it.file)}
+                      >
+                        <Download />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon-xs"

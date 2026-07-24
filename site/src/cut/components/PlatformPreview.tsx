@@ -7,6 +7,7 @@ import {
   Camera,
   Check,
   Copy,
+  Download,
   FolderOpen,
   Heart,
   MessageCircle,
@@ -23,7 +24,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/cut/components/SectionTitle";
-import { revealExport } from "@/cut/lib/exportClient";
+import { useCutCaps } from "@/cut/lib/backend/hooks";
+import { downloadProjectExport, revealExport } from "@/cut/lib/exportClient";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
@@ -56,6 +58,7 @@ export function PlatformPreviewDialog({
   item: ExportItem;
   onClose: () => void;
 }) {
+  const caps = useCutCaps();
   const publish = useEditor((s) => s.publish);
   const setPublish = useEditor((s) => s.setPublish);
   const [platform, setPlatform] = useState<Platform>("original");
@@ -96,11 +99,19 @@ export function PlatformPreviewDialog({
             <div className="text-sm font-semibold tracking-tight">Post preview</div>
             <button
               type="button"
-              onClick={() => void revealExport(projectId, item.file).catch(() => {})}
-              title="Show in Finder"
+              onClick={() =>
+                caps.revealInFinder
+                  ? void revealExport(projectId, item.file).catch(() => {})
+                  : downloadProjectExport(projectId, item.file)
+              }
+              title={caps.revealInFinder ? "Show in Finder" : "Download"}
               className="reveal-export mt-0.5 flex w-full items-center gap-1 font-mono text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
             >
-              <FolderOpen className="size-3 shrink-0" />
+              {caps.revealInFinder ? (
+                <FolderOpen className="size-3 shrink-0" />
+              ) : (
+                <Download className="size-3 shrink-0" />
+              )}
               <span className="truncate">{item.file}</span>
             </button>
           </div>

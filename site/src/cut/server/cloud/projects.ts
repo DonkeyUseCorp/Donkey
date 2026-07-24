@@ -388,9 +388,11 @@ export const projectsCloud = {
     );
   },
 
-  async serveExport(userId: string, id: string, file: string) {
+  async serveExport(userId: string, id: string, file: string, download = false) {
     try {
-      return redirect(await presignGet(projectExportKey(userId, id, decodeFileParam(file))));
+      const fileName = decodeFileParam(file);
+      const key = projectExportKey(userId, id, fileName);
+      return redirect(await presignGet(key, download ? fileName : undefined));
     } catch (e) {
       return caught(e, "Bad request.", 400);
     }
