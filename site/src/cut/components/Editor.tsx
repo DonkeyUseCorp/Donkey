@@ -443,7 +443,7 @@ export function Editor({
   return (
     <div className="flex h-screen min-w-[900px] overflow-hidden">
       <div className="grid min-w-0 flex-1 grid-rows-[46px_minmax(0,1fr)_auto]">
-        <TopBar onImport={importFiles} from={from} folder={folder} />
+        <TopBar onImport={importFiles} from={from} folder={folder} uploading={importing} />
         <div
           className={`grid min-h-0 ${
             hasInspector ? "grid-cols-[auto_minmax(0,1fr)_272px]" : "grid-cols-[auto_minmax(0,1fr)]"

@@ -32,10 +32,15 @@ export function TopBar({
   onImport,
   from,
   folder,
+  uploading = 0,
 }: {
   onImport: (files: File[], opts?: { origin?: "recording" }) => void;
   from?: string | null;
   folder?: string | null;
+  /** Media files currently importing; on a cloud project the save indicator
+   * reports them ("Uploading") — those are real network uploads, not local
+   * disk copies. */
+  uploading?: number;
 }) {
   const base = useCutBase();
   const back = backTarget(base, from, folder);
@@ -53,6 +58,9 @@ export function TopBar({
   const webMode = useWebMode();
   const cutMode = useCutMode();
   const canMoveToCloud = webMode && cutMode === "local";
+  // Cloud imports are real uploads worth reporting; local imports are instant
+  // disk copies, so the flag-off surface stays exactly as it was.
+  const cloudUploading = uploading > 0 && cutMode === "cloud";
   const [moveOpen, setMoveOpen] = useState(false);
   const [moving, setMoving] = useState(false);
   const [moveProgress, setMoveProgress] = useState<string | null>(null);
@@ -183,10 +191,15 @@ export function TopBar({
         <span
           className={cn(
             "ml-2 flex items-center gap-1 text-[11px] text-muted-foreground transition-opacity",
-            saveState === "saved" && "opacity-60"
+            saveState === "saved" && !cloudUploading && "opacity-60"
           )}
         >
-          {saveState === "saving" || saveState === "dirty" ? (
+          {cloudUploading ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />{" "}
+              {uploading === 1 ? "Uploading" : `Uploading ${uploading} files`}
+            </>
+          ) : saveState === "saving" || saveState === "dirty" ? (
             <>
               <Loader2 className="size-3 animate-spin" /> Saving
             </>
