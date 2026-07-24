@@ -2,7 +2,9 @@
 
 Cut (publicly "Donkey Cut") is a standalone, free video editor. Its product domain is `donkeycut.com` — a marketing landing at `/` and the editor at `/app/…` — while the legacy `cut.donkeyuse.com` keeps serving the editor at its root, unchanged. Both hosts serve only the client bundle — every page is client-rendered — and the page does all real work against the Cut engine: a local server the Donkey Mac app ships and supervises on the user's own Mac. The engine uses local disk, the app's bundled ffmpeg, on-device speech, and the user's own Claude/Codex CLI logins. Using the app requires a Donkey sign-in, and every engine request carries the signed-in account id: each account's projects and library live in that account's own folder on the Mac, so accounts sharing a machine don't see each other's work. AI generation — images, video, and voiceovers — and the assistant's Gemini models additionally spend credits: the page posts to Donkey's hosted inference routes with the user's session and credits. On `cut.donkeyuse.com` the auth cookie rides the registrable domain; `donkeycut.com` is a different registrable domain, so it signs in through an apex one-time-token handoff (`/cut-auth`) that sets a host-only cookie there. Generated media lands back in the project through the engine like any other file; Gemini chat turns, including their editor tool calls, run entirely in the page.
 
-**The one rule:** Cut's server side runs only on the user's Mac. On a hosted deploy every Cut API answers 404 before any handler runs, so the unauthenticated routes are unreachable there and nothing can execute off-Mac — the engine has no path to Donkey's production models; the page reaches them only through Donkey's own authenticated inference APIs. Don't wrap Cut's API routes in the Donkey auth helper, reach for Prisma, or bill against credits to "harden" them; local-only is the design for everything the engine does.
+**The engine rule:** the engine API surface (`/api/cut/*`) runs only on the user's Mac. On a hosted deploy every one of those routes answers 404 before any handler runs, so the unauthenticated routes are unreachable there and nothing can execute off-Mac — the engine has no path to Donkey's production models; the page reaches them only through Donkey's own authenticated inference APIs. Don't wrap the engine's routes in the Donkey auth helper, reach for Prisma from them, or bill them against credits; local-only is the design for everything the engine does.
+
+Web mode adds a second surface with the opposite rules on purpose: `/api/cut-cloud/*` is the engine's hosted twin — the same route shapes, but session-authenticated, storing docs in Postgres and media in R2, and metering model calls through credits. A project lives in exactly one place (this Mac or the cloud), and the client picks the surface per project; the two surfaces never proxy to each other. See [Web mode](#web-mode).
 
 ## How it works
 
@@ -20,7 +22,15 @@ browser ── API calls ──▶ Cut engine on 127.0.0.1 (spawned by the Donke
              · the user's own claude/codex CLI logins
 ```
 
-The client probes the engine's health endpoint (dedicated port first, dev server second) and remembers the winner. Browsers permission-gate a hosted page's calls to the local machine, so the first hosted visit holds on a connect screen and fires the browser's permission prompt from the user's own click; a denied permission gets its own recovery screen. The engine grants the hosted origins cross-origin access, and only those origins. Without a running engine the page shows a "get Donkey / open Donkey" state that connects by itself as soon as the engine appears. Engine updates ride the Donkey app's own auto-updater, so the client never prompts to update.
+The client probes the engine's health endpoint (dedicated port first, dev server second) and remembers the winner. Browsers permission-gate a hosted page's calls to the local machine, so the first hosted visit holds on a connect screen and fires the browser's permission prompt from the user's own click; a denied permission gets its own recovery screen. The engine grants the hosted origins cross-origin access, and only those origins. Without a running engine the page shows a "get Donkey / open Donkey" state that connects by itself as soon as the engine appears — unless web mode is on, in which case the page passes straight into cloud-only editing instead of walling. Engine updates ride the Donkey app's own auto-updater, so the client never prompts to update.
+
+## Web mode
+
+Web mode makes Cut usable in any browser on any OS with nothing installed. It ships behind the `cut-web-mode` flag — a per-browser toggle in the account menu that takes effect live. With the flag off, everything above is the whole story and behavior is unchanged.
+
+Every client call goes through a backend seam (`site/src/cut/lib/backend/`): the local driver is the engine transport unchanged, and the cloud driver rewrites the same paths to `/api/cut-cloud/*` with the session cookie. Residency is per project — the home screen lists "On this Mac" and "Cloud" sections, each served by its own driver, and opening a project binds the editor to that project's backend. Capability flags on the driver hide what a backend can't do, so components never feature-detect.
+
+Cloud projects store their doc in Postgres (versioned; a stale autosave 409s and the editor reloads the newer copy) and media in R2: uploads go direct from the browser on presigned URLs (the hosted functions never see the bytes), playback streams on signed range URLs, and a flat per-user quota is enforced at presign time. Exports, hover-preview proxies, and URL imports run on the render worker — a container (`site/src/cut/worker/`) that claims job rows from Postgres, reuses the engine's exact ffmpeg pipeline against R2, and reports progress back through the rows the client polls. Transcription and mic dictation call a hosted, credit-metered route that has Gemini produce cue-level timestamps from browser-rendered audio chunks; word timings are interpolated within each cue. The assistant offers its Gemini models (which already run entirely in the page); the Claude/Codex CLI providers stay app-only because they are the user's local logins.
 
 ## One API surface, one router
 
@@ -38,13 +48,13 @@ Because a GUI-spawned process inherits a bare PATH, the engine rebuilds it: tool
 
 | Concern | Donkey | Cut |
 | --- | --- | --- |
-| Sign-in | Required account | Required account; data is per-account on the Mac |
-| Billing | Credits | Free; AI generation and Gemini chat spend credits |
-| Storage | Database | Local disk |
-| Model access | Hosted routes | CLI logins; AI generation and Gemini chat use Donkey's hosted routes (signed in) |
-| Distribution | The Mac app | Rides the same app |
+| Sign-in | Required account | Required account; local data is per-account on the Mac |
+| Billing | Credits | Free; AI generation, Gemini chat, and cloud transcription spend credits |
+| Storage | Database | Local disk; cloud projects use Postgres + R2 behind a per-user quota |
+| Model access | Hosted routes | CLI logins; AI generation, Gemini chat, and cloud transcription use Donkey's hosted routes (signed in) |
+| Distribution | The Mac app | Rides the same app; web mode needs no install |
 
-The only shared code runs one way: Cut uses a few site UI utilities, and the engine rides the app's process-environment helpers. Nothing in the Donkey product imports Cut, and Cut adds no database models.
+The only shared code runs one way: Cut uses a few site UI utilities and the Donkey auth/credits helpers on its cloud surface, and the engine rides the app's process-environment helpers. Nothing in the Donkey product imports Cut. Cut's database models live in their own schema file (`site/prisma/Cut.prisma`) and carry plain user ids.
 
 ## Local resources
 
