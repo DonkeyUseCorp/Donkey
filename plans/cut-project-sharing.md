@@ -51,10 +51,10 @@ defaulted. Adding a toggle is a type + default change, never a migration.
 | `showAiChats` | off | Shared view shows the AI assistant panel |
 | `advanced.showMediaTab` | off | Media tab visible to viewers |
 | `advanced.showGenTabs` | off | Video / Image / Audio generation tabs visible |
+| `advanced.showDetailsTab` | off | Details (publish) tab visible; its doc fields served |
 
 The Library tab is never shown to viewers — it is the owner's per-user
-library, so this is an invariant, not a setting. The Details (publish) tab is
-likewise always hidden; its data is stripped from the shared doc.
+library, so this is an invariant, not a setting.
 
 Enforcement is server-side where it matters: doc sanitization reads the share
 settings, so a hidden surface's data never leaves the server — tab toggles are
@@ -107,16 +107,16 @@ CutShare: token → (userId, projectId)      /api/cut-share/:token/*  (unauthent
    publish settings, `genvideo` prompts, UI state. The share doc endpoint
    returns a stripped copy limited to what playback needs — assets, clips,
    audioClips, overlays, subtitles, aspect, fades, name — widened only where a
-   share setting turns a surface on. The share GET also returns the effective
-   settings so the viewer page renders the right chrome from one response.
+   share setting turns a surface on (e.g. `showDetailsTab` adds the publish
+   fields). The share GET also returns the effective settings so the viewer
+   page renders the right chrome from one response.
 
 5. **Viewer page.** `/app/shared/:token` binds the client-rendered editor's
    preview player and timeline to a third backend driver: kind `"share"`,
    rewrites engine-shaped paths to `/api/cut-share/:token/*`, every capability
    flag false plus a read-only flag that hides all editing chrome. Tab
-   visibility comes from the served share settings, with Library and Details
-   hard-off. Playback and scrubbing already only read the doc and stream
-   media.
+   visibility comes from the served share settings, with Library hard-off.
+   Playback and scrubbing already only read the doc and stream media.
 
 6. **Copy route.** `POST /api/cut-share/:token/copy`, session-authed, enabled
    by `allowCopy`: sanitized doc + media objects copied into the signed-in

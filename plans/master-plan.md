@@ -42,9 +42,9 @@ even when there are no active tasks.
    token, an unauthenticated read-only `/api/cut-share/:token/*` surface with a
    settings-aware sanitized doc, and a viewer page that follows the owner's
    autosaves by polling the doc version on a delay. Share options (allow copy,
-   AI panel, advanced tab toggles) ride one flexible JSON settings column;
-   Library and Details stay hidden always. Single editor; cloud projects only;
-   not started.
+   AI panel, advanced tab toggles including Details) ride one flexible JSON
+   settings column; Library stays hidden always. Single editor; cloud projects
+   only; not started.
 
 ## Invariants
 
