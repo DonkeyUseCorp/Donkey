@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 
-import { signInHrefFor } from "@/app/_components/landing/useAppEntryHref";
+import { authHrefFor } from "@/app/_components/landing/useAppEntryHref";
 import { setEngineUser } from "@/cut/lib/api";
 import { syncAccountFlags } from "@/cut/lib/flags";
 import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
@@ -47,8 +47,8 @@ export function RequireSession({ children }: { children: ReactNode }) {
     const here = window.location.pathname + window.location.search;
     window.location.replace(
       base === ""
-        ? `${DONKEYCUT_CANONICAL}${signInHrefFor(here === "/" ? "/app" : `/app${here}`)}`
-        : signInHrefFor(here),
+        ? `${DONKEYCUT_CANONICAL}${authHrefFor("/sign-in", here === "/" ? "/app" : `/app${here}`)}`
+        : authHrefFor("/sign-in", here),
     );
   }, [signedOut, base]);
 
