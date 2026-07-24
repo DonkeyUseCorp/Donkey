@@ -298,7 +298,7 @@ export function ProjectsHome() {
       });
       const project = (await res.json()) as ProjectSummary;
       track("project_created", { source: "projects_home" });
-      router.push(projectHref(base, project.id, "projects", openFolder, r0));
+      router.push(projectHref(base, project.id, "projects", openFolder));
     } finally {
       setBusy(false);
     }
@@ -314,7 +314,7 @@ export function ProjectsHome() {
     });
     const project = (await res.json()) as ProjectSummary;
     track("project_created", { source: "projects_home" });
-    router.push(projectHref(base, project.id, "projects", folderId, r));
+    router.push(projectHref(base, project.id, "projects", folderId));
   };
 
   // Turn a batch of desktop files into projects filed under `folderId`. Each
@@ -490,7 +490,7 @@ export function ProjectsHome() {
               toggleSelect(p.id);
               return;
             }
-            router.push(projectHref(base, p.id, "projects", openFolder, r));
+            router.push(projectHref(base, p.id, "projects", openFolder));
           }}
         >
           {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
@@ -567,7 +567,7 @@ export function ProjectsHome() {
               toggleSelect(p.id);
               return;
             }
-            router.push(projectHref(base, p.id, "projects", openFolder, r));
+            router.push(projectHref(base, p.id, "projects", openFolder));
           }}
         >
           <span className="flex min-w-0 items-center gap-2.5">

@@ -40,19 +40,17 @@ export function homeHref(base: string, tab: CutTab, folder?: string | null): str
 
 /** Project editor URL that remembers the tab (and folder, when open) it was
  * opened from. The default origin carries no query so the common URL stays
- * clean. Cloud-resident projects carry ?src=cloud so the editor binds the
- * cloud backend before it loads; local links are unchanged. */
+ * clean. Residency never rides the URL — the editor resolves where the id
+ * lives (lib/residency.ts). */
 export function projectHref(
   base: string,
   id: string,
   from: CutTab,
-  folder?: string | null,
-  residency?: "local" | "cloud"
+  folder?: string | null
 ): string {
   const params = new URLSearchParams();
   if (from === "library") params.set("from", "library");
   if (folder) params.set("folder", folder);
-  if (residency === "cloud") params.set("src", "cloud");
   const qs = params.toString();
   return `${base}/p/${id}${qs ? `?${qs}` : ""}`;
 }

@@ -13,6 +13,7 @@ import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import "@/cut/lib/genScene";
 import { installDevHooks } from "@/cut/lib/devHooks";
 import { backTarget, useCutBase } from "@/cut/lib/nav";
+import { resolveProjectMode } from "@/cut/lib/residency";
 import { projectDuration, serializeDoc, storedAssets, useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { AiPanel } from "./AiPanel";
@@ -28,12 +29,10 @@ export function Editor({
   projectId,
   from,
   folder,
-  src,
 }: {
   projectId: string;
   from?: string | null;
   folder?: string | null;
-  src?: string | null;
 }) {
   useEffect(() => installDevHooks(), []);
   const back = backTarget(useCutBase(), from, folder);
@@ -54,20 +53,27 @@ export function Editor({
   const dragDepth = useRef(0);
 
   // Load the project document, then enrich assets (thumbs/waveforms) lazily.
-  // The link's ?src=cloud names a cloud-resident project; bind the backend
-  // before anything in the editor fetches.
+  // Residency is a fact about the project, not the link: resolve where the id
+  // lives (residency.ts) and bind the backend before anything else fetches.
   useEffect(() => {
-    setCutMode(src === "cloud" ? "cloud" : "local");
-    void useEditor
-      .getState()
-      .loadProject(projectId)
-      .then(() => {
-        for (const asset of useEditor.getState().assets) void enrichAsset(asset);
-      });
+    let alive = true;
+    void resolveProjectMode(projectId).then((mode) => {
+      if (!alive) return;
+      setCutMode(mode);
+      void useEditor
+        .getState()
+        .loadProject(projectId)
+        .then(() => {
+          for (const asset of useEditor.getState().assets) void enrichAsset(asset);
+        });
+    });
     // An export still rendering after a reload rejoins on its own: the app-wide
     // exports dock polls the engine's job feed, so it reappears with no per-
     // project reconnect here.
-  }, [projectId, src]);
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
 
   // A cloud save hit a newer stored version (another session's edits won).
   // Take the newer doc through the ordinary load path — the GET returns it and

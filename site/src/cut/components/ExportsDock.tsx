@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useElapsed } from "@/cut/hooks/useElapsed";
-import type { CutMode } from "@/cut/lib/backend";
 import { downloadExport, revealExport } from "@/cut/lib/exportClient";
 import {
   beginExportPolling,
@@ -129,19 +128,11 @@ function StatusIcon({ status }: { status: string }) {
   return <CircleAlert className="size-4 shrink-0 text-destructive" />;
 }
 
-function ProjectName({
-  projectId,
-  name,
-  residency,
-}: {
-  projectId: string;
-  name?: string;
-  residency: CutMode;
-}) {
+function ProjectName({ projectId, name }: { projectId: string; name?: string }) {
   const base = useCutBase();
   return (
     <Link
-      href={projectHref(base, projectId, "projects", undefined, residency)}
+      href={projectHref(base, projectId, "projects")}
       className="block truncate text-xs font-medium hover:underline"
       title={name || "Untitled"}
     >
@@ -171,7 +162,7 @@ function ExportRow({ job }: { job: ExportJob }) {
     <div className="relative flex items-center gap-2.5 px-3 py-2">
       <StatusIcon status={job.status} />
       <div className="min-w-0 flex-1">
-        <ProjectName projectId={job.projectId} name={job.projectName} residency={job.residency} />
+        <ProjectName projectId={job.projectId} name={job.projectName} />
         <div
           className={cn(
             "truncate text-[11px] tabular-nums",
@@ -258,7 +249,7 @@ function LocalRowView({ row }: { row: LocalRow }) {
     <div className="flex items-center gap-2.5 px-3 py-2">
       <StatusIcon status={row.status} />
       <div className="min-w-0 flex-1">
-        <ProjectName projectId={row.projectId} name={row.projectName} residency={row.residency} />
+        <ProjectName projectId={row.projectId} name={row.projectName} />
         <div
           className={cn(
             "truncate text-[11px]",

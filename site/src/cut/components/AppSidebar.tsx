@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { apiFetch, cutMode } from "@/cut/lib/backend";
+import { apiFetch } from "@/cut/lib/backend";
 import { track } from "@/lib/analytics";
 import { NavUser } from "@/cut/components/NavUser";
 import { homeHref, projectHref, tabForPath, useCutBase, type CutTab } from "@/cut/lib/nav";
@@ -45,7 +45,7 @@ export function AppSidebar() {
       track("project_created", { source: "sidebar" });
       // The sidebar creates on the globally bound backend, so the link carries
       // that residency.
-      router.push(projectHref(base, project.id, tabForPath(pathname), null, cutMode()));
+      router.push(projectHref(base, project.id, tabForPath(pathname), null));
     } finally {
       setBusy(false);
     }

@@ -74,7 +74,7 @@ export function TopBar({
       await localBackend
         .fetch(`/api/cut/projects/${projectId}`, { method: "DELETE" })
         .catch(() => {});
-      window.location.href = projectHref(base, newId, "projects", null, "cloud");
+      window.location.href = projectHref(base, newId, "projects", null);
     } catch (e) {
       setMoveError(
         e instanceof Error && e.message ? e.message : "Could not move the project."
