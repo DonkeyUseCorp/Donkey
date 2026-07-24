@@ -16,12 +16,24 @@ const IDLE_POLL_MS = 2000;
 const WATCH_MS = 1000; // progress write + cancellation check cadence
 // Drain-and-exit: once the queue stays empty this long with nothing running,
 // the process exits so the container stops billing; the hosted API wakes it
-// again when a job is queued.
+// again when a job is queued. Only successful empty polls count as idle — a
+// failing claim (DB unreachable) must not read as a drained queue.
 const IDLE_EXIT_MS = 60_000;
+// Sustained claim failure: exit non-zero so the next wake retries with a
+// fresh process instead of burning container time on a dead DB connection.
+const FAIL_EXIT_MS = 5 * 60_000;
+// The watcher's unconditional 1s row write doubles as a heartbeat (updatedAt).
+// A "running" row this quiet lost its worker; sweep it back to the queue.
+const STALE_RUNNING_MS = 60_000;
+const SWEEP_EVERY_MS = 15_000;
 
 interface ActiveJob {
   handle: RenderHandle;
   canceled: boolean;
+  /** The row left "running" from under us (stale-swept back to queued after a
+   * heartbeat gap): stop working it, write nothing, and keep its overlays for
+   * whichever worker claims the retry. */
+  lost: boolean;
 }
 
 const active = new Map<string, ActiveJob>();
@@ -48,11 +60,27 @@ async function claimNext(): Promise<ClaimedJob | null> {
   return null;
 }
 
+/** Requeue "running" rows whose heartbeat (updatedAt) has gone quiet: their
+ * worker died without SIGTERM (OOM, host kill), so nothing else will ever
+ * settle them. Own in-flight jobs are excluded by id. */
+async function sweepStaleRunning(): Promise<void> {
+  const { count } = await prisma.cutRenderJob.updateMany({
+    where: {
+      state: "running",
+      updatedAt: { lt: new Date(Date.now() - STALE_RUNNING_MS) },
+      id: { notIn: [...active.keys()] },
+    },
+    data: { state: "queued", claimedAt: null, progress: 0 },
+  });
+  if (count > 0) console.log(`[cut-worker] requeued ${count} stale running job(s)`);
+}
+
 /** Mirror one running job to its row every WATCH_MS: push the pipeline's
  * progress out, and pull cancellation in (a canceled — or deleted — row kills
- * the live ffmpeg; the run then settles without touching the row again). */
+ * the live ffmpeg; the run then settles without touching the row again). The
+ * write happens every tick even when progress hasn't moved — it bumps
+ * updatedAt, the heartbeat the stale-running sweep keys off. */
 function watchJob(id: string, entry: ActiveJob): ReturnType<typeof setInterval> {
-  let written = -1;
   return setInterval(() => {
     void (async () => {
       try {
@@ -66,14 +94,17 @@ function watchJob(id: string, entry: ActiveJob): ReturnType<typeof setInterval> 
           entry.handle.proc?.kill("SIGKILL");
           return;
         }
-        const progress = entry.handle.progress;
-        if (progress !== written) {
-          written = progress;
-          await prisma.cutRenderJob.updateMany({
-            where: { id, state: "running" },
-            data: { progress },
-          });
+        if (row.state !== "running") {
+          entry.lost = true;
+          entry.canceled = true; // suppress the run's own row writes
+          entry.handle.error = "Requeued.";
+          entry.handle.proc?.kill("SIGKILL");
+          return;
         }
+        await prisma.cutRenderJob.updateMany({
+          where: { id, state: "running" },
+          data: { progress: entry.handle.progress },
+        });
       } catch {
         // Transient DB hiccup: keep watching; the run itself is unaffected.
       }
@@ -83,7 +114,7 @@ function watchJob(id: string, entry: ActiveJob): ReturnType<typeof setInterval> 
 
 async function runJob(job: ClaimedJob): Promise<void> {
   const handle: RenderHandle = { tmpDir: "", outPath: "", progress: 0, log: [] };
-  const entry: ActiveJob = { handle, canceled: false };
+  const entry: ActiveJob = { handle, canceled: false, lost: false };
   active.set(job.id, entry);
   const watcher = watchJob(job.id, entry);
   try {
@@ -120,9 +151,9 @@ async function runJob(job: ClaimedJob): Promise<void> {
     clearInterval(watcher);
     active.delete(job.id);
     // The overlay PNGs are single-use render inputs: delete them once the job
-    // settles. A shutdown requeues the job instead, so its overlays must
-    // survive for the retry.
-    if (!stopping) await deleteObjects(overlayKeysOf(job));
+    // settles. A shutdown or stale-sweep requeues the job instead, so its
+    // overlays must survive for the retry.
+    if (!stopping && !entry.lost) await deleteObjects(overlayKeysOf(job));
   }
 }
 
@@ -152,6 +183,8 @@ async function main(): Promise<void> {
   console.log(`[cut-worker] polling for jobs (max ${MAX_RUNNING} concurrent)`);
   const inFlight = new Set<Promise<void>>();
   let idleSince: number | null = null;
+  let failingSince: number | null = null;
+  let lastSweep = 0;
   while (!stopping) {
     if (inFlight.size >= MAX_RUNNING) {
       await Promise.race(inFlight);
@@ -159,9 +192,24 @@ async function main(): Promise<void> {
     }
     let job: ClaimedJob | null = null;
     try {
+      if (Date.now() - lastSweep >= SWEEP_EVERY_MS) {
+        lastSweep = Date.now();
+        await sweepStaleRunning();
+      }
       job = await claimNext();
+      failingSince = null;
     } catch (err) {
       console.error("[cut-worker] claim failed:", err instanceof Error ? err.message : err);
+      // A failing claim says nothing about the queue: keep the drain timer
+      // from ticking, and give up with an error exit once the failure holds.
+      idleSince = null;
+      failingSince ??= Date.now();
+      if (inFlight.size === 0 && Date.now() - failingSince >= FAIL_EXIT_MS) {
+        console.error("[cut-worker] claims failing persistently; exiting");
+        process.exit(1);
+      }
+      await sleep(IDLE_POLL_MS);
+      continue;
     }
     if (!job) {
       if (inFlight.size === 0) {

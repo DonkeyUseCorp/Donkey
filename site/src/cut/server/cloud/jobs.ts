@@ -140,7 +140,9 @@ export const jobsCloud = {
   async exportStatus(userId: string, jobId: string) {
     const row = await findJob(userId, jobId);
     if (!row) return err("Unknown export.", 404);
-    if (row.state === "queued") wakeRenderWorker();
+    // "running" wakes too: if the worker died mid-job, the woken replacement
+    // sweeps the stale row back to queued and picks it up.
+    if (row.state === "queued" || row.state === "running") wakeRenderWorker();
     const { status, error } = engineStatus(row);
     return Response.json({
       status,
@@ -237,7 +239,7 @@ export const jobsCloud = {
   async status(userId: string, jobId: string) {
     const row = await findJob(userId, jobId);
     if (!row) return err("Unknown job.", 404);
-    if (row.state === "queued") wakeRenderWorker();
+    if (row.state === "queued" || row.state === "running") wakeRenderWorker();
     return Response.json({
       id: row.id,
       kind: row.kind,
