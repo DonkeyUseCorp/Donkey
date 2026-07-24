@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader2, Plug, ShieldX } from "lucide-react";
 
@@ -65,6 +66,10 @@ async function permissionState(): Promise<PermissionState | null> {
 }
 
 export function ConnectGate({ children }: { children: ReactNode }) {
+  // Settings pages (billing, usage, feature flags) never touch the engine, so
+  // they render ungated — walling them would block the very page that turns
+  // cloud mode on.
+  const onSettings = (usePathname() ?? "").split("/").includes("settings");
   const [gate, setGate] = useState<Gate>("checking");
   // Whether starting a probe would raise the browser's permission prompt.
   // True blocks all automatic probing and turns the modal into the connect
@@ -120,8 +125,9 @@ export function ConnectGate({ children }: { children: ReactNode }) {
   }, [pass, passCloud]);
 
   useEffect(() => {
+    if (onSettings) return;
     void check();
-  }, [check]);
+  }, [check, onSettings]);
 
   // The flag flips on the fly from the account menu: turning it on releases a
   // gated page into cloud mode via a fresh check; turning it off while running
@@ -184,6 +190,8 @@ export function ConnectGate({ children }: { children: ReactNode }) {
     setNeedsAsk(perm === "prompt");
     setGate("install");
   };
+
+  if (onSettings) return <>{children}</>;
 
   const gated = gate !== "pass";
   const connecting = gate === "connecting";
