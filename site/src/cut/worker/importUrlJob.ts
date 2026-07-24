@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { download } from "../server/urlDownload";
-import { prisma, registerObject, type ClaimedJob } from "./db";
-import { mediaKey, mimeFor, uploadFile } from "./r2";
+import { prisma, registerObject, unregisterObjects, type ClaimedJob } from "./db";
+import { deleteObjects, mediaKey, mimeFor, uploadFile } from "./r2";
 
 /** What an import_url job records in CutRenderJob.result — the same shape the
  * engine's synchronous import route returns to the client. */
@@ -47,23 +47,35 @@ export async function runImportUrlJob(
     });
     const taken = new Set(rows.map((r) => r.fileName));
     const files: ImportUrlResult["files"] = [];
-    for (const f of dl.files) {
-      const fileName = dedupeName(path.basename(f.file), taken);
-      taken.add(fileName);
-      const key = mediaKey(job.userId, projectId, fileName);
-      const bytes = await uploadFile(key, f.file, mimeFor(fileName));
-      await registerObject({
-        userId: job.userId,
-        projectId,
-        r2Key: key,
-        fileName,
-        mime: mimeFor(fileName),
-        bytes,
-        kind: "media",
-      });
-      files.push({ fileName, title: f.title });
+    // A failed or canceled run keeps no bytes: whatever it staged in R2 is
+    // unregistered and deleted before the error propagates, so the project's
+    // storage only ever holds media the client can still adopt.
+    const staged: string[] = [];
+    try {
+      for (const f of dl.files) {
+        if (isCanceled()) throw new Error("Import canceled.");
+        const fileName = dedupeName(path.basename(f.file), taken);
+        taken.add(fileName);
+        const key = mediaKey(job.userId, projectId, fileName);
+        staged.push(key);
+        const bytes = await uploadFile(key, f.file, mimeFor(fileName));
+        await registerObject({
+          userId: job.userId,
+          projectId,
+          r2Key: key,
+          fileName,
+          mime: mimeFor(fileName),
+          bytes,
+          kind: "media",
+        });
+        files.push({ fileName, title: f.title });
+      }
+      return { files, ...(dl.text ? { text: dl.text } : {}) };
+    } catch (err) {
+      await unregisterObjects(job.userId, staged).catch(() => {});
+      await deleteObjects(staged);
+      throw err;
     }
-    return { files, ...(dl.text ? { text: dl.text } : {}) };
   } finally {
     void rm(tmp, { recursive: true, force: true });
   }

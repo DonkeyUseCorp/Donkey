@@ -54,3 +54,31 @@ export async function registerObject(opts: {
     }),
   ]);
 }
+
+/**
+ * Undo registerObject for a job's staged files: drop the rows and hand the
+ * bytes back to the user's storage total. R2 object deletion is the caller's
+ * (best-effort) follow-up.
+ */
+export async function unregisterObjects(userId: string, r2Keys: string[]): Promise<void> {
+  if (r2Keys.length === 0) return;
+  const rows = await prisma.cutMediaObject.findMany({
+    where: { userId, r2Key: { in: r2Keys } },
+    select: { id: true, bytes: true, uploadState: true },
+  });
+  if (rows.length === 0) return;
+  const bytes = rows.reduce(
+    (sum, r) => (r.uploadState === "complete" ? sum + Number(r.bytes) : sum),
+    0
+  );
+  await prisma.$transaction(async (tx) => {
+    await tx.cutMediaObject.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+    const usage = await tx.cutStorageUsage.findUnique({ where: { userId } });
+    const next = Math.max(0, (usage ? Number(usage.bytes) : 0) - bytes);
+    await tx.cutStorageUsage.upsert({
+      where: { userId },
+      create: { userId, bytes: BigInt(next) },
+      update: { bytes: BigInt(next) },
+    });
+  });
+}
