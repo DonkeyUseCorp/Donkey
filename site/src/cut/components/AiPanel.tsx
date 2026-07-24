@@ -222,6 +222,7 @@ export function AiPanel({
   onClose: () => void;
 }) {
   const [info, setInfo] = useState<ModelsInfo | null>(null);
+  const caps = useCutCaps();
   const signedIn = useSignedIn();
   const [model, setModel] = useState<string>(() =>
     typeof window === "undefined"
@@ -242,6 +243,10 @@ export function AiPanel({
   const [threads, setThreads] = useState<ChatThread[]>([]);
 
   useEffect(() => {
+    // The models probe asks the engine which CLIs are installed; without the
+    // localCliChat cap there is no engine to ask (mergedInfo synthesizes the
+    // Gemini-only provider set instead).
+    if (!caps.localCliChat) return;
     let alive = true;
     void apiFetch("/api/cut/ai/models")
       .then((r) => r.json())
@@ -250,7 +255,7 @@ export function AiPanel({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [caps.localCliChat]);
 
   const newChat = () => {
     setActiveChat(crypto.randomUUID());
@@ -293,18 +298,21 @@ export function AiPanel({
   // sign-in probe, not the engine's CLI checks. Signed-in state (or a probe
   // still in flight) leaves it usable; a definite signed-out disables it.
   const mergedInfo = useMemo<ModelsInfo | null>(() => {
+    const gemini =
+      signedIn === false
+        ? { available: false, note: "sign in to Donkey to chat", installed: true }
+        : (info?.providers.gemini ?? { available: true, note: "", installed: true });
+    // Without the localCliChat cap (cloud mode) the CLI providers don't exist:
+    // their groups hide, and the saved-model fallback effect moves a CLI
+    // selection over to Gemini.
+    if (!caps.localCliChat) {
+      const off = { available: false, note: "", installed: false };
+      const providers: ModelsInfo["providers"] = { claude: off, codex: off, test: off, gemini };
+      return { providers };
+    }
     if (!info) return null;
-    return {
-      ...info,
-      providers: {
-        ...info.providers,
-        gemini:
-          signedIn === false
-            ? { available: false, note: "sign in to Donkey to chat", installed: true }
-            : (info.providers.gemini ?? { available: true, note: "", installed: true }),
-      },
-    };
-  }, [info, signedIn]);
+    return { ...info, providers: { ...info.providers, gemini } };
+  }, [info, signedIn, caps.localCliChat]);
 
   return (
     <aside className="ai-panel relative flex min-h-0 w-[340px] shrink-0 animate-in flex-col border-l border-border bg-card duration-300 ease-out slide-in-from-right-full">
