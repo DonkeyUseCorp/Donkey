@@ -17,6 +17,7 @@ import { useInView } from "@/cut/hooks/useInView";
 import { genPulseOverlay, useGenPulse } from "@/cut/lib/genNotify";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useLightbox } from "@/cut/lib/lightbox";
+import { remintAfterMediaFailure } from "@/cut/lib/media";
 import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { characterPrompt, stockTitle } from "@/cut/lib/stock";
 import { useEditor } from "@/cut/lib/store";
@@ -342,6 +343,7 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
           playsInline
           preload="metadata"
           src={seen ? `${asset.url}#t=0.1` : undefined}
+          onError={() => void remintAfterMediaFailure(asset.url)}
           className="aspect-[16/10] w-full bg-black object-cover"
         />
       </button>

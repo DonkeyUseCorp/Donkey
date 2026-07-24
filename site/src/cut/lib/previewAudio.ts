@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { remintAfterMediaFailure } from "./media";
 
 // One shared preview player for every "play this audio" affordance — Audio
 // panel rows and chat audio cards. Starting a preview stops the last one, and
@@ -33,6 +34,8 @@ export const usePreviewAudio = create<PreviewAudioState>((set, get) => ({
     // Only the load that still owns the state may clear it — a superseded load's
     // late error/rejection must not knock out the preview playing now.
     audio.onerror = () => {
+      // An expired cloud asset URL re-mints; the next press plays the fresh one.
+      void remintAfterMediaFailure(url);
       if (get().url === url) set({ url: null });
     };
     set({ url });

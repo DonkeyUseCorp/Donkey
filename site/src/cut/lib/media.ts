@@ -1,7 +1,7 @@
 "use client";
 
 import { apiFetch, apiJson, getBackend, type CutBackend } from "./backend";
-import { quotaErrorMessage } from "./backend/cloud";
+import { fetchSignedMediaUrls, quotaErrorMessage, signedUrlsExpireSoon } from "./backend/cloud";
 import { encodeWav } from "./cloudTranscribe";
 import { useEditor } from "./store";
 import type { AssetType, AudioClip, MediaAsset, ProjectSummary, StoredAsset, VideoClip } from "./types";
@@ -624,13 +624,17 @@ const cellDims = (w: number, h: number): [number, number] =>
 /** Cloud twin of the engine's watch route for a still image: one downscaled
  * cell, no time axis. */
 export async function makeStillSheetClientSide(sourceUrl: string): Promise<WatchSheets> {
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error("Could not read the image."));
-    img.src = sourceUrl;
-  });
+  const img = await withFreshUrl(
+    sourceUrl,
+    (url) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.crossOrigin = "anonymous";
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error("Could not read the image."));
+        el.src = url;
+      })
+  );
   if (img.naturalWidth === 0 || img.naturalHeight === 0)
     throw new Error("Could not read the image.");
   const [w, h] = cellDims(img.naturalWidth, img.naturalHeight);
@@ -659,7 +663,7 @@ export async function makeContactSheetsClientSide(
   sourceUrl: string,
   opts: { from: number; to?: number; interval?: number }
 ): Promise<WatchSheets> {
-  const v = await loadVideoMeta(sourceUrl);
+  const v = await withFreshUrl(sourceUrl, loadVideoMeta);
   try {
     if (v.videoWidth === 0) throw new Error("Could not sample the video.");
     const from = Math.max(0, opts.from);
@@ -720,6 +724,89 @@ export async function makeContactSheetsClientSide(
   }
 }
 
+// --- Cloud signed-URL re-mint ---
+// Cloud media URLs are signed R2 GETs with a 24h life, batch-minted at project
+// load, so a tab left open outlives them. Two paths share one re-mint that
+// swaps fresh URLs into the store's assets: the editor re-mints proactively
+// when the tab returns to the foreground inside the mint's last hour, and any
+// media read that fails re-mints and retries once. Every consumer derives from
+// asset.url — the playback engine rebuilds elements on a src mismatch, edge
+// frames and panel previews re-render — so the store swap heals them all.
+
+const REMINT_COOLDOWN_MS = 15_000; // collapse an error storm into one mint
+
+let remintInFlight: Promise<boolean> | null = null;
+let remintDoneAt = 0;
+
+/** Re-mint the current cloud project's signed media URLs into the store.
+ * Deduped and cooled down; resolves true when any asset URL changed. */
+export function remintProjectMediaUrls(): Promise<boolean> {
+  if (remintInFlight) return remintInFlight;
+  if (getBackend().kind !== "cloud") return Promise.resolve(false);
+  if (Date.now() - remintDoneAt < REMINT_COOLDOWN_MS) return Promise.resolve(false);
+  const { projectId, assets } = useEditor.getState();
+  if (!projectId || assets.length === 0) return Promise.resolve(false);
+  remintInFlight = (async () => {
+    try {
+      const signed = await fetchSignedMediaUrls(projectId, assets.map((a) => a.fileName));
+      const st = useEditor.getState();
+      if (st.projectId !== projectId) return false; // switched projects mid-mint
+      let changed = false;
+      for (const a of st.assets) {
+        const url = signed.get(a.fileName);
+        if (url && url !== a.url) {
+          st.updateAsset(a.id, { url });
+          changed = true;
+        }
+      }
+      return changed;
+    } finally {
+      remintDoneAt = Date.now();
+      remintInFlight = null;
+    }
+  })();
+  return remintInFlight;
+}
+
+/** Foreground check: re-mint when the current project's signed URLs expire
+ * within the hour. */
+export function remintExpiringMediaUrls() {
+  const { projectId } = useEditor.getState();
+  if (projectId && signedUrlsExpireSoon(projectId)) void remintProjectMediaUrls();
+}
+
+/** Failure path: `failedUrl` just failed to load. If it is a project asset's
+ * URL, re-mint and resolve with that asset's fresh URL — null when nothing
+ * changed (not a project asset, cooldown, or the mint returned the same URL). */
+export async function remintAfterMediaFailure(failedUrl: string): Promise<string | null> {
+  const asset = useEditor.getState().assets.find((a) => a.url === failedUrl);
+  if (!asset) return null;
+  if (!(await remintProjectMediaUrls())) return null;
+  const fresh = useEditor.getState().assets.find((a) => a.id === asset.id)?.url;
+  return fresh && fresh !== failedUrl ? fresh : null;
+}
+
+/** Run a media read, re-minting and retrying once when it fails on an expired
+ * asset URL. */
+async function withFreshUrl<T>(url: string, run: (url: string) => Promise<T>): Promise<T> {
+  try {
+    return await run(url);
+  } catch (e) {
+    const fresh = await remintAfterMediaFailure(url);
+    if (!fresh) throw e;
+    return run(fresh);
+  }
+}
+
+/** makePeaks with the failure re-mint: a decode failure surfaces as empty
+ * peaks, not a throw, so emptiness is the retry trigger. */
+async function makePeaksFresh(url: string): Promise<number[]> {
+  const peaks = await makePeaks(url);
+  if (peaks.length) return peaks;
+  const fresh = await remintAfterMediaFailure(url);
+  return fresh ? makePeaks(fresh) : peaks;
+}
+
 /** Generate filmstrip thumbnails / waveform peaks and merge them into the
  * store. Safe to call repeatedly; skips assets that are already enriched. */
 export async function enrichAsset(asset: MediaAsset) {
@@ -735,12 +822,12 @@ export async function enrichAsset(asset: MediaAsset) {
       if (cached) {
         useEditor.getState().updateAsset(asset.id, { thumbs: cached.thumbs, thumbStep: cached.thumbStep });
       } else {
-        const { thumbs, thumbStep } = await makeThumbs(asset.url, asset.duration);
+        const { thumbs, thumbStep } = await withFreshUrl(asset.url, (u) => makeThumbs(u, asset.duration));
         useEditor.getState().updateAsset(asset.id, { thumbs, thumbStep });
         writeCachedStrip(key, { thumbs, thumbStep, duration: asset.duration, at: Date.now() });
       }
     } else if (asset.type === "audio" && !asset.peaks?.length) {
-      const peaks = await makePeaks(asset.url);
+      const peaks = await makePeaksFresh(asset.url);
       useEditor.getState().updateAsset(asset.id, { peaks });
     }
   } catch {
@@ -753,7 +840,7 @@ export async function enrichAsset(asset: MediaAsset) {
 export async function ensurePeaks(asset: MediaAsset) {
   try {
     if (!asset.peaks?.length) {
-      const peaks = await makePeaks(asset.url);
+      const peaks = await makePeaksFresh(asset.url);
       useEditor.getState().updateAsset(asset.id, { peaks });
     }
   } catch {
@@ -1005,6 +1092,17 @@ async function pumpEdgeFrames() {
           }
         } catch {
           src = null;
+          // Release the dead pooled element and re-mint; the store URL swap
+          // re-renders clip edges, which re-request against the fresh URL.
+          const dead = edgePool.get(req.url);
+          edgePool.delete(req.url);
+          dead
+            ?.then((v) => {
+              v.removeAttribute("src");
+              v.load();
+            })
+            .catch(() => {});
+          void remintAfterMediaFailure(req.url);
         }
       }
       req.resolvers.forEach((r) => r(src));
