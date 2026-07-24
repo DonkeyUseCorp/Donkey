@@ -15,7 +15,7 @@ import {
   servedFromEngine,
 } from "@/cut/lib/api";
 import { cutMode, setCutMode } from "@/cut/lib/backend";
-import { useWebMode, webModeEnabled } from "@/cut/lib/flags";
+import { enableWebMode, useWebMode, webModeEnabled } from "@/cut/lib/flags";
 
 // Chrome gates a public https page's first fetch to 127.0.0.1 behind its
 // Local Network Access prompt — "donkeycut.com wants to access other apps and
@@ -153,6 +153,19 @@ export function ConnectGate({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(ENGINE_LOST_EVENT, onLost);
   }, []);
 
+  // "Try Donkey Cut Cloud": enables the account's cut-web-mode flag right from
+  // the wall. On success the flag-flip effect above sees a walled gate with
+  // the flag on and releases the page into cloud mode.
+  const [cloudTrying, setCloudTrying] = useState(false);
+  const [cloudError, setCloudError] = useState(false);
+  const tryCloud = async () => {
+    setCloudTrying(true);
+    setCloudError(false);
+    const ok = await enableWebMode();
+    setCloudTrying(false);
+    if (!ok) setCloudError(true);
+  };
+
   const connect = async () => {
     setGate("connecting");
     localStorage.setItem(ACK_KEY, "1");
@@ -166,6 +179,25 @@ export function ConnectGate({ children }: { children: ReactNode }) {
 
   const gated = gate !== "pass";
   const connecting = gate === "connecting";
+
+  const cloudCta = (
+    <div className="mt-2 self-start text-left text-xs text-muted-foreground">
+      <p>
+        <button
+          className="font-medium text-foreground underline underline-offset-2 disabled:opacity-60"
+          disabled={cloudTrying}
+          onClick={() => void tryCloud()}
+          type="button"
+        >
+          {cloudTrying ? "Turning on…" : "Try Donkey Cut Cloud (Beta)"}
+        </button>{" "}
+        — edit right here in the browser, no install. Projects are stored in
+        the cloud and exports render on cloud servers. You can always install
+        the Donkey Mac app to enable local processing.
+      </p>
+      {cloudError && <p className="mt-1 text-red-600">Couldn&rsquo;t turn that on — try again.</p>}
+    </div>
+  );
 
   return (
     <>
@@ -196,6 +228,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
                 width={970}
               />
               <Button onClick={() => void check()}>Try again</Button>
+              {cloudCta}
             </div>
           ) : (
             <div className="flex w-full max-w-xl flex-col items-center gap-4 rounded-2xl border bg-background p-8 text-center shadow-2xl">
@@ -258,6 +291,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
                   </a>
                 </p>
               )}
+              {cloudCta}
             </div>
           )}
         </div>

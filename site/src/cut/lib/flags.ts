@@ -24,6 +24,19 @@ export function applyWebModeLocal(on: boolean) {
   window.dispatchEvent(new Event(FLAG_EVENT));
 }
 
+/** Turn the account flag on (same PUT the settings page issues) and mirror it
+ * locally on success. Returns whether the account write landed. */
+export async function enableWebMode(): Promise<boolean> {
+  const res = await fetch("/api/account/feature-flags", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ flag: WEB_MODE_KEY, enabled: true }),
+  }).catch(() => null);
+  if (!res?.ok) return false;
+  applyWebModeLocal(true);
+  return true;
+}
+
 /** Refresh the mirror from the signed-in account's flags. Errors keep the
  * current mirror — a transient fetch failure must not flip the editor's
  * backend out from under the user. */
