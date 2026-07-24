@@ -7,6 +7,8 @@
   "name": "donkey-cut-worker",
   "main": "cf/worker.ts",
   "compatibility_date": "2026-07-01",
+  // Streams the container's stdout/stderr into Workers Logs (wrangler tail).
+  "observability": { "enabled": true },
   "containers": [
     {
       "class_name": "CutRenderWorker",
