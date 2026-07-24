@@ -92,7 +92,7 @@ jobs:
       # The bundled CLI tools (ffmpeg, lit, pdf-fill, …) are NOT baked into the app: it downloads
       # them on first run from the artifact published by the Publish Bundled Tools workflow, so the
       # nightly package builds without vendoring them here. The Donkey Cut engine (the local server
-      # behind cut.donkeyuse.com) IS built and bundled by package-donkey-app.sh — no separate step.
+      # behind donkeycut.com) IS built and bundled by package-donkey-app.sh — no separate step.
       - name: Package Donkey
         if: steps.changes.outputs.should_build == 'true'
         env:

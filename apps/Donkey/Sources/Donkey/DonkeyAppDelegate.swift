@@ -27,7 +27,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// run only while signed in and are torn down on sign-out.
     private var sessionHeartbeatTimer: Timer?
     private var sessionHeartbeatActiveObserver: NSObjectProtocol?
-    /// Runs the Donkey Cut engine (the local server behind cut.donkeyuse.com) for the app's
+    /// Runs the Donkey Cut engine (the local server behind donkeycut.com) for the app's
     /// lifetime. Cut is free and standalone, so this starts regardless of sign-in state.
     private var cutEngineSupervisor: DonkeyCutEngineSupervisor?
     /// The QuickTime-style screen recorder: a menu bar toggle, a center-bottom control bar, and the

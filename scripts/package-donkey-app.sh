@@ -323,7 +323,7 @@ stage_bundled_tools() {
   echo "Baked bundled tools from $source_dir into $dest_dir (offline override)."
 }
 
-# The Donkey Cut engine — the local server behind cut.donkeyuse.com — is version-locked to the
+# The Donkey Cut engine — the local server behind donkeycut.com — is version-locked to the
 # app and built here as part of packaging, so one command produces a complete app. Set
 # DONKEY_CUT_ENGINE_BIN to reuse a prebuilt binary (e.g. a cross-arch or cached CI build) instead.
 stage_cut_engine() {
