@@ -2,7 +2,11 @@
 
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
-import { apiFetch } from "./api";
+import { engineOrigin, servedFromEngine } from "./api";
+import { getBackend, type CutBackend, type CutMode } from "./backend";
+import { cloudBackend } from "./backend/cloud";
+import { localBackend } from "./backend/local";
+import { webModeEnabled } from "./flags";
 import {
   cancelExportJob,
   createExportJob,
@@ -16,6 +20,11 @@ import { useGenNotify } from "./genNotify";
 // of that feed: every tab polls the same list and shows the same queue, and
 // starting an export in one project while another still renders just adds a row.
 // The dock (ExportsDock) renders it; the engine does the queueing.
+//
+// With web mode on, local and cloud jobs can be in flight at once, so the
+// store reflects both backends' feeds; each row is tagged with the residency
+// it came from and every per-row action goes to that row's own backend — the
+// globally bound mode rebinds whenever a project of the other residency opens.
 
 export interface ExportJob {
   id: string;
@@ -28,6 +37,15 @@ export interface ExportJob {
   /** Epoch ms the encode began (elapsed clock) and the job was created (order). */
   startedAt?: number;
   createdAt?: number;
+  /** Which backend's feed the row came from — stamped on merge, not sent by
+   * the server. */
+  residency: CutMode;
+}
+
+/** The backend a dock row lives on; per-row actions hit this, never the
+ * globally bound mode. */
+export function exportBackend(residency: CutMode): CutBackend {
+  return residency === "cloud" ? cloudBackend : localBackend;
 }
 
 /** A client-only dock row for the brief window before the engine has a job id:
@@ -41,6 +59,8 @@ export interface LocalRow {
   status: "preparing" | "error";
   error?: string;
   createdAt: number;
+  /** The backend the export is starting on, captured when it was kicked off. */
+  residency: CutMode;
 }
 
 interface ExportsState {
@@ -75,7 +95,14 @@ export const useExports = create<ExportsState>((set, get) => ({
     set((s) => ({
       local: [
         ...s.local,
-        { id: localId, projectId, projectName, status: "preparing", createdAt: Date.now() },
+        {
+          id: localId,
+          projectId,
+          projectName,
+          status: "preparing",
+          createdAt: Date.now(),
+          residency: getBackend().kind,
+        },
       ],
     }));
     try {
@@ -93,7 +120,8 @@ export const useExports = create<ExportsState>((set, get) => ({
   },
 
   cancel: (id) => {
-    cancelExportJob(id);
+    const job = get().jobs.find((j) => j.id === id);
+    cancelExportJob(id, job ? exportBackend(job.residency) : undefined);
     set((s) => ({
       jobs: s.jobs.map((j) =>
         j.id === id ? { ...j, status: "error", error: "Export canceled." } : j
@@ -124,18 +152,38 @@ export const useExports = create<ExportsState>((set, get) => ({
     })),
 
   refresh: async () => {
-    let list: ExportJob[];
-    try {
-      const res = await apiFetch("/api/cut/export-jobs");
-      if (!res.ok) return; // engine hiccup — keep the last good view
-      list = (await res.json()) as ExportJob[];
-    } catch {
-      return;
-    }
-    set((s) => ({
-      jobs: list,
-      dismissed: s.dismissed.filter((id) => list.some((j) => j.id === id)),
-    }));
+    // One backend's feed, rows stamped with its residency; null on a hiccup so
+    // the caller keeps that backend's last good view.
+    const fetchFeed = async (backend: CutBackend): Promise<ExportJob[] | null> => {
+      try {
+        const res = await backend.fetch("/api/cut/export-jobs");
+        if (!res.ok) return null;
+        const list = (await res.json()) as ExportJob[];
+        return list.map((j) => ({ ...j, residency: backend.kind }));
+      } catch {
+        return null;
+      }
+    };
+    // Flag off: exactly the pre-seam behavior — the local feed only. Flag on,
+    // jobs of both residencies can run at once, so poll every plausible feed:
+    // local when an engine is actually reachable, cloud always.
+    const cloudOn = webModeEnabled();
+    const pollLocal = !cloudOn || engineOrigin() !== "" || servedFromEngine();
+    const [localRows, cloudRows] = await Promise.all([
+      pollLocal ? fetchFeed(localBackend) : Promise.resolve(null),
+      cloudOn ? fetchFeed(cloudBackend) : Promise.resolve(null),
+    ]);
+    set((s) => {
+      // A failed or skipped feed keeps its previous rows; only a fresh answer
+      // replaces that backend's slice.
+      const slice = (kind: CutMode, fresh: ExportJob[] | null) =>
+        fresh ?? s.jobs.filter((j) => j.residency === kind);
+      const jobs = [...slice("local", localRows), ...slice("cloud", cloudRows)];
+      return {
+        jobs,
+        dismissed: s.dismissed.filter((id) => jobs.some((j) => j.id === id)),
+      };
+    });
   },
 }));
 

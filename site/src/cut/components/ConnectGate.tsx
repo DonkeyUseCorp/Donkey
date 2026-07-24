@@ -14,6 +14,8 @@ import {
   engineProbe,
   servedFromEngine,
 } from "@/cut/lib/api";
+import { cutMode, setCutMode } from "@/cut/lib/backend";
+import { useWebMode, webModeEnabled } from "@/cut/lib/flags";
 
 // Chrome gates a public https page's first fetch to 127.0.0.1 behind its
 // Local Network Access prompt — "donkeycut.com wants to access other apps and
@@ -70,7 +72,18 @@ export function ConnectGate({ children }: { children: ReactNode }) {
   const [needsAsk, setNeedsAsk] = useState(false);
 
   const pass = useCallback(() => {
+    setCutMode("local");
     engineGateOpen();
+    setGate("pass");
+  }, []);
+
+  // Web mode (the cut-web-mode flag): the app runs against the cloud backend,
+  // so a missing engine never walls the page — the gate still prefers the
+  // engine when it can probe without raising the browser ask, and otherwise
+  // passes straight through in cloud mode. The engine gate latch stays closed
+  // there; nothing in cloud mode touches loopback.
+  const passCloud = useCallback(() => {
+    setCutMode("cloud");
     setGate("pass");
   }, []);
 
@@ -80,25 +93,47 @@ export function ConnectGate({ children }: { children: ReactNode }) {
       setNeedsAsk(forced === "ask" || forced === "connecting");
       return setGate(forced === "ask" ? "install" : (forced as Gate));
     }
+    const web = webModeEnabled();
     const perm = await permissionState();
-    if (perm === "denied") return setGate("blocked");
+    if (perm === "denied") {
+      if (web) passCloud();
+      else setGate("blocked");
+      return;
+    }
     const quiet =
       servedFromEngine() ||
       perm === "granted" ||
       (perm === null && localStorage.getItem(ACK_KEY) === "1");
     setNeedsAsk(!quiet);
-    if (!quiet) return setGate("install");
+    if (!quiet) {
+      if (web) passCloud();
+      else setGate("install");
+      return;
+    }
     try {
       await engineProbe();
       pass();
     } catch {
-      setGate("install");
+      if (web) passCloud();
+      else setGate("install");
     }
-  }, [pass]);
+  }, [pass, passCloud]);
 
   useEffect(() => {
     void check();
   }, [check]);
+
+  // The flag flips on the fly from the account menu: turning it on releases a
+  // gated page into cloud mode via a fresh check; turning it off while running
+  // on the cloud backend puts the gate back up on the local flow.
+  const webMode = useWebMode();
+  useEffect(() => {
+    const flip = webMode ? gate === "install" || gate === "blocked" : cutMode() === "cloud";
+    if (!flip) return;
+    if (!webMode) setCutMode("local");
+    const t = setTimeout(() => void check(), 0);
+    return () => clearTimeout(t);
+  }, [webMode, gate, check]);
 
   // While waiting with a prompt-free path to loopback, keep probing so the
   // page connects the moment the app starts.

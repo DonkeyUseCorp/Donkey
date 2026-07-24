@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { Check, Mic, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useCutCaps } from "@/cut/lib/backend/hooks";
 import { useMicTranscription, type MicController } from "@/cut/lib/micTranscribe";
 import { LiveWaveform } from "./RecordDialog";
 
@@ -107,7 +108,9 @@ export function DictationControl({
   buttonClassName?: string;
   disabled?: boolean;
 }) {
+  const caps = useCutCaps();
   const mic = useMicTranscription((t) => onResult(appendTranscript(text, t)));
+  if (!caps.liveMic) return null;
   return (
     <>
       {mic.state !== "idle" && (

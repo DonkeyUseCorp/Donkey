@@ -24,6 +24,7 @@ import {
   trackLocale,
 } from "@/cut/lib/subtitles";
 import { useElapsed } from "@/cut/hooks/useElapsed";
+import { useCutCaps } from "@/cut/lib/backend/hooks";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
 import {
@@ -71,6 +72,7 @@ function laneLanguage(subs: SubtitlesBlock, lane: number): string {
 }
 
 export function SubtitlesPanel() {
+  const caps = useCutCaps();
   const subtitles = useEditor((s) => s.subtitles);
   const lane = useEditor((s) => s.subtitleLane);
   const status = useEditor((s) => s.subtitleStatus);
@@ -130,23 +132,25 @@ export function SubtitlesPanel() {
         <EmptyState status={status} error={error} onGenerate={generate} onTranslate={translate} />
       ) : tab === "content" ? (
         <>
-          <div className="shrink-0 px-1.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="sub-regenerate"
-              title="Transcribe the cut again (replaces these captions — undoable)"
-              disabled={status === "running"}
-              onClick={generate}
-            >
-              {status === "running" ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <RefreshCw />
-              )}
-              Regenerate
-            </Button>
-          </div>
+          {caps.transcribe && (
+            <div className="shrink-0 px-1.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="sub-regenerate"
+                title="Transcribe the cut again (replaces these captions — undoable)"
+                disabled={status === "running"}
+                onClick={generate}
+              >
+                {status === "running" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <RefreshCw />
+                )}
+                Regenerate
+              </Button>
+            </div>
+          )}
           <Transcript cues={activeCues} />
           {status === "error" && error && (
             <p className="sub-error shrink-0 border-t border-border px-4 py-2.5 text-[11px] leading-relaxed text-red-600">
@@ -401,6 +405,7 @@ function EmptyState({
   onGenerate: () => void;
   onTranslate: (fromLane: number) => void;
 }) {
+  const caps = useCutCaps();
   const subtitles = useEditor((s) => s.subtitles);
   const lane = useEditor((s) => s.subtitleLane);
   const locale = trackLocale(subtitles, lane);
@@ -457,34 +462,37 @@ function EmptyState({
         </select>
         <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" />
       </div>
-      <Button
-        className="sub-generate w-full"
-        onClick={() => {
-          setTranslating(false);
-          onGenerate();
-        }}
-        title="Transcribe your audio into plain captions, word for word"
-      >
-        <Captions data-icon="inline-start" />
-        {status === "empty" || status === "error" ? "Try again" : "Generate subtitles"}
-      </Button>
-      {sources.map((i) => (
+      {caps.transcribe && (
         <Button
-          key={i}
-          variant="outline"
-          className="sub-translate w-full"
-          title={`Write this track by translating the ${laneLanguage(subtitles, i)} captions into ${
-            LOCALES.find(([id]) => id === locale)?.[1] ?? locale
-          }`}
+          className="sub-generate w-full"
           onClick={() => {
-            setTranslating(true);
-            onTranslate(i);
+            setTranslating(false);
+            onGenerate();
           }}
+          title="Transcribe your audio into plain captions, word for word"
         >
-          <Languages data-icon="inline-start" />
-          Translate from {laneLanguage(subtitles, i)}
+          <Captions data-icon="inline-start" />
+          {status === "empty" || status === "error" ? "Try again" : "Generate subtitles"}
         </Button>
-      ))}
+      )}
+      {caps.captionAi &&
+        sources.map((i) => (
+          <Button
+            key={i}
+            variant="outline"
+            className="sub-translate w-full"
+            title={`Write this track by translating the ${laneLanguage(subtitles, i)} captions into ${
+              LOCALES.find(([id]) => id === locale)?.[1] ?? locale
+            }`}
+            onClick={() => {
+              setTranslating(true);
+              onTranslate(i);
+            }}
+          >
+            <Languages data-icon="inline-start" />
+            Translate from {laneLanguage(subtitles, i)}
+          </Button>
+        ))}
     </div>
   );
 }

@@ -14,10 +14,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useElapsed } from "@/cut/hooks/useElapsed";
+import type { CutMode } from "@/cut/lib/backend";
 import { downloadExport, revealExport } from "@/cut/lib/exportClient";
 import {
   beginExportPolling,
   endExportPolling,
+  exportBackend,
   useExports,
   type ExportJob,
   type LocalRow,
@@ -127,11 +129,19 @@ function StatusIcon({ status }: { status: string }) {
   return <CircleAlert className="size-4 shrink-0 text-destructive" />;
 }
 
-function ProjectName({ projectId, name }: { projectId: string; name?: string }) {
+function ProjectName({
+  projectId,
+  name,
+  residency,
+}: {
+  projectId: string;
+  name?: string;
+  residency: CutMode;
+}) {
   const base = useCutBase();
   return (
     <Link
-      href={projectHref(base, projectId, "projects")}
+      href={projectHref(base, projectId, "projects", undefined, residency)}
       className="block truncate text-xs font-medium hover:underline"
       title={name || "Untitled"}
     >
@@ -141,6 +151,10 @@ function ProjectName({ projectId, name }: { projectId: string; name?: string }) 
 }
 
 function ExportRow({ job }: { job: ExportJob }) {
+  // The job's own backend, not the globally bound one: the row must keep
+  // working after the app rebinds to the other residency.
+  const backend = exportBackend(job.residency);
+  const caps = backend.caps;
   const elapsed = useElapsed(job.status === "running" ? job.startedAt ?? null : null);
   const pct = Math.round(job.progress * 100);
 
@@ -157,7 +171,7 @@ function ExportRow({ job }: { job: ExportJob }) {
     <div className="relative flex items-center gap-2.5 px-3 py-2">
       <StatusIcon status={job.status} />
       <div className="min-w-0 flex-1">
-        <ProjectName projectId={job.projectId} name={job.projectName} />
+        <ProjectName projectId={job.projectId} name={job.projectName} residency={job.residency} />
         <div
           className={cn(
             "truncate text-[11px] tabular-nums",
@@ -182,21 +196,25 @@ function ExportRow({ job }: { job: ExportJob }) {
           <>
             {job.outName && (
               <>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Show in Finder"
-                  title="Show in Finder"
-                  onClick={() => void revealExport(job.projectId, job.outName!).catch(() => {})}
-                >
-                  <FolderOpen />
-                </Button>
+                {caps.revealInFinder && (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Show in Finder"
+                    title="Show in Finder"
+                    onClick={() =>
+                      void revealExport(job.projectId, job.outName!, backend).catch(() => {})
+                    }
+                  >
+                    <FolderOpen />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon-xs"
                   aria-label="Download again"
                   title="Download"
-                  onClick={() => downloadExport(job.id, job.outName!)}
+                  onClick={() => downloadExport(job.id, job.outName!, backend)}
                 >
                   <Download />
                 </Button>
@@ -240,7 +258,7 @@ function LocalRowView({ row }: { row: LocalRow }) {
     <div className="flex items-center gap-2.5 px-3 py-2">
       <StatusIcon status={row.status} />
       <div className="min-w-0 flex-1">
-        <ProjectName projectId={row.projectId} name={row.projectName} />
+        <ProjectName projectId={row.projectId} name={row.projectName} residency={row.residency} />
         <div
           className={cn(
             "truncate text-[11px]",

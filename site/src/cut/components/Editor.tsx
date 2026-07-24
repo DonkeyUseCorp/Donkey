@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Clapperboard, Loader2 } from "lucide-react";
+import { Clapperboard, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { apiFetch } from "@/cut/lib/api";
+import { apiFetch, setCutMode } from "@/cut/lib/backend";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
@@ -28,10 +28,12 @@ export function Editor({
   projectId,
   from,
   folder,
+  src,
 }: {
   projectId: string;
   from?: string | null;
   folder?: string | null;
+  src?: string | null;
 }) {
   useEffect(() => installDevHooks(), []);
   const back = backTarget(useCutBase(), from, folder);
@@ -48,10 +50,14 @@ export function Editor({
   // panel, so collapse it and let the preview take the space.
   const hasInspector = useEditor((s) => s.selection != null && s.selection.kind !== "cue");
   const [importing, setImporting] = useState(0);
+  const [conflictReloaded, setConflictReloaded] = useState(false);
   const dragDepth = useRef(0);
 
   // Load the project document, then enrich assets (thumbs/waveforms) lazily.
+  // The link's ?src=cloud names a cloud-resident project; bind the backend
+  // before anything in the editor fetches.
   useEffect(() => {
+    setCutMode(src === "cloud" ? "cloud" : "local");
     void useEditor
       .getState()
       .loadProject(projectId)
@@ -61,6 +67,25 @@ export function Editor({
     // An export still rendering after a reload rejoins on its own: the app-wide
     // exports dock polls the engine's job feed, so it reappears with no per-
     // project reconnect here.
+  }, [projectId, src]);
+
+  // A cloud save hit a newer stored version (another session's edits won).
+  // Take the newer doc through the ordinary load path — the GET returns it and
+  // rebinds the driver's version — and say so.
+  useEffect(() => {
+    const onConflict = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId: string }>).detail;
+      if (!detail || detail.projectId !== projectId) return;
+      void useEditor
+        .getState()
+        .loadProject(projectId)
+        .then(() => {
+          for (const asset of useEditor.getState().assets) void enrichAsset(asset);
+        });
+      setConflictReloaded(true);
+    };
+    window.addEventListener("cut-cloud-doc-conflict", onConflict);
+    return () => window.removeEventListener("cut-cloud-doc-conflict", onConflict);
   }, [projectId]);
 
   // Keep the project card's hover proxy fresh: rebuild it a few seconds after
@@ -434,6 +459,20 @@ export function Editor({
         />
       )}
       {exportOpen && <ExportDialog />}
+      {conflictReloaded && (
+        <div className="fixed top-14 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-foreground/90 py-1.5 pr-1.5 pl-3.5 text-background shadow-lg">
+          <span className="text-xs font-medium">Reloaded a newer version saved elsewhere.</span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Dismiss"
+            className="rounded-full text-background hover:bg-background/15 hover:text-background"
+            onClick={() => setConflictReloaded(false)}
+          >
+            <X />
+          </Button>
+        </div>
+      )}
       <Lightbox />
     </div>
   );

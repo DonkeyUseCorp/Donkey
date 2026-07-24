@@ -14,7 +14,7 @@
  * the doc is just the other end of the same contract.
  */
 
-import { apiFetch, apiJson } from "../api";
+import { apiFetch, apiJson, getBackend, type CutBackend } from "../backend";
 import { storedAssets, useEditor } from "../store";
 import { mediaUrl, SPEED_MIN } from "../types";
 import type { AudioClip, MediaAsset, ProjectDoc, VideoClip } from "../types";
@@ -29,15 +29,18 @@ const chains = new Map<string, Promise<void>>();
  * caller; the chain itself always continues. */
 export function withProjectDoc(
   projectId: string,
-  mutate: (doc: ProjectDoc) => void
+  mutate: (doc: ProjectDoc) => void,
+  // Background writes can outlive navigation into a project of the other
+  // residency; callers that know their backend pin it here.
+  backend: CutBackend = getBackend()
 ): Promise<void> {
   const prev = chains.get(projectId) ?? Promise.resolve();
   const next = prev.then(async () => {
-    const res = await apiFetch(`/api/cut/projects/${projectId}`);
+    const res = await backend.fetch(`/api/cut/projects/${projectId}`);
     const doc = await apiJson<ProjectDoc>(res);
     if (!res.ok) throw new Error(doc?.error ?? "Could not read the project.");
     mutate(doc);
-    const put = await apiFetch(`/api/cut/projects/${projectId}`, {
+    const put = await backend.fetch(`/api/cut/projects/${projectId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(doc),
@@ -75,12 +78,20 @@ export async function projectWriteMode(projectId: string): Promise<"store" | "do
 
 /** Register a run-created asset in a closed project's doc (the open-project
  * path stocks the store instead and autosave persists it). Idempotent. */
-export function stockAssetInDoc(projectId: string, asset: MediaAsset): Promise<void> {
-  return withProjectDoc(projectId, (doc) => {
-    if (!doc.assets.some((a) => a.id === asset.id)) {
-      doc.assets.push(storedAssets([asset])[0]);
-    }
-  });
+export function stockAssetInDoc(
+  projectId: string,
+  asset: MediaAsset,
+  backend?: CutBackend
+): Promise<void> {
+  return withProjectDoc(
+    projectId,
+    (doc) => {
+      if (!doc.assets.some((a) => a.id === asset.id)) {
+        doc.assets.push(storedAssets([asset])[0]);
+      }
+    },
+    backend
+  );
 }
 
 /** A run's asset by id, wherever the user is: the live store when the run's

@@ -2,7 +2,9 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import { apiFetch, apiJson } from "./api";
+import { getBackend, type CutBackend, type CutMode } from "./backend";
+import { cloudBackend } from "./backend/cloud";
+import { localBackend } from "./backend/local";
 import type { AssetRef } from "./assetRef";
 import { bytesFromBase64 } from "./bytes";
 import { readThreadIds } from "./chatThreads";
@@ -10,12 +12,12 @@ import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { stockAssetInDoc } from "./genvideo/docWriter";
 import { cutAppBase } from "./hosts";
 import { hostedPost } from "./hosted";
-import { enrichAsset, importFileToProject } from "./media";
+import { enrichAsset, importFileToProject, uploadProjectImage } from "./media";
 import { refsToInlineImages, videoSafeInline, visualRefs, type InlineImage } from "./refMedia";
 import { useGenNotify } from "./genNotify";
 import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
-import { mediaSlug, mediaUrl, type MediaAsset } from "./types";
+import { mediaSlug, type MediaAsset } from "./types";
 import { videoModel } from "./videoModels";
 import { walkLadder, type VideoAttempt } from "./videoLadder";
 
@@ -47,6 +49,10 @@ export interface GenerateJob {
    * resumed caller re-adopts exactly its own in-flight job — never another
    * shot's that happens to share a prompt. */
   genKey?: string;
+  /** The backend the job started on. Landing work can outlive navigation into
+   * a project of the other residency, so every project write for this job pins
+   * here instead of reading the (rebound) global mode at land time. */
+  residency?: CutMode;
   /** Which ladder rung landed the render (0-based index into the attempts) —
    * how a caller knows whether its take rode an image anchor. */
   rung?: number;
@@ -175,6 +181,11 @@ const VIDEO_DEADLINE_MS = 12 * 60_000;
 
 const uid = () => crypto.randomUUID().slice(0, 8);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The backend a job's results land on: its pinned residency; jobs persisted
+ * before residency existed fall back to the active backend. */
+const jobBackend = (job: { residency?: CutMode }): CutBackend =>
+  job.residency === "cloud" ? cloudBackend : job.residency === "local" ? localBackend : getBackend();
 
 /** Display name for the asset: the prompt, tidied and capped. */
 const promptName = (prompt: string) => {
@@ -404,9 +415,9 @@ export const useGenerate = create<GenerateState>((set, get) => {
   // store; a closed one records it in its persisted doc so nothing the render
   // made is orphaned. Returns whether the OPEN project adopted it (badges and
   // placement callbacks only make sense on screen).
-  const adopt = (projectId: string, asset: MediaAsset): boolean => {
+  const adopt = (projectId: string, asset: MediaAsset, backend?: CutBackend): boolean => {
     if (useEditor.getState().projectId !== projectId) {
-      void stockAssetInDoc(projectId, asset).catch(() => {});
+      void stockAssetInDoc(projectId, asset, backend).catch(() => {});
       return false;
     }
     useEditor.getState().addAsset(asset);
@@ -487,20 +498,22 @@ export const useGenerate = create<GenerateState>((set, get) => {
       throw new Error("The provider returned no video.");
     }
 
-    const asset = await importFileToProject(job.projectId, file);
+    const backend = jobBackend(job);
+    const asset = await importFileToProject(job.projectId, file, backend);
     if (!asset) throw new Error("Could not import the generated video.");
     // The owner may have been deleted during the import (the file write is a
     // round trip): drop the file we just wrote rather than leave it orphaned.
     if (aborted()) {
-      void apiFetch(
-        `/api/cut/projects/${job.projectId}/media/${encodeURIComponent(asset.fileName)}`,
-        { method: "DELETE" }
-      ).catch(() => {});
+      void backend
+        .fetch(`/api/cut/projects/${job.projectId}/media/${encodeURIComponent(asset.fileName)}`, {
+          method: "DELETE",
+        })
+        .catch(() => {});
       return;
     }
     asset.name = promptName(job.prompt);
     applyOwnership(asset, job.chatId);
-    if (adopt(job.projectId, asset)) {
+    if (adopt(job.projectId, asset, backend)) {
       if (!job.chatId) useGenNotify.getState().landed("video", asset.id);
       onDone?.(asset);
     }
@@ -537,6 +550,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
     },
 
     generateImage: (projectId, prompt, opts) => {
+      const backend = getBackend(); // pinned: the render outlives navigation
       const job: GenerateJob = {
         id: uid(),
         projectId,
@@ -544,6 +558,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
         prompt,
         startedAt: Date.now(),
         status: "running",
+        residency: backend.kind,
         ...(opts?.chatId ? { chatId: opts.chatId } : {}),
       };
       set((s) => ({ jobs: [job, ...s.jobs] }));
@@ -573,38 +588,33 @@ export const useGenerate = create<GenerateState>((set, get) => {
           const out = gen.outputs.find((o) => o.dataBase64);
           if (!out?.dataBase64) throw new Error("The provider returned no image.");
 
-          const form = new FormData();
-          form.append(
-            "file",
+          // Mark it generated so it surfaces in the generate panel; a stock
+          // image imported from a tile sends no origin (plain import).
+          const asset = await uploadProjectImage(
+            projectId,
             new Blob([bytesFromBase64(out.dataBase64)], {
               type: out.contentType ?? "image/png",
             }),
-            out.filename ?? "image.png"
+            out.filename ?? "image.png",
+            {
+              name: promptName(prompt),
+              origin: "generated",
+              failMessage: "Could not add the image to the project.",
+              backend,
+            }
           );
-          form.append("name", promptName(prompt));
-          // Mark it generated so it surfaces in the generate panel; a stock
-          // image imported from a tile sends no origin (plain import).
-          form.append("origin", "generated");
-          const baked = await apiFetch(`/api/cut/projects/${projectId}/image`, {
-            method: "POST",
-            body: form,
-          });
-          const body = await apiJson<MediaAsset>(baked);
-          if (!baked.ok || !body.fileName) {
-            throw new Error(body.error ?? "Could not add the image to the project.");
-          }
-          const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
           // Owner deleted while the image rendered (cancelForOwner dropped the
           // job): drop the baked file instead of adopting orphaned media.
           if (cancelledJobs.has(job.id) || !get().jobs.some((j) => j.id === job.id)) {
-            void apiFetch(
-              `/api/cut/projects/${projectId}/media/${encodeURIComponent(body.fileName)}`,
-              { method: "DELETE" }
-            ).catch(() => {});
+            void backend
+              .fetch(`/api/cut/projects/${projectId}/media/${encodeURIComponent(asset.fileName)}`, {
+                method: "DELETE",
+              })
+              .catch(() => {});
             return settled(job.id, job);
           }
           applyOwnership(asset, opts?.chatId);
-          if (adopt(projectId, asset) && !opts?.chatId) {
+          if (adopt(projectId, asset, backend) && !opts?.chatId) {
             useGenNotify.getState().landed("image", asset.id);
           }
           update(job.id, { status: "done", assetId: asset.id });
@@ -632,6 +642,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
         prompt: attempts[0]?.prompt ?? "",
         startedAt: Date.now(),
         status: "running",
+        residency: getBackend().kind, // pinned: the render outlives navigation
         ...(jobOpts?.chatId ? { chatId: jobOpts.chatId } : {}),
         ...(jobOpts?.genKey ? { genKey: jobOpts.genKey } : {}),
       };

@@ -1,7 +1,7 @@
 "use client";
 
-import { apiFetch, apiJson, apiUrl } from "./api";
-import { enrichAsset } from "./media";
+import { apiFetch, apiJson, apiUrl, getBackend } from "./backend";
+import { enrichAsset, presignedUpload, probeFileMeta } from "./media";
 import { useEditor } from "./store";
 import type { LibraryTemplate, MediaAsset, TemplateMedia, TemplateSaveInput } from "./types";
 import { IMAGE_CLIP_SECONDS, mediaUrl } from "./types";
@@ -94,6 +94,27 @@ export async function moveLibraryItem(id: string, folderId: string | null): Prom
 }
 
 export async function uploadToLibrary(file: File): Promise<LibraryAsset> {
+  if (getBackend().kind === "cloud") {
+    // Presign -> direct R2 PUT -> complete, with the media probed here — the
+    // cloud can't cheaply probe an R2 object the way the engine probes disk.
+    // A file this browser can't decode would land as a zero-length asset it
+    // also couldn't preview, so reject it before any bytes go up.
+    const meta = await probeFileMeta(file).catch(() => null);
+    if (!meta || (meta.type !== "image" && !(meta.duration > 0))) {
+      throw new Error(
+        "This file can't be read in this browser, so it can't go in the cloud library. Import it in the Mac app instead."
+      );
+    }
+    const key = await presignedUpload("/api/cut/library/presign", file, file.name);
+    const res = await apiFetch("/api/cut/library/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, meta: { name: file.name, ...meta } }),
+    });
+    const body = await apiJson<LibraryAsset>(res);
+    if (!res.ok) throw new Error(body.error ?? "Upload failed.");
+    return body;
+  }
   const form = new FormData();
   form.append("file", file, file.name);
   const res = await apiFetch("/api/cut/library", { method: "POST", body: form });

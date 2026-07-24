@@ -40,7 +40,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { apiFetch, apiUrl, engineReady } from "@/cut/lib/api";
+import { engineReady } from "@/cut/lib/api";
+import { apiFetch, apiUrl } from "@/cut/lib/backend";
+import { useCutCaps } from "@/cut/lib/backend/hooks";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
@@ -424,6 +426,7 @@ function ChatSession({
 }) {
   const [input, setInput] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const caps = useCutCaps();
   // Live dictation → drops the finished transcript into the composer, appended
   // after whatever the user had already typed.
   const mic = useMicTranscription((text) =>
@@ -862,17 +865,19 @@ function ChatSession({
                     onSelect={onModelChange}
                   />
                   <div className="flex-1" />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="ai-mic text-muted-foreground"
-                    title="Dictate"
-                    disabled={busy}
-                    onClick={() => void mic.start()}
-                  >
-                    <Mic className="size-3.5" />
-                  </Button>
+                  {caps.liveMic && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="ai-mic text-muted-foreground"
+                      title="Dictate"
+                      disabled={busy}
+                      onClick={() => void mic.start()}
+                    >
+                      <Mic className="size-3.5" />
+                    </Button>
+                  )}
                   {busy ? (
                     <Button
                       variant="outline"

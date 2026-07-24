@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { apiFetch, apiJson } from "./api";
+import { apiFetch, apiJson } from "./backend";
 import { useGenerate } from "./generate";
 import { realSuite } from "./genvideo/adapters";
 import { GEN_FPS, StoreEditorBridge } from "./genvideo/editorBridge";

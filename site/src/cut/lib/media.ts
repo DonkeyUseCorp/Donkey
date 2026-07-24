@@ -1,6 +1,8 @@
 "use client";
 
-import { apiFetch, apiJson } from "./api";
+import { apiFetch, apiJson, getBackend, type CutBackend } from "./backend";
+import { quotaErrorMessage } from "./backend/cloud";
+import { encodeWav } from "./cloudTranscribe";
 import { useEditor } from "./store";
 import type { AssetType, AudioClip, MediaAsset, ProjectSummary, StoredAsset, VideoClip } from "./types";
 import { IMAGE_CLIP_SECONDS, mediaUrl } from "./types";
@@ -92,11 +94,159 @@ export function isTextFile(file: File) {
   return file.type.startsWith("text/") || /\.(txt|md|markdown|srt|vtt|csv|json)$/i.test(file.name);
 }
 
+/** Presign a direct-to-R2 upload, PUT the bytes, and return the object key
+ * for the follow-up complete call. Shared by project media, the library, and
+ * export overlays; cloud backend only. */
+export async function presignedUpload(
+  presignPath: string,
+  file: Blob,
+  name: string,
+  backend: CutBackend = getBackend()
+): Promise<string> {
+  const mime = file.type || "application/octet-stream";
+  const res = await backend.fetch(presignPath, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileName: name, mime, bytes: file.size }),
+  });
+  const body = await apiJson<{ key?: string; url?: string }>(res);
+  if (!res.ok || !body.key || !body.url) {
+    throw new Error(quotaErrorMessage(res.status, body) ?? body.error ?? "Upload failed.");
+  }
+  await putSigned(body.url, file, mime);
+  return body.key;
+}
+
+/** PUT a blob to a presigned R2 URL. */
+export async function putSigned(url: string, file: Blob, mime?: string) {
+  const put = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": mime ?? (file.type || "application/octet-stream") },
+    body: file,
+  });
+  if (!put.ok) throw new Error("Upload failed.");
+}
+
+/** Upload raw media bytes into a project. Local: the engine's multipart POST,
+ * byte-identical to the pre-seam request. Cloud: presign -> direct R2 PUT ->
+ * complete. Returns the stored (deduped) file name. */
+export function uploadProjectMedia(projectId: string, file: Blob, name: string): Promise<string> {
+  return uploadProjectMediaTo(getBackend(), projectId, file, name);
+}
+
+/** `uploadProjectMedia` against an explicit backend — cross-residency copies
+ * upload to a backend that is not the globally bound one. */
+export async function uploadProjectMediaTo(
+  backend: CutBackend,
+  projectId: string,
+  file: Blob,
+  name: string
+): Promise<string> {
+  if (backend.kind !== "cloud") {
+    const form = new FormData();
+    form.append("file", file, name);
+    const res = await backend.fetch(`/api/cut/projects/${projectId}/media`, {
+      method: "POST",
+      body: form,
+    });
+    const body = await apiJson<{ fileName?: string }>(res);
+    if (!res.ok || !body.fileName) throw new Error(body.error ?? "Upload failed.");
+    return body.fileName;
+  }
+  const key = await presignedUpload(
+    `/api/cut/projects/${projectId}/media/presign`,
+    file,
+    name,
+    backend
+  );
+  const res = await backend.fetch(`/api/cut/projects/${projectId}/media/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  const body = await apiJson<{ fileName?: string }>(res);
+  if (!res.ok || !body.fileName) throw new Error(body.error ?? "Upload failed.");
+  return body.fileName;
+}
+
+// The cloud /image mirror only takes inline multipart bodies below ~3.5MB;
+// larger images ride the presign path.
+const IMAGE_INLINE_MAX = 3 * 1024 * 1024;
+
+/** Store an image blob as a first-class project image asset. Local (and small
+ * cloud payloads): the engine's /image multipart route, byte-identical to the
+ * pre-seam request. Large cloud payloads: presign -> R2 PUT -> complete, with
+ * the dimensions probed here instead of by the server. */
+export async function uploadProjectImage(
+  projectId: string,
+  file: Blob,
+  fileName: string,
+  opts?: { name?: string; origin?: "generated"; failMessage?: string; backend?: CutBackend }
+): Promise<MediaAsset> {
+  // Callers whose work outlives navigation (finishing AI generations) pin the
+  // backend they started on; everyone else rides the active one.
+  const backend = opts?.backend ?? getBackend();
+  const failMessage = opts?.failMessage ?? "Could not add the image.";
+  if (backend.kind !== "cloud" || file.size < IMAGE_INLINE_MAX) {
+    const form = new FormData();
+    form.append("file", file, fileName);
+    if (opts?.name !== undefined) form.append("name", opts.name);
+    if (opts?.origin) form.append("origin", opts.origin);
+    const res = await backend.fetch(`/api/cut/projects/${projectId}/image`, {
+      method: "POST",
+      body: form,
+    });
+    const body = await apiJson<MediaAsset>(res);
+    if (!res.ok || !body.fileName) throw new Error(body.error ?? failMessage);
+    return { ...body, url: mediaUrl(projectId, body.fileName) };
+  }
+  const stored = await uploadProjectMediaTo(backend, projectId, file, fileName);
+  const url = mediaUrl(projectId, stored);
+  const dims = await loadImageMeta(url);
+  return {
+    id: uid(),
+    type: "image",
+    name: opts?.name?.trim() || fileName,
+    fileName: stored,
+    duration: 0,
+    width: dims.width,
+    height: dims.height,
+    ...(opts?.origin ? { origin: opts.origin } : {}),
+    url,
+  };
+}
+
+/** Probe a media file's kind/duration/dimensions in the browser via an object
+ * URL — for backends that can't probe server-side (cloud library complete). */
+export async function probeFileMeta(file: File): Promise<{
+  type: AssetType;
+  duration: number;
+  width?: number;
+  height?: number;
+}> {
+  const url = URL.createObjectURL(file);
+  try {
+    if (isImageFile(file) && !isVideoFile(file) && !isAudioFile(file)) {
+      const dims = await loadImageMeta(url);
+      return { type: "image", duration: 0, width: dims.width, height: dims.height };
+    }
+    if (isAudioFile(file) && !isVideoFile(file)) {
+      return { type: "audio", duration: await loadAudioDuration(url).catch(() => 0) };
+    }
+    const v = await loadVideoMeta(url);
+    if (v.videoWidth === 0) return { type: "audio", duration: v.duration };
+    return { type: "video", duration: v.duration, width: v.videoWidth, height: v.videoHeight };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /** Upload a raw file into the project folder, probe it, and return the asset.
  * Thumbnails/waveform are filled in asynchronously via `enrichAsset`. */
 export async function importFileToProject(
   projectId: string,
-  file: File
+  file: File,
+  backend: CutBackend = getBackend()
 ): Promise<MediaAsset | null> {
   // MIME wins over extension: recordings are .webm for both video and audio.
   const type: AssetType | null = file.type.startsWith("video/")
@@ -114,19 +264,12 @@ export async function importFileToProject(
               : null;
   if (!type) return null;
 
-  const form = new FormData();
-  form.append("file", file, file.name);
-  const res = await apiFetch(`/api/cut/projects/${projectId}/media`, {
-    method: "POST",
-    body: form,
-  });
-  const body = await apiJson<{ fileName?: string }>(res);
-  if (!res.ok || !body.fileName) throw new Error(body.error ?? "Upload failed.");
+  const fileName = await uploadProjectMediaTo(backend, projectId, file, file.name);
 
-  const url = mediaUrl(projectId, body.fileName);
+  const url = mediaUrl(projectId, fileName);
   const asset: MediaAsset = {
     id: uid(),
-    fileName: body.fileName,
+    fileName,
     name: file.name,
     type,
     duration: 0,
@@ -185,18 +328,12 @@ export async function importImage(
   const dl = await fetch(image.url);
   if (!dl.ok) throw new Error("Could not read the image.");
   const blob = await dl.blob();
-  const form = new FormData();
-  form.append("file", blob, image.url.split("/").pop() || "image.png");
-  form.append("name", image.name);
-  const res = await apiFetch(`/api/cut/projects/${projectId}/image`, {
-    method: "POST",
-    body: form,
+  const body = await uploadProjectImage(projectId, blob, image.url.split("/").pop() || "image.png", {
+    name: image.name,
   });
-  const body = await apiJson<MediaAsset>(res);
-  if (!res.ok || !body.fileName) throw new Error(body.error ?? "Could not add the image.");
   // A stock image lands on the timeline where the caller places it, not in the
   // Media panel — tag it so it stays out.
-  const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName), origin: "stock" };
+  const asset: MediaAsset = { ...body, origin: "stock" };
   useEditor.getState().addAsset(asset);
   void enrichAsset(asset);
   return asset;
@@ -256,12 +393,23 @@ export async function importUrlMedia(
   projectId: string,
   url: string
 ): Promise<{ assets: MediaAsset[]; text?: string }> {
-  const res = await apiFetch(`/api/cut/projects/${projectId}/import-url`, {
+  // Pinned at start: the download can outlast navigation into a project of
+  // the other residency, and every poll must hit the backend the job started on.
+  const backend = getBackend();
+  const res = await backend.fetch(`/api/cut/projects/${projectId}/import-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
   });
-  const body = await apiJson<{ files?: { fileName: string; title: string }[]; text?: string }>(res);
+  let body: { files?: { fileName: string; title: string }[]; text?: string; error?: string };
+  if (backend.kind === "cloud") {
+    // The cloud route is async: it answers {jobId} and a worker does the fetch.
+    const started = await apiJson<{ jobId?: string }>(res);
+    if (!res.ok || !started.jobId) throw new Error(started.error ?? "Could not import that URL.");
+    body = await pollImportUrlJob(started.jobId, backend);
+  } else {
+    body = await apiJson<{ files?: { fileName: string; title: string }[]; text?: string }>(res);
+  }
   if (!res.ok || !body.files?.length) throw new Error(body.error ?? "Could not import that URL.");
   const assets: MediaAsset[] = [];
   for (const f of body.files) {
@@ -271,6 +419,42 @@ export async function importUrlMedia(
     assets.push(asset);
   }
   return { assets, text: body.text };
+}
+
+/** Poll a cloud import-url job to completion (2s cadence, ~10 min cap) and
+ * return the engine-shaped {files, text} result. Fails only when the job
+ * itself says so — state "error", or the job gone (404) — or after several
+ * consecutive failed polls; a single dropped request keeps polling. */
+async function pollImportUrlJob(
+  jobId: string,
+  backend: CutBackend
+): Promise<{ files?: { fileName: string; title: string }[]; text?: string }> {
+  const deadline = Date.now() + 10 * 60 * 1000;
+  const MAX_STRIKES = 6;
+  let strikes = 0;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("Could not import that URL.");
+    await new Promise((r) => setTimeout(r, 2000));
+    let res: Response | null = null;
+    try {
+      res = await backend.fetch(`/api/cut/jobs/${jobId}`);
+    } catch {
+      // Network blip — a strike, counted below.
+    }
+    // The create call returned this job's id, so a 404 means it's gone.
+    if (res?.status === 404) throw new Error("Could not import that URL.");
+    if (!res?.ok) {
+      if (++strikes >= MAX_STRIKES) throw new Error("Could not import that URL.");
+      continue;
+    }
+    strikes = 0;
+    const job = await apiJson<{
+      state?: string;
+      result?: { files?: { fileName: string; title: string }[]; text?: string };
+    }>(res);
+    if (job.state === "error") throw new Error(job.error ?? "Could not import that URL.");
+    if (job.state === "done") return job.result ?? {};
+  }
 }
 
 /** Build a runtime asset for a media file the engine already wrote into the
@@ -308,6 +492,234 @@ export async function assetFromProjectFile(
   return asset;
 }
 
+/** Cloud twin of the engine's freeze route: grab the source frame in the
+ * browser (seek + canvas at native resolution), store it as a PNG project
+ * image, and return the same asset shape the engine's freeze response has.
+ * `duration` (seconds) rides back on the asset so the caller can size the
+ * placed clip like the engine's baked still video; the stored image itself
+ * has no intrinsic length. */
+export async function captureFreezeFrame(
+  projectId: string,
+  sourceUrl: string,
+  srcTime: number,
+  duration = 0
+): Promise<MediaAsset> {
+  const v = await loadVideoMeta(sourceUrl);
+  await seekTo(v, Math.max(0, srcTime));
+  const canvas = document.createElement("canvas");
+  canvas.width = v.videoWidth;
+  canvas.height = v.videoHeight;
+  canvas.getContext("2d")!.drawImage(v, 0, 0);
+  v.removeAttribute("src");
+  v.load();
+  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/png"));
+  if (!blob) throw new Error("Could not render the freeze frame.");
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const fileName = `freeze-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${uid().slice(0, 4)}.png`;
+  const asset = await uploadProjectImage(projectId, blob, fileName, {
+    failMessage: "Could not render the freeze frame.",
+  });
+  return duration > 0 ? { ...asset, duration } : asset;
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Cloud twin of the engine's silence route (ffmpeg silencedetect): decode the
+ * source's audio and scan 20ms RMS windows against the same dB threshold and
+ * minimum-duration rules. Times are absolute source seconds. */
+export async function detectSilenceClientSide(
+  sourceUrl: string,
+  opts: { from: number; to?: number; thresholdDb: number; minSilence: number }
+): Promise<{ start: number; end: number; duration: number }[]> {
+  const audio = await decodeAudio(sourceUrl);
+  if (!audio) throw new Error("This file has no audio track.");
+  const to = Math.min(opts.to ?? audio.duration, audio.duration);
+  const from = Math.max(0, Math.min(opts.from, to));
+  if (!(to > from)) return [];
+  const rate = audio.sampleRate;
+  const win = Math.max(1, Math.round(rate * 0.02));
+  const threshold = Math.pow(10, opts.thresholdDb / 20);
+  const channels = Array.from({ length: audio.numberOfChannels }, (_, c) =>
+    audio.getChannelData(c)
+  );
+  const first = Math.floor(from * rate);
+  const last = Math.min(audio.length, Math.ceil(to * rate));
+  const silences: { start: number; end: number; duration: number }[] = [];
+  let open: number | null = null;
+  const close = (endT: number) => {
+    if (open !== null && endT - open >= opts.minSilence) {
+      const start = round2(Math.max(from, open));
+      const end = round2(Math.min(to, endT));
+      if (end > start) silences.push({ start, end, duration: round2(end - start) });
+    }
+    open = null;
+  };
+  for (let s = first; s < last; s += win) {
+    const e = Math.min(last, s + win);
+    let sum = 0;
+    for (const ch of channels) {
+      for (let i = s; i < e; i++) sum += ch[i] * ch[i];
+    }
+    const rms = Math.sqrt(sum / ((e - s) * channels.length));
+    if (rms < threshold) {
+      if (open === null) open = s / rate;
+    } else {
+      close(s / rate);
+    }
+  }
+  close(to);
+  return silences;
+}
+
+/** Cloud twin of the engine's audio-extract route: render a span of the
+ * source's audio to 16 kHz mono WAV in the browser, for the AI to hear
+ * inline. An empty `to` runs to the end. */
+export async function renderAudioSpanWav(
+  sourceUrl: string,
+  from: number,
+  to: number | undefined
+): Promise<Blob> {
+  const audio = await decodeAudio(sourceUrl);
+  if (!audio) throw new Error("This file has no audio track.");
+  const end = Math.min(to ?? audio.duration, audio.duration);
+  const start = Math.max(0, Math.min(from, end));
+  const dur = end - start;
+  if (!(dur > 0)) throw new Error("from/to describe an empty range.");
+  const rate = 16000; // encodeWav's fixed sample rate
+  const ctx = new OfflineAudioContext(1, Math.max(1, Math.ceil(dur * rate)), rate);
+  const src = ctx.createBufferSource();
+  src.buffer = audio;
+  src.connect(ctx.destination);
+  src.start(0, start, dur);
+  return encodeWav((await ctx.startRendering()).getChannelData(0));
+}
+
+// The engine's contact-sheet geometry (server/frames.ts), mirrored exactly so
+// the tool's stampSheet lands each cell's time stamp in the same place in
+// both modes.
+const SHEET_GRID = 3; // cells per row and column
+const SHEET_CELL = 480; // cell long side, px
+const SHEET_GAP = 4; // tile margin and padding, px
+const SHEET_MAX = 4; // sheets per call
+const SHEET_QUALITY = 0.8; // jpeg encode
+
+export interface WatchSheets {
+  sheets: { image: string; frames: { t: number }[] }[];
+  layout: { grid: number; margin: number; padding: number };
+  sceneChanges: number[];
+  coveredTo: number;
+  truncated: boolean;
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+// The engine scales with ffmpeg's scale=480:-2, which rounds the short side
+// to even; mirror it so cell geometry matches to the pixel.
+const cellDims = (w: number, h: number): [number, number] =>
+  w >= h
+    ? [SHEET_CELL, Math.max(2, 2 * Math.round((SHEET_CELL * h) / w / 2))]
+    : [Math.max(2, 2 * Math.round((SHEET_CELL * w) / h / 2)), SHEET_CELL];
+
+/** Cloud twin of the engine's watch route for a still image: one downscaled
+ * cell, no time axis. */
+export async function makeStillSheetClientSide(sourceUrl: string): Promise<WatchSheets> {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("Could not read the image."));
+    img.src = sourceUrl;
+  });
+  if (img.naturalWidth === 0 || img.naturalHeight === 0)
+    throw new Error("Could not read the image.");
+  const [w, h] = cellDims(img.naturalWidth, img.naturalHeight);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not read the image.");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, w, h);
+  return {
+    sheets: [{ image: canvas.toDataURL("image/jpeg", SHEET_QUALITY), frames: [{ t: 0 }] }],
+    layout: { grid: 1, margin: 0, padding: 0 },
+    sceneChanges: [],
+    coveredTo: 0,
+    truncated: false,
+  };
+}
+
+/** Cloud twin of the engine's watch route: seek the source in the browser and
+ * tile downscaled frames into timestamped contact sheets, with the route's
+ * defaults, clamps, and per-call caps. Frames land on the steady interval
+ * only — scene detection needs a decoder — so sceneChanges stays empty and
+ * scene fields are omitted. */
+export async function makeContactSheetsClientSide(
+  sourceUrl: string,
+  opts: { from: number; to?: number; interval?: number }
+): Promise<WatchSheets> {
+  const v = await loadVideoMeta(sourceUrl);
+  try {
+    if (v.videoWidth === 0) throw new Error("Could not sample the video.");
+    const from = Math.max(0, opts.from);
+    const wanted = opts.to ?? v.duration;
+    if (opts.to === undefined && !(wanted > 0))
+      throw new Error("Could not read the media duration — pass to (seconds).");
+    if (!(wanted > from)) throw new Error("from/to describe an empty range.");
+    const to = Math.min(wanted, from + 600); // bound the work per call; callers resume from coveredTo
+    const interval =
+      opts.interval !== undefined
+        ? clamp(opts.interval, 0.5, 30)
+        : clamp((to - from) / 32, 2, 30);
+
+    const perSheet = SHEET_GRID * SHEET_GRID;
+    const times: number[] = [];
+    for (let t = from; t < to && times.length < SHEET_MAX * perSheet; t += interval)
+      times.push(round2(t));
+
+    const [cw, ch] = cellDims(v.videoWidth, v.videoHeight);
+    const sheetW = 2 * SHEET_GAP + SHEET_GRID * cw + (SHEET_GRID - 1) * SHEET_GAP;
+    const sheetH = 2 * SHEET_GAP + SHEET_GRID * ch + (SHEET_GRID - 1) * SHEET_GAP;
+    const sheets: WatchSheets["sheets"] = [];
+    for (let i = 0; i < times.length; i += perSheet) {
+      const chunk = times.slice(i, i + perSheet);
+      const canvas = document.createElement("canvas");
+      canvas.width = sheetW;
+      canvas.height = sheetH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Could not sample the video.");
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, sheetW, sheetH);
+      ctx.imageSmoothingQuality = "high";
+      for (let j = 0; j < chunk.length; j++) {
+        await seekTo(v, chunk[j]);
+        const x = SHEET_GAP + (j % SHEET_GRID) * (cw + SHEET_GAP);
+        const y = SHEET_GAP + Math.floor(j / SHEET_GRID) * (ch + SHEET_GAP);
+        ctx.drawImage(v, x, y, cw, ch);
+      }
+      sheets.push({
+        image: canvas.toDataURL("image/jpeg", SHEET_QUALITY),
+        frames: chunk.map((t) => ({ t })),
+      });
+    }
+    const lastT = times.length > 0 ? times[times.length - 1] : from;
+    const capped = times.length >= SHEET_MAX * perSheet && lastT < to - interval;
+    // The per-call span bound is itself truncation — the caller asked for more.
+    const truncated = capped || to < wanted;
+    return {
+      sheets,
+      layout: { grid: SHEET_GRID, margin: SHEET_GAP, padding: SHEET_GAP },
+      sceneChanges: [],
+      coveredTo: capped ? lastT : to,
+      truncated,
+    };
+  } finally {
+    v.removeAttribute("src");
+    v.load();
+  }
+}
+
 /** Generate filmstrip thumbnails / waveform peaks and merge them into the
  * store. Safe to call repeatedly; skips assets that are already enriched. */
 export async function enrichAsset(asset: MediaAsset) {
@@ -318,7 +730,7 @@ export async function enrichAsset(asset: MediaAsset) {
         useEditor.getState().updateAsset(asset.id, { thumbs: [asset.url], thumbStep: IMAGE_CLIP_SECONDS });
       }
     } else if (asset.type === "video" && !asset.thumbs?.length) {
-      const key = stripCacheKey(asset.url);
+      const key = stripCacheKey(useEditor.getState().projectId, asset.fileName);
       const cached = await readCachedStrip(key, asset.duration);
       if (cached) {
         useEditor.getState().updateAsset(asset.id, { thumbs: cached.thumbs, thumbStep: cached.thumbStep });
@@ -393,7 +805,8 @@ export function loadAudioDuration(url: string): Promise<number> {
 // on Retina (and when a tall timeline scales the row up).
 const THUMB_H = 180;
 
-// Filmstrips persist in IndexedDB keyed by the media file's project path, so
+// Filmstrips persist in IndexedDB keyed by project + file name + thumbnail
+// geometry — not the URL, which churns on cloud signed-URL refreshes — so
 // reopening a project paints clips from cache instead of re-seeking every
 // video. Cache failures fall through to regeneration.
 const STRIP_DB = "cut-filmstrips";
@@ -402,8 +815,8 @@ const STRIP_CAP = 500; // prune oldest beyond this many cached strips
 
 type CachedStrip = { thumbs: string[]; thumbStep: number; duration: number; at: number };
 
-function stripCacheKey(url: string) {
-  return new URL(url, window.location.href).pathname;
+function stripCacheKey(projectId: string | null, fileName: string) {
+  return `${projectId ?? ""}/${fileName}@${THUMB_H}`;
 }
 
 function openStripDb(): Promise<IDBDatabase> {

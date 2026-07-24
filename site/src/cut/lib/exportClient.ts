@@ -1,8 +1,10 @@
 "use client";
 
-import { apiFetch, apiJson, apiUrl } from "./api";
+import { apiFetch, apiJson, getBackend, type CutBackend } from "./backend";
+import { quotaErrorMessage } from "./backend/cloud";
 import { normalizeGrade } from "./colorGrade";
-import { clipSpeed, getClipSpans, overlayLayers, projectDuration, spanSequence } from "./store";
+import { putSigned } from "./media";
+import { clipSpeed, getClipSpans, overlayLayers, projectDuration, spanSequence, useEditor } from "./store";
 import { captionStyle, cueOverlay, cueWordWindows, laneCues, subtitleLaneCount, trackPos } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME, overlayAnimStyle } from "./types";
@@ -106,8 +108,12 @@ export function formatSizeEstimate(bytes: number): string {
 }
 
 /** Reveal a rendered export in Finder (local engine only). */
-export async function revealExport(projectId: string, file: string) {
-  await apiFetch(
+export async function revealExport(
+  projectId: string,
+  file: string,
+  backend: CutBackend = getBackend()
+) {
+  await backend.fetch(
     `/api/cut/projects/${projectId}/exports/${encodeURIComponent(file)}/reveal`,
     { method: "POST" }
   );
@@ -141,18 +147,26 @@ export interface ExportDoc {
 }
 
 
-/** Build the export FormData from the cut. Media already lives in the project
- * folder — the spec references it by file name; only overlay PNGs travel with
- * the request. Shared by full exports and the low-res hover proxy. */
-async function buildExportForm(
+/** The neutral built cut: the engine spec plus the browser-rendered overlay
+ * PNGs. The local path serializes it to the engine's multipart form; the
+ * cloud path presigns the PNGs to R2 and posts the spec as JSON. */
+interface ExportPayload {
+  spec: object;
+  pngs: { name: string; blob: Blob }[];
+}
+
+/** Build the export spec + overlay PNGs from the cut. Media already lives in
+ * the project folder — the spec references it by file name; only overlay PNGs
+ * travel with the request. Shared by full exports and the low-res hover proxy. */
+async function buildExportPayload(
   projectId: string,
   doc: ExportDoc,
   settings: ExportSettings,
   target: "export" | "preview"
-): Promise<FormData> {
+): Promise<ExportPayload> {
   const spans = getClipSpans(doc.clips, doc.assets);
   const duration = projectDuration(doc);
-  const form = new FormData();
+  const pngs: ExportPayload["pngs"] = [];
   const assetById = new Map(doc.assets.map((a) => [a.id, a]));
   // Overlay-only cuts (empty track 0) still export: track 0 becomes a black bed
   // the length of the project and the overlays/soundtrack composite onto it —
@@ -302,7 +316,7 @@ async function buildExportForm(
     if (o.start >= duration || !o.text.trim()) continue;
     const png = await renderOverlayPng(o, settings.width, settings.height);
     const key = `overlay_${i}.png`;
-    form.append(key, png, key);
+    pngs.push({ name: key, blob: png });
     overlays.push({ file: key, start: o.start, end: Math.min(o.end, duration) });
   }
 
@@ -334,7 +348,7 @@ async function buildExportForm(
             settings.height
           );
           const key = windows.length > 1 ? `sub_${lane}_${i}_${wi}.png` : `sub_${lane}_${i}.png`;
-          form.append(key, png, key);
+          pngs.push({ name: key, blob: png });
           captions.push({
             file: key,
             start: win.start,
@@ -351,13 +365,12 @@ async function buildExportForm(
       const png = await new Promise<Blob>((resolve, reject) =>
         blank.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not render captions."))), "image/png")
       );
-      form.append("sub_blank.png", png, "sub_blank.png");
+      pngs.push({ name: "sub_blank.png", blob: png });
     }
   }
 
-  form.append(
-    "spec",
-    JSON.stringify({
+  return {
+    spec: {
       projectId,
       target,
       ...settings,
@@ -369,21 +382,85 @@ async function buildExportForm(
       overlayVideos,
       overlays,
       captions,
-    })
-  );
+    },
+    pngs,
+  };
+}
+
+/** Serialize a payload to the engine's multipart form: PNGs in render order,
+ * then the spec — the exact request shape from before the payload split. */
+function exportFormFromPayload({ spec, pngs }: ExportPayload): FormData {
+  const form = new FormData();
+  for (const p of pngs) form.append(p.name, p.blob, p.name);
+  form.append("spec", JSON.stringify(spec));
   return form;
+}
+
+/** Kick off an export on the given backend, returning the create response.
+ * The backend is captured when the export starts, so a job keeps rendering
+ * against its own backend even after the app rebinds to the other residency.
+ * Local: the engine's multipart form. Cloud: presign the overlay PNGs, PUT
+ * them straight to R2, then POST the JSON export body. */
+async function postExport(
+  projectId: string,
+  payload: ExportPayload,
+  outName: string,
+  backend: CutBackend
+): Promise<Response> {
+  if (backend.kind !== "cloud") {
+    return backend.fetch("/api/cut/export", { method: "POST", body: exportFormFromPayload(payload) });
+  }
+  const overlays: { name: string; key: string }[] = [];
+  if (payload.pngs.length > 0) {
+    const pre = await backend.fetch("/api/cut/export/presign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        files: payload.pngs.map((p) => ({ name: p.name, bytes: p.blob.size })),
+      }),
+    });
+    const preBody = await apiJson<{ files?: { name: string; key: string; url: string }[] }>(pre);
+    if (!pre.ok || !preBody.files) {
+      throw new Error(
+        quotaErrorMessage(pre.status, preBody) ?? preBody.error ?? "Export failed to start."
+      );
+    }
+    const byName = new Map(preBody.files.map((f) => [f.name, f]));
+    await Promise.all(
+      payload.pngs.map(async (p) => {
+        const target = byName.get(p.name);
+        if (!target) throw new Error("Export failed to start.");
+        await putSigned(target.url, p.blob, "image/png");
+      })
+    );
+    for (const p of payload.pngs) overlays.push({ name: p.name, key: byName.get(p.name)!.key });
+  }
+  return backend.fetch("/api/cut/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spec: payload.spec, overlays, projectId, outName }),
+  });
+}
+
+/** The cloud names the output client-side (the engine derives it from the
+ * project name itself, deduping on disk); mirror the engine's sanitize rule. */
+function exportOutName(): string {
+  const base =
+    useEditor.getState().projectName.replace(/[/\\:*?"<>|]/g, "").trim().slice(0, 60) || "export";
+  return `${base}.mp4`;
 }
 
 /** Poll an export job to completion, reporting progress. Returns the file name. */
 export async function pollExport(
   jobId: string,
   onProgress: (stage: string, ratio: number) => void,
-  isCanceled: () => boolean = () => false
+  isCanceled: () => boolean = () => false,
+  backend: CutBackend = getBackend()
 ): Promise<string> {
   for (;;) {
     if (isCanceled()) throw new Error("Export canceled.");
     await new Promise((r) => setTimeout(r, 400));
-    const st = await apiFetch(`/api/cut/export/${jobId}`);
+    const st = await backend.fetch(`/api/cut/export/${jobId}`);
     const status = await apiJson<{
       status?: string;
       progress?: number;
@@ -396,9 +473,9 @@ export async function pollExport(
 }
 
 /** Trigger a browser download of a finished export by job id. */
-export function downloadExport(jobId: string, outName: string) {
+export function downloadExport(jobId: string, outName: string, backend: CutBackend = getBackend()) {
   const a = document.createElement("a");
-  a.href = apiUrl(`/api/cut/export/${jobId}/file`);
+  a.href = backend.url(`/api/cut/export/${jobId}/file`);
   a.download = outName;
   document.body.appendChild(a);
   a.click();
@@ -414,16 +491,17 @@ export async function createExportJob(
   doc: ExportDoc,
   settings: ExportSettings
 ): Promise<string> {
-  const form = await buildExportForm(projectId, doc, settings, "export");
-  const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
+  const backend = getBackend(); // pinned: the payload build takes a while
+  const payload = await buildExportPayload(projectId, doc, settings, "export");
+  const res = await postExport(projectId, payload, exportOutName(), backend);
   const body = await apiJson<{ id?: string }>(res);
   if (!res.ok || !body.id) throw new Error(body.error ?? "Export failed to start.");
   return body.id;
 }
 
 /** Cancel a running or queued export job by id. */
-export function cancelExportJob(jobId: string) {
-  void apiFetch(`/api/cut/export/${jobId}`, { method: "DELETE" }).catch(() => {});
+export function cancelExportJob(jobId: string, backend: CutBackend = getBackend()) {
+  void backend.fetch(`/api/cut/export/${jobId}`, { method: "DELETE" }).catch(() => {});
 }
 
 /** Low-res proxy of the actual edit for the project card's hover preview.
@@ -431,16 +509,17 @@ export function cancelExportJob(jobId: string) {
  * preview.mp4. Best-effort: silently no-ops if a slot is busy or there's no
  * footage yet. */
 export async function renderPreviewProxy(projectId: string, doc: ExportDoc, aspect: Aspect) {
+  const backend = getBackend(); // pinned: the proxy render outlives navigation
   const [width, height] = aspect === "16:9" ? [640, 360] : [360, 640];
   const settings: ExportSettings = { width, height, fps: 24, crf: 30, preset: "veryfast" };
-  let form: FormData;
+  let res: Response;
   try {
-    form = await buildExportForm(projectId, doc, settings, "preview");
+    const payload = await buildExportPayload(projectId, doc, settings, "preview");
+    res = await postExport(projectId, payload, "preview.mp4", backend);
   } catch {
     return; // no clips yet
   }
-  const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
   const body = (await res.json().catch(() => ({}))) as { id?: string };
   if (!res.ok || !body.id) return; // a slot was busy; try again later
-  await pollExport(body.id, () => {}).catch(() => {});
+  await pollExport(body.id, () => {}, undefined, backend).catch(() => {});
 }

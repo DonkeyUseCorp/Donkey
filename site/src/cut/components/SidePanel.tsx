@@ -23,7 +23,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { apiFetch, apiUrl } from "@/cut/lib/api";
+import { apiFetch, apiUrl } from "@/cut/lib/backend";
+import { useCutCaps } from "@/cut/lib/backend/hooks";
 import {
   clearAssetDrag,
   draggingLibrary,
@@ -565,6 +566,7 @@ function MediaPanel({
 }
 
 function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string }) {
+  const caps = useCutCaps();
   const [saved, setSaved] = useState(false);
   // Number of timeline items that would be cascade-deleted; null = no prompt.
   const [confirmUses, setConfirmUses] = useState<number | null>(null);
@@ -689,11 +691,13 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
             <DropdownMenuItem onClick={saveToLibrary}>
               <FolderPlus /> Save to library
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => void revealMedia(projectId, asset.fileName).catch(() => {})}
-            >
-              <FolderOpen /> Show in Finder
-            </DropdownMenuItem>
+            {caps.revealInFinder && (
+              <DropdownMenuItem
+                onClick={() => void revealMedia(projectId, asset.fileName).catch(() => {})}
+              >
+                <FolderOpen /> Show in Finder
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={remove}>
               <Trash2 /> Delete

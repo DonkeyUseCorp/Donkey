@@ -1,12 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch } from "./api";
+import { apiFetch, getBackend } from "./backend";
+import { cloudTranscribeRecording } from "./cloudTranscribe";
 
 // Live dictation for the chat composer. The browser holds the mic permission,
 // so it captures audio here and streams 16 kHz mono s16le PCM to the local
 // engine, which runs it through Apple's on-device SpeechAnalyzer (see
 // server/mic.ts + native/cut-stt.swift). The transcript never leaves the Mac.
+// On the cloud backend there is no engine: the mic records locally
+// (MediaRecorder) and one hosted transcription runs when the user confirms —
+// no live partials, so the composer shows "Listening…" while recording.
 
 export type MicState = "idle" | "starting" | "recording" | "finishing";
 
@@ -52,6 +56,8 @@ export function useMicTranscription(onResult: (text: string) => void): MicContro
   const [error, setError] = useState<string | null>(null);
 
   const jobRef = useRef<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const nodesRef = useRef<{ source: MediaStreamAudioSourceNode; processor: ScriptProcessorNode } | null>(null);
@@ -61,6 +67,20 @@ export function useMicTranscription(onResult: (text: string) => void): MicContro
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
+
+  /** Stop and forget the cloud recorder (before its tracks stop). */
+  const discardRecorder = useCallback(() => {
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    recChunksRef.current = [];
+    if (rec && rec.state !== "inactive") {
+      try {
+        rec.stop();
+      } catch {
+        // Already stopping; nothing to discard.
+      }
+    }
+  }, []);
 
   const teardownAudio = useCallback(() => {
     if (feedTimer.current) clearInterval(feedTimer.current);
@@ -119,6 +139,19 @@ export function useMicTranscription(onResult: (text: string) => void): MicContro
       setError("Microphone access was blocked. Allow the microphone for this site, then try again.");
       return;
     }
+    if (getBackend().kind === "cloud") {
+      recChunksRef.current = [];
+      const rec = new MediaRecorder(media);
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) recChunksRef.current.push(e.data);
+      };
+      rec.start(1000);
+      recorderRef.current = rec;
+      streamRef.current = media;
+      setStream(media);
+      setState("recording");
+      return;
+    }
     try {
       const res = await apiFetch("/api/cut/mic/start", {
         method: "POST",
@@ -173,6 +206,31 @@ export function useMicTranscription(onResult: (text: string) => void): MicContro
   }, [state, flush]);
 
   const confirm = useCallback(async () => {
+    const rec = recorderRef.current;
+    if (rec) {
+      if (state !== "recording") return;
+      setState("finishing");
+      // Flush the recorder's tail, then transcribe the whole take in one go.
+      const blob = await new Promise<Blob>((resolve) => {
+        rec.onstop = () =>
+          resolve(new Blob(recChunksRef.current, { type: rec.mimeType || "audio/webm" }));
+        rec.stop();
+      });
+      recorderRef.current = null;
+      recChunksRef.current = [];
+      teardownAudio();
+      let text = "";
+      try {
+        text = await cloudTranscribeRecording(blob, navigator.language);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Transcription failed.");
+      }
+      setState("idle");
+      setPartial("");
+      const trimmed = text.trim();
+      if (trimmed) onResultRef.current(trimmed);
+      return;
+    }
     const job = jobRef.current;
     if (!job || state !== "recording") return;
     setState("finishing");
@@ -206,20 +264,22 @@ export function useMicTranscription(onResult: (text: string) => void): MicContro
     const job = jobRef.current;
     jobRef.current = null;
     if (job) void apiFetch(`/api/cut/mic/${job}/cancel`, { method: "POST" }).catch(() => {});
+    discardRecorder();
     teardownAudio();
     setState("idle");
     setPartial("");
     setError(null);
-  }, [teardownAudio]);
+  }, [discardRecorder, teardownAudio]);
 
   // Abandon a dictation if the composer unmounts mid-recording.
   useEffect(() => {
     return () => {
       const job = jobRef.current;
       if (job) void apiFetch(`/api/cut/mic/${job}/cancel`, { method: "POST" }).catch(() => {});
+      discardRecorder();
       teardownAudio();
     };
-  }, [teardownAudio]);
+  }, [discardRecorder, teardownAudio]);
 
   return { state, stream, partial, error, start, confirm, cancel };
 }

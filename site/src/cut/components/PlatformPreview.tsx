@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiUrl } from "@/cut/lib/api";
+import { apiUrl } from "@/cut/lib/backend";
 import {
   Bookmark,
   Camera,

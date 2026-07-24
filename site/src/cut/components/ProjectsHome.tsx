@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
+  Cloud,
   Copy,
   Film,
   Folder,
   FolderPlus,
+  Laptop,
   LayoutGrid,
   List,
   Loader2,
@@ -43,19 +45,43 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { apiFetch, apiUrl, engineLost } from "@/cut/lib/api";
+import { engineLost, engineOrigin, servedFromEngine } from "@/cut/lib/api";
+import { cloudBackend } from "@/cut/lib/backend/cloud";
+import { useCutMode } from "@/cut/lib/backend/hooks";
+import { localBackend } from "@/cut/lib/backend/local";
+import type { CutBackend, CutMode } from "@/cut/lib/backend/types";
+import { useWebMode, webModeEnabled } from "@/cut/lib/flags";
 import { track } from "@/lib/analytics";
+import { authClient } from "@/lib/auth-client";
 import { clearProjectThreads } from "@/cut/lib/chatThreads";
 import { useGenerate } from "@/cut/lib/generate";
 import { useGenScene } from "@/cut/lib/genScene";
-import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
+import { createProjectFromFile, isMediaFile, uploadProjectMediaTo } from "@/cut/lib/media";
 import { homeHref, projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
-import { mediaUrl, type ProjectFolder, type ProjectSummary } from "@/cut/lib/types";
+import type { ProjectDoc, ProjectFolder, ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { buildDragGhost, FolderCrumb, FolderShelf, formatBytes, Marquee } from "./desktopFolders";
 
 type View = "gallery" | "list";
+
+// Where a project lives: the engine on this Mac or the hosted cloud backend.
+// The home lists each residency it can reach as its own section, talking to
+// the backend objects directly — the global mode is only bound when a project
+// opens into the editor.
+type Residency = CutMode;
+
+const backendFor = (r: Residency): CutBackend => (r === "cloud" ? cloudBackend : localBackend);
+
+const RESIDENCY_LABEL: Record<Residency, string> = { local: "On this Mac", cloud: "Cloud" };
+
+type SectionData = {
+  projects: ProjectSummary[] | null;
+  folders: ProjectFolder[];
+  error: boolean;
+};
+
+const EMPTY_SECTION: SectionData = { projects: null, folders: [], error: false };
 
 // A dragged selection is carried as a JSON array of project ids, so one drag can
 // move a whole marquee-selected collection into a folder.
@@ -75,22 +101,52 @@ function formatDate(ts: number) {
   });
 }
 
+function ResidencyBadge({ residency, className }: { residency: Residency; className?: string }) {
+  const Icon = residency === "cloud" ? Cloud : Laptop;
+  return (
+    <span title={RESIDENCY_LABEL[residency]} className={className}>
+      <Icon className="size-3" />
+    </span>
+  );
+}
+
 export function ProjectsHome() {
   const router = useRouter();
   const base = useCutBase();
-  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
-  const [folders, setFolders] = useState<ProjectFolder[]>([]);
+  const mode = useCutMode();
+  const webMode = useWebMode();
+  const { data: session } = authClient.useSession();
+  // Which backends this home lists. Engine presence is what the ConnectGate
+  // already resolved for this tab (same-origin page, or a memoized loopback
+  // origin) — never a fresh probe, which could raise the browser's
+  // local-network prompt.
+  const engineUp = servedFromEngine() || engineOrigin() !== "";
+  const residencies: Residency[] =
+    !webMode || !session ? ["local"] : engineUp ? ["local", "cloud"] : ["cloud"];
+  const dual = residencies.length > 1;
+  const r0 = residencies[0];
+
+  const [data, setData] = useState<Record<Residency, SectionData>>({
+    local: EMPTY_SECTION,
+    cloud: EMPTY_SECTION,
+  });
   // The open folder lives in the URL (?folder=…) so project URLs can point
   // back into it and the browser's back button steps folder → root.
   const openFolder = useSearchParams().get("folder");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [view, setView] = useState<View>("gallery");
   const [createOpen, setCreateOpen] = useState(false);
-  const [folderCreating, setFolderCreating] = useState(false);
-  const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
-  const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
+  const [folderCreating, setFolderCreating] = useState<Residency | null>(null);
+  const [renaming, setRenaming] = useState<{ project: ProjectSummary; residency: Residency } | null>(
+    null
+  );
+  const [deleting, setDeleting] = useState<{ project: ProjectSummary; residency: Residency } | null>(
+    null
+  );
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // One line of feedback when a cross-residency duplicate fails.
+  const [dupError, setDupError] = useState<string | null>(null);
   // A count of desktop files still uploading into fresh projects, plus whether an
   // OS-file drag is hovering the surface (a depth counter tames enter/leave noise
   // as the cursor crosses child tiles).
@@ -108,42 +164,74 @@ export function ProjectsHome() {
     localStorage.setItem("cut-projects-view", v);
   };
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (r: Residency) => {
+    const backend = backendFor(r);
     try {
       const [res, fres] = await Promise.all([
-        apiFetch("/api/cut/projects"),
-        apiFetch("/api/cut/projects/folders"),
+        backend.fetch("/api/cut/projects"),
+        backend.fetch("/api/cut/projects/folders"),
       ]);
       if (!res.ok) throw new Error(String(res.status));
-      setProjects((await res.json()) as ProjectSummary[]);
-      setFolders(fres.ok ? ((await fres.json()) as ProjectFolder[]) : []);
+      const projects = (await res.json()) as ProjectSummary[];
+      const folders = fres.ok ? ((await fres.json()) as ProjectFolder[]) : [];
+      setData((prev) => ({ ...prev, [r]: { projects, folders, error: false } }));
     } catch {
-      // The engine on this Mac stopped answering; the ConnectGate takes the
-      // screen back over until it returns.
-      engineLost();
+      if (r === "local" && !webModeEnabled()) {
+        // The engine on this Mac stopped answering; the ConnectGate takes the
+        // screen back over until it returns.
+        engineLost();
+        return;
+      }
+      // One backend failing never takes down the other's section.
+      setData((prev) => ({ ...prev, [r]: { ...prev[r], error: true } }));
     }
   }, []);
 
-  const createFolder = async (fname: string) => {
-    const res = await apiFetch("/api/cut/projects/folders", {
+  const residencyKey = residencies.join(",");
+  useEffect(() => {
+    for (const r of residencyKey.split(",") as Residency[]) void refresh(r);
+  }, [residencyKey, refresh]);
+
+  // A section stuck on "Couldn't load these projects" heals itself: while any
+  // section is errored, retry its refresh every few seconds. A successful
+  // refresh clears the error, which changes the key and drops the interval.
+  const erroredKey = residencies.filter((r) => data[r].error).join(",");
+  useEffect(() => {
+    if (!erroredKey) return;
+    const id = setInterval(() => {
+      for (const r of erroredKey.split(",") as Residency[]) void refresh(r);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [erroredKey, refresh]);
+
+  const createFolder = async (r: Residency, fname: string) => {
+    const res = await backendFor(r).fetch("/api/cut/projects/folders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: fname }),
     });
     if (res.ok) {
       const f = (await res.json()) as ProjectFolder;
-      setFolders((prev) => [...prev, f]);
+      setData((prev) => ({ ...prev, [r]: { ...prev[r], folders: [...prev[r].folders, f] } }));
       track("folder_created");
     }
   };
 
-  const renameFolder = async (id: string, fname: string) => {
-    setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: fname } : f)));
-    await apiFetch(`/api/cut/projects/folders/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: fname }),
-    }).catch(() => void refresh());
+  const renameFolder = async (r: Residency, id: string, fname: string) => {
+    setData((prev) => ({
+      ...prev,
+      [r]: {
+        ...prev[r],
+        folders: prev[r].folders.map((f) => (f.id === id ? { ...f, name: fname } : f)),
+      },
+    }));
+    await backendFor(r)
+      .fetch(`/api/cut/projects/folders/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: fname }),
+      })
+      .catch(() => void refresh(r));
   };
 
   // Open a folder (or the root, id null) by navigating, so the location is
@@ -153,49 +241,63 @@ export function ProjectsHome() {
     router.push(homeHref(base, "projects", id));
   };
 
-  const deleteFolder = async (id: string) => {
-    setFolders((prev) => prev.filter((f) => f.id !== id));
-    setProjects((prev) => (prev ?? []).map((p) => (p.folderId === id ? { ...p, folderId: null } : p)));
+  const deleteFolder = async (r: Residency, id: string) => {
+    setData((prev) => ({
+      ...prev,
+      [r]: {
+        ...prev[r],
+        folders: prev[r].folders.filter((f) => f.id !== id),
+        projects: (prev[r].projects ?? []).map((p) =>
+          p.folderId === id ? { ...p, folderId: null } : p
+        ),
+      },
+    }));
     if (openFolder === id) router.replace(homeHref(base, "projects"));
-    await apiFetch(`/api/cut/projects/folders/${id}`, { method: "DELETE" }).catch(() => void refresh());
+    await backendFor(r)
+      .fetch(`/api/cut/projects/folders/${id}`, { method: "DELETE" })
+      .catch(() => void refresh(r));
   };
 
   // Move a collection of projects into a folder (or out to the root, folderId
-  // null). Optimistic; reconciles from disk on any failure.
-  const moveProjects = useCallback(
-    async (ids: string[], folderId: string | null) => {
-      if (ids.length === 0) return;
-      const idset = new Set(ids);
-      setProjects((prev) => (prev ?? []).map((p) => (idset.has(p.id) ? { ...p, folderId } : p)));
-      setSelected(new Set());
-      await Promise.all(
-        ids.map((id) =>
-          apiFetch(`/api/cut/projects/${id}/move`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ folderId }),
-          })
-        )
-      ).catch(() => void refresh());
-    },
-    [refresh]
-  );
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  // null). Optimistic; reconciles from disk on any failure. A dragged
+  // selection can span sections, so a backend only ever moves its own.
+  const moveProjects = async (r: Residency, ids: string[], folderId: string | null) => {
+    const own = new Set((data[r].projects ?? []).map((p) => p.id));
+    const move = ids.filter((id) => own.has(id));
+    if (move.length === 0) return;
+    const idset = new Set(move);
+    setData((prev) => ({
+      ...prev,
+      [r]: {
+        ...prev[r],
+        projects: (prev[r].projects ?? []).map((p) =>
+          idset.has(p.id) ? { ...p, folderId } : p
+        ),
+      },
+    }));
+    setSelected(new Set());
+    await Promise.all(
+      move.map((id) =>
+        backendFor(r).fetch(`/api/cut/projects/${id}/move`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folderId }),
+        })
+      )
+    ).catch(() => void refresh(r));
+  };
 
   const create = async () => {
     setBusy(true);
     try {
-      const res = await apiFetch("/api/cut/projects", {
+      const res = await backendFor(r0).fetch("/api/cut/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || "Untitled", folderId: openFolder }),
       });
       const project = (await res.json()) as ProjectSummary;
       track("project_created", { source: "projects_home" });
-      router.push(projectHref(base, project.id, "projects", openFolder));
+      router.push(projectHref(base, project.id, "projects", openFolder, r0));
     } finally {
       setBusy(false);
     }
@@ -203,19 +305,21 @@ export function ProjectsHome() {
 
   // Make a new project in the folder that's open (root when none), then jump
   // straight into it — no naming step.
-  const newProjectHere = async (folderId: string | null = openFolder) => {
-    const res = await apiFetch("/api/cut/projects", {
+  const newProjectHere = async (r: Residency, folderId: string | null = openFolder) => {
+    const res = await backendFor(r).fetch("/api/cut/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Untitled", folderId }),
     });
     const project = (await res.json()) as ProjectSummary;
     track("project_created", { source: "projects_home" });
-    router.push(projectHref(base, project.id, "projects", folderId));
+    router.push(projectHref(base, project.id, "projects", folderId, r));
   };
 
   // Turn a batch of desktop files into projects filed under `folderId`. Each
   // becomes its own project and pops into the grid the moment it's ready.
+  // File imports run on the globally bound backend, so they land in `mode`'s
+  // section.
   const importFilesAsProjects = useCallback(
     async (files: FileList | File[], folderId: string | null) => {
       const media = Array.from(files).filter(isMediaFile);
@@ -230,33 +334,95 @@ export function ProjectsHome() {
         } finally {
           setImporting((n) => n - 1);
         }
-        await refresh();
+        await refresh(mode);
       }
     },
-    [refresh]
+    [refresh, mode]
   );
 
   const rename = async () => {
     if (!renaming) return;
     setBusy(true);
     try {
-      await apiFetch(`/api/cut/projects/${renaming.id}`, {
+      await backendFor(renaming.residency).fetch(`/api/cut/projects/${renaming.project.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() || renaming.name }),
+        body: JSON.stringify({ name: name.trim() || renaming.project.name }),
       });
       setRenaming(null);
-      await refresh();
+      await refresh(renaming.residency);
     } finally {
       setBusy(false);
     }
   };
 
-  const duplicate = async (p: ProjectSummary) => {
+  const duplicate = async (r: Residency, p: ProjectSummary) => {
     setBusy(true);
     try {
-      await apiFetch(`/api/cut/projects/${p.id}/duplicate`, { method: "POST" });
-      await refresh();
+      await backendFor(r).fetch(`/api/cut/projects/${p.id}/duplicate`, { method: "POST" });
+      await refresh(r);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Copy a project into the other residency: read the source doc, create the
+  // target project, move every media file's bytes across (in doc order — the
+  // fresh target dedupes only against names this copy already claimed), remap
+  // asset fileNames, then save the doc. A failure deletes the half-made copy.
+  const duplicateAcross = async (source: Residency, p: ProjectSummary) => {
+    const target: Residency = source === "cloud" ? "local" : "cloud";
+    const src = backendFor(source);
+    const dst = backendFor(target);
+    setDupError(null);
+    setBusy(true);
+    let created: string | null = null;
+    try {
+      const docRes = await src.fetch(`/api/cut/projects/${p.id}`);
+      if (!docRes.ok) throw new Error("Could not read the project.");
+      const doc = (await docRes.json()) as ProjectDoc;
+      const copyName = `${doc.name || p.name} copy`;
+      const createRes = await dst.fetch("/api/cut/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: copyName }),
+      });
+      const summary = (await createRes.json()) as ProjectSummary;
+      if (!createRes.ok || !summary.id) throw new Error("Could not create the copy.");
+      created = summary.id;
+      const assets = Array.isArray(doc.assets) ? doc.assets : [];
+      const names = new Map<string, string>();
+      for (const a of assets) {
+        if (names.has(a.fileName)) continue;
+        const bytes = await src.fetch(
+          `/api/cut/projects/${p.id}/media/${encodeURIComponent(a.fileName)}`
+        );
+        if (!bytes.ok) throw new Error(`Could not read “${a.name}”.`);
+        names.set(
+          a.fileName,
+          await uploadProjectMediaTo(dst, summary.id, await bytes.blob(), a.fileName)
+        );
+      }
+      const copied: ProjectDoc = {
+        ...doc,
+        name: copyName,
+        folderId: null,
+        assets: assets.map((a) => ({ ...a, fileName: names.get(a.fileName) ?? a.fileName })),
+      };
+      const putRes = await dst.fetch(`/api/cut/projects/${summary.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(copied),
+      });
+      if (!putRes.ok) throw new Error("Could not save the copy.");
+      await refresh(target);
+    } catch (e) {
+      if (created) {
+        void dst.fetch(`/api/cut/projects/${created}`, { method: "DELETE" }).catch(() => {});
+      }
+      setDupError(
+        e instanceof Error && e.message ? e.message : "Could not duplicate the project."
+      );
     } finally {
       setBusy(false);
     }
@@ -265,9 +431,10 @@ export function ProjectsHome() {
   const remove = async () => {
     if (!deleting) return;
     setBusy(true);
-    const id = deleting.id;
+    const { project, residency } = deleting;
+    const id = project.id;
     try {
-      await apiFetch(`/api/cut/projects/${id}`, { method: "DELETE" });
+      await backendFor(residency).fetch(`/api/cut/projects/${id}`, { method: "DELETE" });
       // The doc, media, and exports go with the folder on the server. Purge the
       // client-side residue keyed to this project so nothing survives it: a live
       // scene run, its in-flight renders, and its chat history (whose ids the
@@ -276,16 +443,25 @@ export function ProjectsHome() {
       useGenerate.getState().cancelForOwner({ projectId: id });
       clearProjectThreads(id);
       setDeleting(null);
-      await refresh();
+      await refresh(residency);
     } finally {
       setBusy(false);
     }
   };
 
-  const all = projects ?? [];
-  const shown = all.filter((p) => (p.folderId ?? null) === openFolder);
-  const openFolderName = folders.find((f) => f.id === openFolder)?.name;
-  const hasContent = all.length > 0 || folders.length > 0;
+  // Which section owns the open folder — in dual mode only that section shows.
+  const folderOwner: Residency | null = openFolder
+    ? (residencies.find((r) => data[r].folders.some((f) => f.id === openFolder)) ?? null)
+    : null;
+  const openFolderName = folderOwner
+    ? data[folderOwner].folders.find((f) => f.id === openFolder)?.name
+    : undefined;
+
+  const anySettled = residencies.some((r) => data[r].projects !== null || data[r].error);
+  const anyProjects = residencies.some((r) => (data[r].projects?.length ?? 0) > 0);
+  const hasContent = residencies.some(
+    (r) => (data[r].projects?.length ?? 0) > 0 || data[r].folders.length > 0
+  );
 
   // Begin a project drag. Dragging a member of the current selection carries the
   // whole selection; dragging anything else drags (and selects) just that item.
@@ -311,6 +487,211 @@ export function ProjectsHome() {
   // Only OS-file drags are drop targets here; internal project drags carry
   // PROJECT_MIME and are handled by the folder tiles and breadcrumb instead.
   const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+
+  const renderShelf = (r: Residency) => (
+    <FolderShelf
+      folders={data[r].folders}
+      mime={PROJECT_MIME}
+      creating={folderCreating === r}
+      onCreatingChange={(c) => setFolderCreating(c ? r : null)}
+      statOf={(id) => {
+        const items = (data[r].projects ?? []).filter((p) => (p.folderId ?? null) === id);
+        return { count: items.length, size: items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
+      }}
+      onOpen={gotoFolder}
+      onCreate={(n) => void createFolder(r, n)}
+      onRename={(id, n) => void renameFolder(r, id, n)}
+      onDelete={(id) => void deleteFolder(r, id)}
+      onDropIds={(ids, fid) => void moveProjects(r, ids, fid)}
+      // File imports run on the globally bound backend, so only its section's
+      // folders take file drops.
+      onDropFiles={r === mode ? (files, fid) => void importFilesAsProjects(files, fid) : undefined}
+    />
+  );
+
+  const renderGallery = (r: Residency, shown: ProjectSummary[]) => (
+    <Marquee
+      className={cn(
+        "grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] content-start gap-5",
+        dual ? "min-h-[20vh]" : "min-h-[42vh]"
+      )}
+      selected={selected}
+      setSelected={setSelected}
+    >
+      {shown.map((p) => (
+        <div
+          key={p.id}
+          data-sel-id={p.id}
+          className="group cursor-pointer"
+          draggable
+          onDragStart={(e) => onProjectDragStart(e, p)}
+          onClick={(e) => {
+            if (e.shiftKey || e.metaKey) {
+              e.preventDefault();
+              toggleSelect(p.id);
+              return;
+            }
+            router.push(projectHref(base, p.id, "projects", openFolder, r));
+          }}
+        >
+          {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
+          <div
+            className={cn(
+              "relative grid aspect-[9/16] place-items-center overflow-hidden rounded-2xl border bg-muted transition-shadow group-hover:shadow-[0_6px_28px_rgba(0,0,0,0.12)]",
+              selected.has(p.id) ? "border-[#0a84ff] ring-2 ring-[#0a84ff]" : "border-border"
+            )}
+          >
+            <CardPreview project={p} residency={r} />
+            <span className="absolute top-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+              {p.name}
+            </span>
+            {dual && (
+              <ResidencyBadge
+                residency={r}
+                className="absolute bottom-2 left-2 grid size-5 place-items-center rounded-md bg-black/65 text-white"
+              />
+            )}
+            <span className="absolute right-2 bottom-2 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
+              {formatTime(p.duration)}
+            </span>
+            <ProjectMenu
+              project={p}
+              className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
+              folders={data[r].folders}
+              onRename={() => {
+                setName(p.name);
+                setRenaming({ project: p, residency: r });
+              }}
+              onDuplicate={() => void duplicate(r, p)}
+              duplicateTo={
+                dual
+                  ? {
+                      target: r === "cloud" ? "local" : "cloud",
+                      run: () => void duplicateAcross(r, p),
+                    }
+                  : undefined
+              }
+              onMove={(folderId) => void moveProjects(r, [p.id], folderId)}
+              onDelete={() => setDeleting({ project: p, residency: r })}
+            />
+          </div>
+          <div className="mt-2 px-0.5 text-xs text-muted-foreground">
+            {formatBytes(p.sizeBytes ?? 0)} · edited {formatDate(p.updatedAt)}
+          </div>
+        </div>
+      ))}
+    </Marquee>
+  );
+
+  const renderList = (r: Residency, shown: ProjectSummary[]) => (
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="grid grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border bg-muted/50 px-4 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <span>Name</span>
+        <span>Length</span>
+        <span>Size</span>
+        <span>Edited</span>
+        <span />
+      </div>
+      {shown.map((p) => (
+        <div
+          key={p.id}
+          data-sel-id={p.id}
+          className={cn(
+            "group grid cursor-pointer grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0 hover:bg-muted/50",
+            selected.has(p.id) && "bg-[#0a84ff]/10 hover:bg-[#0a84ff]/15"
+          )}
+          draggable
+          onDragStart={(e) => onProjectDragStart(e, p)}
+          onClick={(e) => {
+            if (e.shiftKey || e.metaKey) {
+              e.preventDefault();
+              toggleSelect(p.id);
+              return;
+            }
+            router.push(projectHref(base, p.id, "projects", openFolder, r));
+          }}
+        >
+          <span className="flex min-w-0 items-center gap-2.5">
+            <Film className="size-4 shrink-0 text-muted-foreground" />
+            <span className="truncate font-medium">{p.name}</span>
+            {dual && (
+              <ResidencyBadge residency={r} className="shrink-0 text-muted-foreground" />
+            )}
+          </span>
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+            {formatTime(p.duration)}
+          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {formatBytes(p.sizeBytes ?? 0)}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {formatDate(p.updatedAt)}
+          </span>
+          <ProjectMenu
+            project={p}
+            folders={data[r].folders}
+            onRename={() => {
+              setName(p.name);
+              setRenaming({ project: p, residency: r });
+            }}
+            onDuplicate={() => void duplicate(r, p)}
+            duplicateTo={
+              dual
+                ? {
+                    target: r === "cloud" ? "local" : "cloud",
+                    run: () => void duplicateAcross(r, p),
+                  }
+                : undefined
+            }
+            onMove={(folderId) => void moveProjects(r, [p.id], folderId)}
+            onDelete={() => setDeleting({ project: p, residency: r })}
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        data-no-marquee
+        onClick={() => void newProjectHere(r)}
+        className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+      >
+        <Plus className="size-4" /> New project
+      </button>
+    </div>
+  );
+
+  const renderSection = (r: Residency) => {
+    const d = data[r];
+    const shown = (d.projects ?? []).filter((p) => (p.folderId ?? null) === openFolder);
+    return (
+      <section key={r} className="mb-8">
+        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{RESIDENCY_LABEL[r]}</h2>
+        {d.error ? (
+          <p className="py-6 text-sm text-muted-foreground">Couldn&rsquo;t load these projects.</p>
+        ) : d.projects === null ? (
+          <div className="grid place-items-center py-10 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : (
+          <>
+            {openFolder === null && (d.folders.length > 0 || folderCreating === r) && renderShelf(r)}
+            {view === "gallery" ? renderGallery(r, shown) : renderList(r, shown)}
+          </>
+        )}
+      </section>
+    );
+  };
+
+  // Single-residency derivations, matching the pre-dual home exactly.
+  const soleData = data[r0];
+  const showHeader = dual ? anySettled : soleData.projects !== null && hasContent;
+  const dualSections = openFolder === null ? residencies : folderOwner ? [folderOwner] : [];
+
+  // Whole-surface file drops import on the globally bound backend; a folder
+  // another backend owns can't receive them, so those land at the root.
+  const surfaceDropFolder =
+    dual && openFolder && !data[mode].folders.some((f) => f.id === openFolder)
+      ? null
+      : openFolder;
 
   return (
     <div
@@ -343,7 +724,7 @@ export function ProjectsHome() {
         e.preventDefault();
         dragDepth.current = 0;
         setFileOver(false);
-        void importFilesAsProjects(e.dataTransfer.files, openFolder);
+        void importFilesAsProjects(e.dataTransfer.files, surfaceDropFolder);
       }}
     >
     <div className="relative mx-auto w-full max-w-6xl px-10 py-9">
@@ -355,7 +736,7 @@ export function ProjectsHome() {
           </span>
         </div>
       )}
-      {projects && hasContent && (
+      {showHeader && (
         <div className="mb-5 flex items-center justify-between">
           {openFolder === null ? (
             <h1 className="text-lg font-semibold tracking-tight">Projects</h1>
@@ -365,19 +746,50 @@ export function ProjectsHome() {
               name={openFolderName ?? "Folder"}
               mime={PROJECT_MIME}
               onBack={() => gotoFolder(null)}
-              onDropOut={(ids) => void moveProjects(ids, null)}
+              onDropOut={(ids) => void moveProjects(folderOwner ?? r0, ids, null)}
             />
           )}
           <div className="flex items-center gap-2">
-            {openFolder === null && (
-              <Button variant="outline" onClick={() => setFolderCreating(true)}>
-                <FolderPlus data-icon="inline-start" /> New folder
+            {openFolder === null &&
+              (dual ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<Button variant="outline" />}>
+                    <FolderPlus data-icon="inline-start" /> New folder
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setFolderCreating("local")}>
+                      <Laptop /> {RESIDENCY_LABEL.local}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFolderCreating("cloud")}>
+                      <Cloud /> {RESIDENCY_LABEL.cloud}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button variant="outline" onClick={() => setFolderCreating(r0)}>
+                  <FolderPlus data-icon="inline-start" /> New folder
+                </Button>
+              ))}
+            {dual && openFolder === null ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button />}>
+                  <Plus data-icon="inline-start" /> New project
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => void newProjectHere("local")}>
+                    <Laptop /> {RESIDENCY_LABEL.local}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void newProjectHere("cloud")}>
+                    <Cloud /> {RESIDENCY_LABEL.cloud}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button onClick={() => void newProjectHere(dual ? (folderOwner ?? "local") : r0)}>
+                <Plus data-icon="inline-start" /> New project
               </Button>
             )}
-            <Button onClick={() => void newProjectHere()}>
-              <Plus data-icon="inline-start" /> New project
-            </Button>
-            {projects.length > 0 && (
+            {anyProjects && (
               <div className="flex rounded-lg border border-border bg-card p-0.5">
                 <Button
                   variant="ghost"
@@ -405,166 +817,62 @@ export function ProjectsHome() {
         </div>
       )}
 
-      {projects && openFolder === null && (folders.length > 0 || folderCreating) && (
-        <FolderShelf
-          folders={folders}
-          mime={PROJECT_MIME}
-          creating={folderCreating}
-          onCreatingChange={setFolderCreating}
-          statOf={(id) => {
-            const items = all.filter((p) => (p.folderId ?? null) === id);
-            return { count: items.length, size: items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
-          }}
-          onOpen={gotoFolder}
-          onCreate={createFolder}
-          onRename={renameFolder}
-          onDelete={deleteFolder}
-          onDropIds={(ids, fid) => void moveProjects(ids, fid)}
-          onDropFiles={(files, fid) => void importFilesAsProjects(files, fid)}
-        />
-      )}
+      {dupError && <p className="mb-4 text-sm text-destructive">{dupError}</p>}
 
-      {projects === null ? (
-        <div className="grid place-items-center py-24 text-muted-foreground">
-          <Loader2 className="size-5 animate-spin" />
-        </div>
-      ) : !hasContent ? (
-        <div className="grid min-h-[60vh] place-items-center">
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="grid size-14 place-items-center rounded-2xl bg-muted">
-              <Film className="size-7 text-muted-foreground" />
-            </div>
-            <h1 className="text-lg font-semibold tracking-tight">
-              Create a new project to get started
-            </h1>
-            <Button
-              onClick={() => {
-                setName("");
-                setCreateOpen(true);
-              }}
-            >
-              <Plus data-icon="inline-start" /> New project
-            </Button>
+      {dual ? (
+        !anySettled ? (
+          <div className="grid place-items-center py-24 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
           </div>
-        </div>
-      ) : view === "gallery" ? (
-        <Marquee
-          className="grid min-h-[42vh] grid-cols-[repeat(auto-fill,minmax(190px,1fr))] content-start gap-5"
-          selected={selected}
-          setSelected={setSelected}
-        >
-          {shown.map((p) => (
-            <div
-              key={p.id}
-              data-sel-id={p.id}
-              className="group cursor-pointer"
-              draggable
-              onDragStart={(e) => onProjectDragStart(e, p)}
-              onClick={(e) => {
-                if (e.shiftKey || e.metaKey) {
-                  e.preventDefault();
-                  toggleSelect(p.id);
-                  return;
-                }
-                router.push(projectHref(base, p.id, "projects", openFolder));
-              }}
-            >
-              {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
-              <div
-                className={cn(
-                  "relative grid aspect-[9/16] place-items-center overflow-hidden rounded-2xl border bg-muted transition-shadow group-hover:shadow-[0_6px_28px_rgba(0,0,0,0.12)]",
-                  selected.has(p.id) ? "border-[#0a84ff] ring-2 ring-[#0a84ff]" : "border-border"
-                )}
-              >
-                <CardPreview project={p} />
-                <span className="absolute top-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-                  {p.name}
-                </span>
-                <span className="absolute right-2 bottom-2 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
-                  {formatTime(p.duration)}
-                </span>
-                <ProjectMenu
-                  project={p}
-                  className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
-                  folders={folders}
-                  onRename={() => {
-                    setName(p.name);
-                    setRenaming(p);
-                  }}
-                  onDuplicate={() => void duplicate(p)}
-                  onMove={(folderId) => void moveProjects([p.id], folderId)}
-                  onDelete={() => setDeleting(p)}
-                />
-              </div>
-              <div className="mt-2 px-0.5 text-xs text-muted-foreground">
-                {formatBytes(p.sizeBytes ?? 0)} · edited {formatDate(p.updatedAt)}
-              </div>
-            </div>
-          ))}
-        </Marquee>
+        ) : (
+          dualSections.map(renderSection)
+        )
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <div className="grid grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border bg-muted/50 px-4 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            <span>Name</span>
-            <span>Length</span>
-            <span>Size</span>
-            <span>Edited</span>
-            <span />
-          </div>
-          {shown.map((p) => (
-            <div
-              key={p.id}
-              data-sel-id={p.id}
-              className={cn(
-                "group grid cursor-pointer grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0 hover:bg-muted/50",
-                selected.has(p.id) && "bg-[#0a84ff]/10 hover:bg-[#0a84ff]/15"
-              )}
-              draggable
-              onDragStart={(e) => onProjectDragStart(e, p)}
-              onClick={(e) => {
-                if (e.shiftKey || e.metaKey) {
-                  e.preventDefault();
-                  toggleSelect(p.id);
-                  return;
-                }
-                router.push(projectHref(base, p.id, "projects", openFolder));
-              }}
-            >
-              <span className="flex min-w-0 items-center gap-2.5">
-                <Film className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate font-medium">{p.name}</span>
-              </span>
-              <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                {formatTime(p.duration)}
-              </span>
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {formatBytes(p.sizeBytes ?? 0)}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {formatDate(p.updatedAt)}
-              </span>
-              <ProjectMenu
-                project={p}
-                folders={folders}
-                onRename={() => {
-                  setName(p.name);
-                  setRenaming(p);
-                }}
-                onDuplicate={() => void duplicate(p)}
-                onMove={(folderId) => void moveProjects([p.id], folderId)}
-                onDelete={() => setDeleting(p)}
-              />
+        <>
+          {soleData.projects !== null &&
+            openFolder === null &&
+            (soleData.folders.length > 0 || folderCreating === r0) &&
+            renderShelf(r0)}
+
+          {soleData.error ? (
+            <p className="py-24 text-center text-sm text-muted-foreground">
+              Couldn&rsquo;t load these projects.
+            </p>
+          ) : soleData.projects === null ? (
+            <div className="grid place-items-center py-24 text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
             </div>
-          ))}
-          <button
-            type="button"
-            data-no-marquee
-            onClick={() => void newProjectHere()}
-            className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-          >
-            <Plus className="size-4" /> New project
-          </button>
-        </div>
+          ) : !hasContent ? (
+            <div className="grid min-h-[60vh] place-items-center">
+              <div className="flex flex-col items-center gap-4 text-center">
+                <div className="grid size-14 place-items-center rounded-2xl bg-muted">
+                  <Film className="size-7 text-muted-foreground" />
+                </div>
+                <h1 className="text-lg font-semibold tracking-tight">
+                  Create a new project to get started
+                </h1>
+                <Button
+                  onClick={() => {
+                    setName("");
+                    setCreateOpen(true);
+                  }}
+                >
+                  <Plus data-icon="inline-start" /> New project
+                </Button>
+              </div>
+            </div>
+          ) : view === "gallery" ? (
+            renderGallery(
+              r0,
+              (soleData.projects ?? []).filter((p) => (p.folderId ?? null) === openFolder)
+            )
+          ) : (
+            renderList(
+              r0,
+              (soleData.projects ?? []).filter((p) => (p.folderId ?? null) === openFolder)
+            )
+          )}
+        </>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -618,7 +926,7 @@ export function ProjectsHome() {
       <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete “{deleting?.name}”?</AlertDialogTitle>
+            <AlertDialogTitle>Delete “{deleting?.project.name}”?</AlertDialogTitle>
             <AlertDialogDescription>
               This deletes the whole project folder, including its media files
               and exports. This can’t be undone.
@@ -647,8 +955,11 @@ export function ProjectsHome() {
 /** Card art: the actual edit (a rendered proxy) plays on hover; the poster is
  * the first clip's real first frame. Falls back to the source when no proxy
  * has been rendered yet. */
-function CardPreview({ project: p }: { project: ProjectSummary }) {
+function CardPreview({ project: p, residency }: { project: ProjectSummary; residency: Residency }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backend = backendFor(residency);
+  const fileUrl = (file: string) =>
+    backend.url(`/api/cut/projects/${p.id}/media/${encodeURIComponent(file)}`);
 
   if (!p.previewFile && !p.hasPreview) {
     return (
@@ -665,7 +976,7 @@ function CardPreview({ project: p }: { project: ProjectSummary }) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- engine media file, not Next-optimizable
       <img
-        src={mediaUrl(p.id, p.previewFile!)}
+        src={fileUrl(p.previewFile!)}
         alt=""
         className="absolute inset-0 size-full object-cover"
       />
@@ -673,8 +984,8 @@ function CardPreview({ project: p }: { project: ProjectSummary }) {
   }
 
   const src = p.hasPreview
-    ? apiUrl(`/api/cut/projects/${p.id}/preview`)
-    : mediaUrl(p.id, p.previewFile!);
+    ? backend.url(`/api/cut/projects/${p.id}/preview`)
+    : fileUrl(p.previewFile!);
 
   return (
     <div
@@ -707,6 +1018,7 @@ function ProjectMenu({
   folders,
   onRename,
   onDuplicate,
+  duplicateTo,
   onMove,
   onDelete,
 }: {
@@ -715,6 +1027,8 @@ function ProjectMenu({
   folders: ProjectFolder[];
   onRename: () => void;
   onDuplicate: () => void;
+  /** Cross-residency copy, when both residencies are live. */
+  duplicateTo?: { target: Residency; run: () => void };
   onMove: (folderId: string | null) => void;
   onDelete: () => void;
 }) {
@@ -740,6 +1054,12 @@ function ProjectMenu({
         <DropdownMenuItem onClick={onDuplicate}>
           <Copy /> Duplicate
         </DropdownMenuItem>
+        {duplicateTo && (
+          <DropdownMenuItem onClick={duplicateTo.run}>
+            {duplicateTo.target === "cloud" ? <Cloud /> : <Laptop />}{" "}
+            {duplicateTo.target === "cloud" ? "Duplicate to Cloud" : "Duplicate to this Mac"}
+          </DropdownMenuItem>
+        )}
         {folders.length > 0 && (
           <>
             <DropdownMenuSeparator />

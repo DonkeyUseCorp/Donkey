@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch, apiJson } from "./api";
+import { apiFetch, apiJson, getBackend } from "./backend";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { chatOwner, tagChatAsset } from "./chatAssets";
 import { applyOwnership, useGenerate, type VideoAttempt, type VideoGenOptions } from "./generate";
@@ -18,7 +18,18 @@ import {
   renameLibraryFolder,
   saveAssetToLibrary,
 } from "./library";
-import { enrichAsset, ensurePeaks, importImage, importStockVideo, importUrlMedia } from "./media";
+import {
+  captureFreezeFrame,
+  detectSilenceClientSide,
+  enrichAsset,
+  ensurePeaks,
+  importImage,
+  importStockVideo,
+  importUrlMedia,
+  makeContactSheetsClientSide,
+  makeStillSheetClientSide,
+  renderAudioSpanWav,
+} from "./media";
 import { requestSidePanel, SIDE_PANEL_TABS, type SidePanelTab } from "./panelRequest";
 import { blobToInlineAudio, refToInlineAudio, type InlineImage } from "./refMedia";
 import { characterPrompt, stockTitle } from "./stock";
@@ -148,31 +159,50 @@ export async function runAiTool(
       }
       // A still is one sheet with no time axis.
       if (asset.type === "image") {
-        const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file: asset.fileName, still: true }),
-        });
-        const body = await apiJson<WatchBody>(res);
-        if (!res.ok) throw new ToolError(body.error ?? "Could not read the image.");
+        let body: WatchBody;
+        if (getBackend().kind === "cloud") {
+          body = await makeStillSheetClientSide(asset.url).catch((e) => {
+            throw new ToolError(e instanceof Error ? e.message : "Could not read the image.");
+          });
+        } else {
+          const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file: asset.fileName, still: true }),
+          });
+          body = await apiJson<WatchBody>(res);
+          if (!res.ok) throw new ToolError(body.error ?? "Could not read the image.");
+        }
         return {
           images: body.sheets.map((sh) => sh.image),
           source: { assetId: asset.id, name: asset.name },
           note: "A still image — one frame, no time axis.",
         };
       }
-      const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          file: asset.fileName,
+      let body: WatchBody;
+      if (getBackend().kind === "cloud") {
+        // Same defaults, clamps, and caps as the engine's watch handler.
+        body = await makeContactSheetsClientSide(asset.url, {
           from,
           ...(to !== undefined ? { to } : {}),
           ...(isNum(input.interval_seconds) ? { interval: input.interval_seconds } : {}),
-        }),
-      });
-      const body = await apiJson<WatchBody>(res);
-      if (!res.ok) throw new ToolError(body.error ?? "Could not watch the video.");
+        }).catch((e) => {
+          throw new ToolError(e instanceof Error ? e.message : "Could not watch the video.");
+        });
+      } else {
+        const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            file: asset.fileName,
+            from,
+            ...(to !== undefined ? { to } : {}),
+            ...(isNum(input.interval_seconds) ? { interval: input.interval_seconds } : {}),
+          }),
+        });
+        body = await apiJson<WatchBody>(res);
+        if (!res.ok) throw new ToolError(body.error ?? "Could not watch the video.");
+      }
       // The engine's ffmpeg has no text renderer; the cells get their source-
       // time stamps here on a canvas. A sheet that fails to stamp rides plain —
       // sheetFrames stays the authority either way.
@@ -216,23 +246,40 @@ export async function runAiTool(
     case "detect_silence": {
       const { projectId, asset, clip, speed, from, to } = resolveWatchRange(s, input);
       if (asset.type === "image") throw new ToolError(`"${asset.name}" is an image — it has no audio.`);
-      const res = await apiFetch(`/api/cut/projects/${projectId}/silence`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          file: asset.fileName,
-          from,
-          ...(to !== undefined ? { to } : {}),
-          ...(isNum(input.threshold_db) ? { threshold_db: input.threshold_db } : {}),
-          ...(isNum(input.min_silence) ? { min_silence: input.min_silence } : {}),
-        }),
-      });
       interface SilenceBody {
         silences: { start: number; end: number; duration: number }[];
         error?: string;
       }
-      const body = await apiJson<SilenceBody>(res);
-      if (!res.ok) throw new ToolError(body.error ?? "Could not scan for silence.");
+      let body: SilenceBody;
+      if (getBackend().kind === "cloud") {
+        // Same defaults and clamps as the engine's silence handler.
+        body = {
+          silences: await detectSilenceClientSide(asset.url, {
+            from,
+            ...(to !== undefined ? { to } : {}),
+            thresholdDb: clamp(isNum(input.threshold_db) ? input.threshold_db : -30, -90, 0),
+            minSilence: clamp(isNum(input.min_silence) ? input.min_silence : 0.35, 0.05, 10),
+          }).catch((e) => {
+            throw new ToolError(
+              e instanceof Error ? e.message : "Could not scan for silence."
+            );
+          }),
+        };
+      } else {
+        const res = await apiFetch(`/api/cut/projects/${projectId}/silence`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            file: asset.fileName,
+            from,
+            ...(to !== undefined ? { to } : {}),
+            ...(isNum(input.threshold_db) ? { threshold_db: input.threshold_db } : {}),
+            ...(isNum(input.min_silence) ? { min_silence: input.min_silence } : {}),
+          }),
+        });
+        body = await apiJson<SilenceBody>(res);
+        if (!res.ok) throw new ToolError(body.error ?? "Could not scan for silence.");
+      }
       // Pre-map each silence's overlap with the clip's trimmed range onto the
       // timeline so the model cuts on ready numbers.
       const toTimeline = (t: number) =>
@@ -274,7 +321,7 @@ export async function runAiTool(
       const wholeAudio = asset.type === "audio" && !clip && !isNum(input.from) && !isNum(input.to);
       const inline = wholeAudio
         ? await refToInlineAudio(refFromAsset(asset))
-        : await listenToSource(projectId, asset.fileName, from, to);
+        : await listenToSource(projectId, asset, from, to);
       if (!inline)
         throw new ToolError(
           "That stretch is too long to listen to inline (≈12MB cap) — pass a narrower from/to."
@@ -599,31 +646,54 @@ export async function runAiTool(
       const t = clamp(isNum(input.t) ? input.t : s.currentTime, 0, Math.max(0, total - 0.001));
       const span = spans.find((sp) => t >= sp.start && t < sp.start + sp.len) ?? spans[spans.length - 1];
       const srcTime = span.clip.in + (t - span.start);
-      const res = await apiFetch(`/api/cut/projects/${projectId}/freeze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          file: span.asset.fileName,
-          srcTime,
-          duration: isNum(input.duration) ? input.duration : 1,
-          // Bake the still at the current project frame, framed exactly as
-          // the preview shows it. Switching aspect later letterboxes this
-          // still — capture a fresh one to re-fit.
-          frame: { w: FRAME[s.aspect].w, h: FRAME[s.aspect].h },
-          framing: {
-            fit: span.clip.fit ?? "fit",
-            panX: span.clip.panX ?? 0,
-            panY: span.clip.panY ?? 0,
-          },
-        }),
-      });
-      const body = await apiJson<MediaAsset>(res);
-      if (!res.ok) throw new ToolError(body.error ?? "Could not render the freeze frame.");
+      let body: MediaAsset;
+      if (getBackend().kind === "cloud") {
+        // No engine to bake a still video — grab the frame in the browser and
+        // store it as a project image; image clips carry their own length,
+        // sized below to the requested duration, mirroring the engine's
+        // /freeze clamps (default 1s, 0.5..10s).
+        const freezeDur = Math.min(10, Math.max(0.5, isNum(input.duration) ? input.duration : 1));
+        body = await captureFreezeFrame(projectId, span.asset.url, srcTime, freezeDur).catch(
+          (e) => {
+            throw new ToolError(
+              e instanceof Error ? e.message : "Could not render the freeze frame."
+            );
+          }
+        );
+      } else {
+        const res = await apiFetch(`/api/cut/projects/${projectId}/freeze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            file: span.asset.fileName,
+            srcTime,
+            duration: isNum(input.duration) ? input.duration : 1,
+            // Bake the still at the current project frame, framed exactly as
+            // the preview shows it. Switching aspect later letterboxes this
+            // still — capture a fresh one to re-fit.
+            frame: { w: FRAME[s.aspect].w, h: FRAME[s.aspect].h },
+            framing: {
+              fit: span.clip.fit ?? "fit",
+              panX: span.clip.panX ?? 0,
+              panY: span.clip.panY ?? 0,
+            },
+          }),
+        });
+        const made = await apiJson<MediaAsset>(res);
+        if (!res.ok) throw new ToolError(made.error ?? "Could not render the freeze frame.");
+        body = made;
+      }
       const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName), origin: "freeze" };
       const cur = useEditor.getState();
       cur.addAsset(asset);
       cur.addClipFromAsset(asset.id); // lands at the end, selected
       const sel = useEditor.getState().selection;
+      // A cloud freeze is a still image, placed at the default image-clip
+      // length — resize it to the requested duration (the engine path bakes a
+      // video whose duration addClipFromAsset adopts on its own).
+      if (sel?.kind === "clip" && body.type === "image" && body.duration > 0) {
+        cur.updateClip(sel.id, { out: body.duration });
+      }
       const index = clamp(isNum(input.index) ? Math.round(input.index) : 0, 0, useEditor.getState().clips.length - 1);
       if (sel?.kind === "clip") cur.moveClip(sel.id, index);
       void enrichAsset(asset);
@@ -1819,18 +1889,25 @@ function resolveWatchRange(
   return { projectId, asset, clip, speed, from, to };
 }
 
-/** Pull a source's audio track off the engine (video and audio alike) and
- * inline it for the model; null when the range clears the inline cap. */
+/** Pull a source's audio track off (video and audio alike) and inline it for
+ * the model; null when the range clears the inline cap. Local: the engine
+ * extracts mono AAC. Cloud: the browser renders the span to 16 kHz mono WAV. */
 async function listenToSource(
   projectId: string,
-  fileName: string,
+  asset: MediaAsset,
   from: number,
   to: number | undefined,
 ): Promise<InlineImage | null> {
+  if (getBackend().kind === "cloud") {
+    const wav = await renderAudioSpanWav(asset.url, from, to).catch((e) => {
+      throw new ToolError(e instanceof Error ? e.message : "Could not read the audio.");
+    });
+    return blobToInlineAudio(wav);
+  }
   const res = await apiFetch(`/api/cut/projects/${projectId}/audio`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file: fileName, from, ...(to !== undefined ? { to } : {}) }),
+    body: JSON.stringify({ file: asset.fileName, from, ...(to !== undefined ? { to } : {}) }),
   });
   if (!res.ok) {
     const body = await apiJson<{ error?: string }>(res).catch(() => ({ error: undefined }));

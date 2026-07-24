@@ -1,4 +1,4 @@
-import { apiUrl } from "./api";
+import { apiUrl } from "./backend";
 import type { VideoProject } from "./genvideo/types";
 
 export type AssetType = "video" | "audio" | "image";

@@ -25,7 +25,9 @@ import type {
 } from "./types";
 import type { VideoProject } from "./genvideo/types";
 import { fillSlot } from "./genvideo/fillSlot";
-import { apiFetch, apiJson } from "./api";
+import { apiFetch, apiJson, getBackend } from "./backend";
+import { fetchSignedMediaUrls } from "./backend/cloud";
+import { cloudTranscribeSpec, type CloudTranscribeSpec } from "./cloudTranscribe";
 import { trackLocale } from "./subtitles";
 import { ANIM_STYLE_IDS, emptySubtitles, IMAGE_CLIP_SECONDS, LOOK_IDS, MAX_SUBTITLE_LANES, mediaUrl, migrateLegacyTransitions, SPEED_FLOOR, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
@@ -608,6 +610,15 @@ export function rippleInsert(
  * null when the user switches projects mid-run. Throws user-facing errors.
  * Shared with the brief-to-video transcribe adapter. */
 export async function runTranscription(projectId: string, spec: object): Promise<SubtitleCue[] | null> {
+  // The hosted backend has no transcription job runner: the browser renders
+  // the audible mix itself and calls the metered cloud route chunk by chunk.
+  if (getBackend().kind === "cloud") {
+    return cloudTranscribeSpec(
+      projectId,
+      spec as CloudTranscribeSpec,
+      () => useEditor.getState().projectId !== projectId
+    );
+  }
   const res = await apiFetch(`/api/cut/projects/${projectId}/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -801,6 +812,12 @@ export const useEditor = create<EditorState>((baseSet, get) => {
           ...a,
           url: mediaUrl(id, a.fileName),
         }));
+        // Cloud media rides signed R2 URLs, batch-minted once per load; the
+        // /media route's 302 stays the fallback for anything the mint misses.
+        if (getBackend().kind === "cloud") {
+          const signed = await fetchSignedMediaUrls(id, assets.map((a) => a.fileName));
+          for (const a of assets) a.url = signed.get(a.fileName) ?? a.url;
+        }
         // Older docs stored video track 0 packed (array order implied the
         // position); bake explicit starts in once so every clip is free-placed.
         const legacy = (doc.clips as LegacyClip[]).some((c) => typeof c.start !== "number");
@@ -2197,6 +2214,10 @@ export const useEditor = create<EditorState>((baseSet, get) => {
     generateVisualSubtitles: async () => {
       const s = get();
       if (!s.projectId || s.subtitleStatus === "running") return;
+      if (!getBackend().caps.captionAi) {
+        set({ subtitleStatus: "error", subtitleError: "Not available in cloud mode yet." });
+        return;
+      }
       const projectId = s.projectId;
       const spans = getClipSpans(s.clips, s.assets);
       if (spans.length === 0) {
@@ -2258,6 +2279,10 @@ export const useEditor = create<EditorState>((baseSet, get) => {
     generateCaptions: async (style) => {
       const s = get();
       if (!s.projectId || s.subtitleStatus === "running") return;
+      if (!getBackend().caps.captionAi) {
+        set({ subtitleStatus: "error", subtitleError: "Not available in cloud mode yet." });
+        return;
+      }
       const lane = s.subtitleLane;
       const laneOf = (c: SubtitleCue) => c.lane ?? 0;
       // Need cues first — transcribe if the active track hasn't been captioned.
@@ -2322,6 +2347,10 @@ export const useEditor = create<EditorState>((baseSet, get) => {
       const s = get();
       const lane = s.subtitleLane;
       if (!s.projectId || s.subtitleStatus === "running" || fromLane === lane) return;
+      if (!getBackend().caps.captionAi) {
+        set({ subtitleStatus: "error", subtitleError: "Not available in cloud mode yet." });
+        return;
+      }
       const laneOf = (c: SubtitleCue) => c.lane ?? 0;
       const source = s.subtitles.cues.filter((c) => laneOf(c) === fromLane);
       if (source.length === 0) return;
