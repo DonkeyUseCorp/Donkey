@@ -319,10 +319,14 @@ class Engine {
       // hot; a parking seek here would fight it, so leave it alone.
       if (span.start - t <= PREROLL_LEAD_S) continue;
       const el = this.videoFor(span.clip, span.asset); // creating it starts the fetch
-      // Park a not-yet-imminent clip on its entrance frame so its file is
-      // fetching and frame 0 is decoded before the pre-roll window reaches it.
+      // Park a not-yet-imminent clip exactly where the pre-roll will play from
+      // (`warmNext`'s `from`), not on its entrance frame: parking at `in` and
+      // then seeking back `PREROLL_LEAD_S` for the roll-in discards the warmed
+      // buffer, and over the network (cloud media) that late re-seek is what
+      // used to stall the handoff. Parked here, the pre-roll's seek is a no-op
+      // on already-buffered bytes and the cut lands hot.
       if (!isImageEl(el) && !el.seeking && el.paused) {
-        const target = span.clip.in;
+        const target = Math.max(0, span.clip.in - PREROLL_LEAD_S * clipSpeed(span.clip));
         if (Math.abs(el.currentTime - target) > 0.1) el.currentTime = target;
       }
       if (++warmed >= WARM_MAX) break;
