@@ -7,6 +7,7 @@
 import { type DonkeyAuthenticatedRequest, isDonkeySuperUser } from "@/lib/donkey-api-auth";
 import { matchRouteTable, type RouteEntry } from "../http/match";
 import { captionsCloud } from "./captions";
+import { chatsCloud } from "./chats";
 import { runGc } from "./gc";
 import { jobsCloud } from "./jobs";
 import { libraryCloud } from "./library";
@@ -48,6 +49,12 @@ const CUT_CLOUD_ROUTES: CloudRoute[] = [
   { method: "POST", path: "/api/cut-cloud/projects/:id/media/complete", handler: (r, u) => mediaCloud.complete(u, r) },
   { method: "POST", path: "/api/cut-cloud/projects/:id/import-url", handler: (r, u, p) => jobsCloud.importUrl(u, p.id, r) },
   { method: "POST", path: "/api/cut-cloud/media/presign-get", handler: (r, u) => mediaCloud.presignGetBatch(u, r) },
+
+  // Cloud-only: the chat panel's saved AI threads (local mode keeps them in
+  // the browser; cloud syncs them so chats follow the account).
+  { method: "GET", path: "/api/cut-cloud/projects/:id/chats", handler: (_r, u, p) => chatsCloud.list(u, p.id) },
+  { method: "PUT", path: "/api/cut-cloud/projects/:id/chats/:chatId", handler: (r, u, p) => chatsCloud.put(u, p.id, p.chatId, r) },
+  { method: "DELETE", path: "/api/cut-cloud/projects/:id/chats/:chatId", handler: (_r, u, p) => chatsCloud.remove(u, p.id, p.chatId) },
 
   { method: "GET", path: "/api/cut-cloud/library", handler: (_r, u) => libraryCloud.list(u) },
   { method: "POST", path: "/api/cut-cloud/library/presign", handler: (r, u) => libraryCloud.presign(u, r) },

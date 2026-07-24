@@ -80,7 +80,7 @@ Because a scene renders many paid shots, the tool plans and then stops. `generat
 
 ## Context across turns
 
-Threads persist per project in the browser's local storage — the newest 30, titled by their first message. What a returning thread remembers depends on the provider:
+Threads persist per project — the newest 30, titled by their first message. The browser's local storage is the synchronous mirror every reader uses; in cloud mode the server keeps the account copy (`CutChatThread`, one row per thread), pulled into the mirror on project open and pushed back per thread as the conversation grows, so chats follow the account across browsers. Local mode has no server copy. What a returning thread remembers depends on the provider:
 
 - **Claude and Codex hold their own history.** Each turn sends only the newest message plus the fresh snapshot; prior turns live in the provider's native session, whose id is saved on the thread and resumed. The engine never replays conversation history itself.
 - **Gemini is stateless.** The page replays the whole thread every turn — text only. Old turns are stripped to their words; tool traffic, old snapshots, and old attachment payloads stay out, and the fresh snapshot rides only the newest message.
