@@ -19,13 +19,14 @@ GET routes only, so there is no write path to guard.
 
 ## Design
 
-**Load the live doc, no version tracking.** Read-only viewing has no
-concurrent-edit problem, so the viewer reads the same doc row the owner
-autosaves — fetched once when the link opens. A reload shows newer edits;
-there is no version polling or live-follow machinery in v1. A frozen snapshot
-is a later option (copy the doc JSON into the share row); a durable one must
-also copy media the way `duplicate()` does, which doubles R2 usage against the
-owner's quota — so it waits for demand.
+**Delayed polling, not snapshots.** Read-only viewing has no concurrent-edit
+problem, so the viewer reads the same doc row the owner autosaves. The doc GET
+already returns `x-cut-doc-version`; the viewer polls the version cheaply
+(~10s) and refetches the doc when it bumps. The viewer trails the owner by at
+most one autosave plus one poll interval. A frozen snapshot is a later option
+(copy the doc JSON into the share row); a durable one must also copy media the
+way `duplicate()` does, which doubles R2 usage against the owner's quota — so
+it waits for demand.
 
 **Stable link, mutable permissions.** Like Google Docs, the URL survives
 settings changes. One persistent `CutShare` row per project holds a
@@ -129,7 +130,8 @@ CutShare: token → (userId, projectId)      /api/cut-share/:token/*  (unauthent
 
 1. `CutShare` schema (with `settings Json`) + owner create/revoke/settings
    routes + viewer routes with settings-aware doc sanitization.
-2. Viewer page with the share driver and settings-driven tab visibility.
+2. Viewer page with the share driver, delayed-polling refresh, and
+   settings-driven tab visibility.
 3. Copy route + viewer copy flow.
 4. Share dialog in the editor.
 
@@ -140,9 +142,6 @@ CutShare: token → (userId, projectId)      /api/cut-share/:token/*  (unauthent
 - **Owner chat history for viewers** — needs chat threads persisted
   server-side first (today they live in the owner's localStorage);
   `showAiChats` then grows into it.
-- **Live-follow** — poll the doc version (`x-cut-doc-version` already exists)
-  and refetch on change, so an open viewer tracks the owner's edits without a
-  reload.
 - **Freeze a share** — copy doc JSON into the row; media-copying durability
   only if demanded.
 - **Comments** — viewers write comments, not the doc; separate table, no
