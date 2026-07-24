@@ -57,7 +57,7 @@ export default function CutFeatureFlagsPage() {
         {!flags && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
         {flags?.map((f, i) => (
           <div key={f.id} className={i > 0 ? "mt-4 border-t pt-4" : undefined}>
-            <label className="flex items-start justify-between gap-6">
+            <div className="flex items-start justify-between gap-6">
               <span className="min-w-0">
                 <span className="block text-sm font-medium">{f.title}</span>
                 <span className="mt-0.5 block text-sm text-muted-foreground">
@@ -65,10 +65,11 @@ export default function CutFeatureFlagsPage() {
                 </span>
               </span>
               <Switch
+                aria-label={f.title}
                 checked={f.enabled}
                 onCheckedChange={(v) => toggle(f.id, v === true)}
               />
-            </label>
+            </div>
           </div>
         ))}
       </div>
