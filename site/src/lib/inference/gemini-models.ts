@@ -14,9 +14,10 @@ export const geminiModels = {
   // newer image model.
   flashImage: "gemini-2.5-flash-image",
   // "Nano banana pro": higher-fidelity image editing/generation that takes a real
-  // aspectRatio + imageSize (1K/2K/4K) via imageConfig. Gemini 3 preview models are
-  // served only on Vertex's global endpoint, which our client already targets.
-  proImage: "gemini-3-pro-image-preview",
+  // aspectRatio + imageSize (1K/2K/4K) via imageConfig. GA since 2026-05-28 (the
+  // -preview id was shut down 2026-06-25); served only on Vertex's global
+  // endpoint, which our client already targets.
+  proImage: "gemini-3-pro-image",
 } as const;
 
 export type GeminiModel = (typeof geminiModels)[keyof typeof geminiModels];
