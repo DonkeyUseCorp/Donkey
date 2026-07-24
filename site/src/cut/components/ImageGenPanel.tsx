@@ -17,6 +17,7 @@ import {
   type ImageResolution,
 } from "@/cut/lib/imageGen";
 import { useLightbox } from "@/cut/lib/lightbox";
+import { remintAfterMediaFailure } from "@/cut/lib/media";
 import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
@@ -249,6 +250,7 @@ function GeneratedTile({
           src={asset.url}
           alt={asset.name}
           loading="lazy"
+          onError={() => void remintAfterMediaFailure(asset.url)}
           className="aspect-[16/10] w-full bg-black object-cover transition-transform group-hover:scale-[1.04]"
         />
       </button>

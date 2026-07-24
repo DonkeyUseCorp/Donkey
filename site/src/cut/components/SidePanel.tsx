@@ -59,7 +59,7 @@ import {
   type LibraryAsset,
   type LibraryFolder,
 } from "@/cut/lib/library";
-import { revealMedia } from "@/cut/lib/media";
+import { remintAfterMediaFailure, revealMedia } from "@/cut/lib/media";
 import { mediaUrl, TRANSITION_MAX, type LibraryTemplate } from "@/cut/lib/types";
 import { genPulseOverlay, isGenTab, useGenNotify, useGenPulse, useWatchGenTab } from "@/cut/lib/genNotify";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
@@ -725,11 +725,18 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
             muted
             loop
             playsInline
+            onError={() => void remintAfterMediaFailure(asset.url)}
             className="size-full object-cover"
           />
         ) : asset.type === "image" ? (
           // eslint-disable-next-line @next/next/no-img-element -- engine/static file, not Next-optimizable
-          <img src={asset.url} alt={asset.name} loading="lazy" className="size-full object-cover" />
+          <img
+            src={asset.url}
+            alt={asset.name}
+            loading="lazy"
+            onError={() => void remintAfterMediaFailure(asset.url)}
+            className="size-full object-cover"
+          />
         ) : (
           <AudioCardFace
             url={asset.url}

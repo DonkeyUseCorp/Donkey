@@ -6,6 +6,7 @@ import { isFullRect, overlayAnimStyle, projectFadeSeconds, rectOf, TRANSITION_ZO
 import type { AudioClip, ClipAnim, ClipSpan, FrameRect, MediaAsset, TransitionStyle, VideoClip } from "@/cut/lib/types";
 import { gradeTint, gradeToCssFilter, isNeutralGrade } from "@/cut/lib/colorGrade";
 import { grainTile, lookCssFilter, lookPost } from "@/cut/lib/looks";
+import { remintAfterMediaFailure } from "@/cut/lib/media";
 import { registerSourceSampler } from "@/cut/lib/previewCanvas";
 
 /** The alpha/zoom/gain ramps a transition or clip animation puts on one
@@ -205,9 +206,12 @@ const pauseEl = (el: MediaEl) => {
 /** Build the decoder element for a clip's asset: an <img> for a still, a
  * hidden <video> for footage. */
 function makeMediaEl(asset: MediaAsset): MediaEl {
+  // An expired cloud URL re-mints on failure; the store swap changes asset.url
+  // and `elFor`'s src mismatch rebuilds this element against the fresh URL.
   if (asset.type === "image") {
     const img = document.createElement("img");
     img.crossOrigin = "anonymous";
+    img.onerror = () => void remintAfterMediaFailure(asset.url);
     img.src = asset.url;
     return img;
   }
@@ -215,6 +219,7 @@ function makeMediaEl(asset: MediaAsset): MediaEl {
   v.playsInline = true;
   v.preload = "auto";
   v.crossOrigin = "anonymous";
+  v.onerror = () => void remintAfterMediaFailure(asset.url);
   v.src = asset.url;
   return v;
 }
@@ -1134,6 +1139,8 @@ class Engine {
       if (!el) {
         el = new Audio(asset.url);
         el.preload = "auto";
+        // An expired cloud URL re-mints; the src mismatch above rebuilds it.
+        el.onerror = () => void remintAfterMediaFailure(asset.url);
         this.audioEls.set(a.id, el);
       }
       // Detached audio can carry its video clip's rate; footprint is (out-in)/speed.

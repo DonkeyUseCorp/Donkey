@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { apiFetch, setCutMode } from "@/cut/lib/backend";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
-import { enrichAsset, importFileToProject } from "@/cut/lib/media";
+import { enrichAsset, importFileToProject, remintExpiringMediaUrls } from "@/cut/lib/media";
 // Side-effect import: registers the brief-to-video resume subscription, so a
 // persisted run resumes on project load even when the AI panel never mounts.
 import "@/cut/lib/genScene";
@@ -74,6 +74,21 @@ export function Editor({
       alive = false;
     };
   }, [projectId]);
+
+  // Cloud media rides signed URLs with a 24h life. When the tab returns to the
+  // foreground inside the mint's last hour, re-mint before playback hits a
+  // dead URL; a read that still fails re-mints on its own (lib/media.ts).
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState === "visible") remintExpiringMediaUrls();
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, []);
 
   // A cloud save hit a newer stored version (another session's edits won).
   // Take the newer doc through the ordinary load path — the GET returns it and

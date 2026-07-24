@@ -53,6 +53,21 @@ async function cloudFetch(path: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
+// Signed GETs live 24h (server/cloud/r2.ts GET_EXPIRY_SECONDS); within the
+// last hour of that life a mint counts as expiring.
+const SIGNED_GET_TTL_MS = 24 * 60 * 60 * 1000;
+const EXPIRING_MARGIN_MS = 60 * 60 * 1000;
+
+let lastMint: { projectId: string; at: number } | null = null;
+
+/** True when `projectId`'s signed media URLs expire within the hour. */
+export function signedUrlsExpireSoon(projectId: string): boolean {
+  return (
+    lastMint?.projectId === projectId &&
+    Date.now() - lastMint.at > SIGNED_GET_TTL_MS - EXPIRING_MARGIN_MS
+  );
+}
+
 /** Batch-mint signed R2 GET URLs for a cloud project's media files. Returns
  * fileName -> url; anything the mint misses keeps the /media route, whose 302
  * serves the same bytes. */
@@ -71,6 +86,7 @@ export async function fetchSignedMediaUrls(
     if (!res.ok) return out;
     const body = (await res.json()) as { urls?: { fileName: string; url: string }[] };
     for (const u of body.urls ?? []) out.set(u.fileName, u.url);
+    lastMint = { projectId, at: Date.now() };
   } catch {
     // Signed URLs are an optimization; the route fallback still streams.
   }
