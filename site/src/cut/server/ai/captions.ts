@@ -1,30 +1,24 @@
 import os from "node:os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  BATCH_CONCURRENCY,
+  BATCH_SIZE,
+  BATCH_TIMEOUT_MS,
+  languageName,
+  rewritePrompt,
+  STYLE_GUIDE,
+  translatePrompt,
+  type CaptionInput,
+} from "./captionPrompts";
 
 // Rewrite plain transcript cues into punchy social-video captions, one-to-one so
 // the timings stay put. Runs through the user's own Claude login (no hosted
 // models), like the rest of Cut's AI. Any failure falls back to the originals.
+// The prompts live in captionPrompts.ts, shared with the hosted Gemini twin.
 
-export interface CaptionInput {
-  start: number;
-  end: number;
-  text: string;
-}
-
-const STYLE_GUIDE: Record<string, string> = {
-  clean: "Keep it clear and natural — a light polish, not a rewrite.",
-  hook: "Open with a strong curiosity gap that makes people need to keep watching; stay punchy throughout.",
-  punchy: "Bold, high-energy phrasing. Make the opening line especially loud and impossible to scroll past.",
-};
+export type { CaptionInput };
 
 const MODEL = "claude-haiku-4-5-20251001";
-
-/** Cues per model call. A long track runs as several small calls — each one
- * finishes well inside the timeout, and a hiccup costs one batch, not the
- * whole track. */
-const BATCH_SIZE = 30;
-const BATCH_CONCURRENCY = 3;
-const BATCH_TIMEOUT_MS = 90_000;
 
 export async function rewriteCaptions(cues: CaptionInput[], style: string): Promise<string[]> {
   const guide = STYLE_GUIDE[style] ?? STYLE_GUIDE.clean;
@@ -45,12 +39,7 @@ export async function rewriteCaptions(cues: CaptionInput[], style: string): Prom
  * Each batch gets one retry first: timeouts and malformed replies are
  * transient. */
 export async function translateCaptions(cues: CaptionInput[], locale: string): Promise<string[]> {
-  let language = locale;
-  try {
-    language = new Intl.DisplayNames(["en"], { type: "language" }).of(locale) ?? locale;
-  } catch {
-    /* unknown locale tag — the raw tag still reads fine in the prompt */
-  }
+  const language = languageName(locale);
   const batches = chunk(cues, BATCH_SIZE);
   const texts = await mapLimit(batches, BATCH_CONCURRENCY, async (batch) => {
     try {
@@ -60,39 +49,6 @@ export async function translateCaptions(cues: CaptionInput[], locale: string): P
     }
   });
   return texts.flat().map((s, i) => (s && s.trim() ? s.trim() : cues[i].text));
-}
-
-function rewritePrompt(cues: CaptionInput[], guide: string, isOpener: boolean): string {
-  const numbered = cues.map((c, i) => `${i + 1}. ${c.text}`).join("\n");
-  return `You rewrite spoken-word transcript lines into short-form social video captions (TikTok / Reels / Shorts).
-
-Rewrite EACH numbered line below. Rules:
-- Return EXACTLY ${cues.length} lines — one rewrite per input line, in the same order.
-- Preserve the meaning and point of each original line.
-- Keep each caption short so it fits inside the vertical video frame — about 3–8 words. It may wrap onto two lines, but must never be so long it would overflow the frame width.
-- Sprinkle a few relevant emoji across the whole set — not every line, never more than one per line.
-${isOpener ? "- Line 1 is the opener: make it a scroll-stopping hook.\n" : ""}- ${guide}
-
-Return ONLY a JSON array of ${cues.length} strings. No commentary, no code fence.
-
-Lines:
-${numbered}`;
-}
-
-function translatePrompt(cues: CaptionInput[], language: string): string {
-  const numbered = cues.map((c, i) => `${i + 1}. ${c.text}`).join("\n");
-  return `You translate subtitle lines for a short-form social video.
-
-Translate EACH numbered line below into ${language}. Rules:
-- Return EXACTLY ${cues.length} lines — one translation per input line, in the same order.
-- Translate naturally, preserving the meaning and tone — not word-for-word.
-- Mirror the original's brevity: each caption must stay short enough to fit in a vertical video frame.
-- Keep emoji, proper names, and numbers as they are.
-
-Return ONLY a JSON array of ${cues.length} strings. No commentary, no code fence.
-
-Lines:
-${numbered}`;
 }
 
 /** One model call for one batch: raced against the timeout, parsed, and length

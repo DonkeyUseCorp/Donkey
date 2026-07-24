@@ -6,6 +6,7 @@
 // every query by it.
 import { type DonkeyAuthenticatedRequest, isDonkeySuperUser } from "@/lib/donkey-api-auth";
 import { matchRouteTable, type RouteEntry } from "../http/match";
+import { captionsCloud } from "./captions";
 import { runGc } from "./gc";
 import { jobsCloud } from "./jobs";
 import { libraryCloud } from "./library";
@@ -37,7 +38,7 @@ const CUT_CLOUD_ROUTES: CloudRoute[] = [
   { method: "DELETE", path: "/api/cut-cloud/projects/:id", handler: (_r, u, p) => projectsCloud.remove(u, p.id) },
   { method: "POST", path: "/api/cut-cloud/projects/:id/duplicate", handler: (_r, u, p) => projectsCloud.duplicate(u, p.id) },
   { method: "GET", path: "/api/cut-cloud/projects/:id/exports", handler: (_r, u, p) => projectsCloud.listExports(u, p.id) },
-  { method: "GET", path: "/api/cut-cloud/projects/:id/exports/:file", handler: (_r, u, p) => projectsCloud.serveExport(u, p.id, p.file) },
+  { method: "GET", path: "/api/cut-cloud/projects/:id/exports/:file", handler: (r, u, p) => projectsCloud.serveExport(u, p.id, p.file, new URL(r.url).searchParams.has("download")) },
   { method: "DELETE", path: "/api/cut-cloud/projects/:id/exports/:file", handler: (_r, u, p) => projectsCloud.removeExport(u, p.id, p.file) },
   { method: "GET", path: "/api/cut-cloud/projects/:id/media/:file", handler: (_r, u, p) => projectsCloud.serveMedia(u, p.id, p.file) },
   { method: "DELETE", path: "/api/cut-cloud/projects/:id/media/:file", handler: (_r, u, p) => projectsCloud.removeMedia(u, p.id, p.file) },
@@ -74,6 +75,8 @@ const CUT_CLOUD_ROUTES: CloudRoute[] = [
   { method: "GET", path: "/api/cut-cloud/jobs/:jobId", handler: (_r, u, p) => jobsCloud.status(u, p.jobId) },
 
   { method: "POST", path: "/api/cut-cloud/transcribe", handler: (r, u) => transcribeCloud.transcribe(u, r) },
+  { method: "POST", path: "/api/cut-cloud/ai/captions", handler: (r, u) => captionsCloud.captions(u, r) },
+  { method: "POST", path: "/api/cut-cloud/ai/visual-subtitles", handler: (r, u) => captionsCloud.visualSubtitles(u, r) },
   { method: "GET", path: "/api/cut-cloud/usage", handler: (_r, u) => usageApi.get(u) },
 
   // GC also runs unauthenticated from the Vercel cron — see the catch-all

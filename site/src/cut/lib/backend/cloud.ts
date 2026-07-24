@@ -93,7 +93,7 @@ export const cloudBackend: CutBackend = {
     importUrl: true, // executed by the render worker
     liveMic: true, // hosted LLM STT (lib/cloudTranscribe.ts)
     transcribe: true, // hosted LLM STT (lib/cloudTranscribe.ts)
-    captionAi: false, // engine Claude-CLI one-shots; no hosted twin yet
+    captionAi: true, // hosted Gemini twin (server/cloud/captions.ts)
     localCliChat: false, // by design: those are the user's local logins
     revealInFinder: false,
     watch: true, // browser seek + canvas contact sheets (lib/media.ts)

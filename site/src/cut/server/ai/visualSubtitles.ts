@@ -1,5 +1,6 @@
 import os from "node:os";
 import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { visualSubtitlesPrompt } from "./captionPrompts";
 
 // Write subtitle cues for a cut with no usable audio: the client samples frames
 // along the timeline, and the user's own Claude login (like the rest of Cut's
@@ -45,17 +46,9 @@ export async function writeVisualCues(
     .filter((f): f is { at: number; block: ImageBlock } => f.block !== null);
   if (usable.length === 0) throw new Error("No frames to caption.");
 
-  const prompt = `You caption silent short-form videos (TikTok / Reels / Shorts). Below are frames sampled from a ${duration.toFixed(1)}-second video, each labeled with its timeline time. Watch what happens across them and write narration captions that tell that story.
-
-Rules:
-- Return ONLY a JSON array: [{"start": seconds, "end": seconds, "text": "caption"}]. No commentary, no code fence.
-- Chronological, non-overlapping cues covering the video from 0 to ${duration.toFixed(1)}s.
-- Each cue runs 1.5–4 seconds; each text is 2–8 punchy words.
-- Narrate what is on screen — actions, changes, the point — not camera trivia.
-- Make the first cue a scroll-stopping hook.
-- Write in the language of locale "${locale ?? "en-US"}".`;
-
-  const content: ({ type: "text"; text: string } | ImageBlock)[] = [{ type: "text", text: prompt }];
+  const content: ({ type: "text"; text: string } | ImageBlock)[] = [
+    { type: "text", text: visualSubtitlesPrompt(duration, locale) },
+  ];
   for (const f of usable) {
     content.push({ type: "text", text: `Frame at ${f.at.toFixed(1)}s:` });
     content.push(f.block);
