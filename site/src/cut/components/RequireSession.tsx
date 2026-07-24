@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 
 import { signInHrefFor } from "@/app/_components/landing/useAppEntryHref";
 import { setEngineUser } from "@/cut/lib/api";
+import { syncAccountFlags } from "@/cut/lib/flags";
 import { DONKEYCUT_CANONICAL } from "@/cut/lib/hosts";
 import { useAppLoaded } from "@/lib/analytics";
 import { authClient } from "@/lib/auth-client";
@@ -32,6 +33,14 @@ export function RequireSession({ children }: { children: ReactNode }) {
   const signedOut = !isPending && !session;
 
   useAppLoaded("cut", session?.user);
+
+  // The web-mode flag lives on the account; refresh the local mirror once the
+  // session is known so a grant (or revoke) from another device takes effect
+  // on the next load here.
+  const userId = session?.user.id;
+  useEffect(() => {
+    if (userId) void syncAccountFlags();
+  }, [userId]);
 
   useEffect(() => {
     if (!signedOut) return;

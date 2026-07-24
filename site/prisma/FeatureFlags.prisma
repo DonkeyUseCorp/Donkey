@@ -1,0 +1,14 @@
+// Per-account feature flags, self-serve from the account settings. Known flag
+// ids and their copy live in code (src/lib/feature-flags.ts); rows exist only
+// for flags a user has touched.
+
+model UserFeatureFlag {
+  id        String   @id @default(cuid())
+  userId    String
+  flag      String
+  enabled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, flag])
+}

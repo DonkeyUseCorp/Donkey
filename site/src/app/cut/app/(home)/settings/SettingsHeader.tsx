@@ -15,6 +15,12 @@ const SECTIONS = [
     pinned: false,
   },
   {
+    suffix: "/settings/flags",
+    title: "Feature flags",
+    description: "Early features you can turn on for your account.",
+    pinned: true,
+  },
+  {
     suffix: "/settings",
     title: "Billing",
     description: "Your subscription and credit balance.",

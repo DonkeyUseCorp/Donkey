@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ChartColumn, CreditCard, EllipsisVertical, LogOut } from "lucide-react";
+import { ChartColumn, CreditCard, EllipsisVertical, Flag, LogOut } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -78,6 +78,9 @@ export function NavUser() {
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => router.push(`${base}/settings/usage`)}>
           <ChartColumn /> Usage
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => router.push(`${base}/settings/flags`)}>
+          <Flag /> Feature flags
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={signOut}>
