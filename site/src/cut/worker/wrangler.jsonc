@@ -1,0 +1,26 @@
+// Cloudflare deployment for the Cut render worker: one Worker (cf/worker.ts)
+// owning one container instance built from ./Dockerfile. Deploy from site/:
+//   npm run worker:build && npx wrangler deploy -c src/cut/worker/wrangler.jsonc
+// Secrets (DATABASE_URL, R2_*) are set once with `wrangler secret put`, never
+// checked in.
+{
+  "name": "donkey-cut-worker",
+  "main": "cf/worker.ts",
+  "compatibility_date": "2026-07-01",
+  "containers": [
+    {
+      "class_name": "CutRenderWorker",
+      "image": "./Dockerfile",
+      // The Dockerfile copies dist/cut-worker/main.js, so the build context is
+      // the site root (three levels up from this file).
+      "image_build_context": "../../..",
+      "max_instances": 1,
+      // ffmpeg encodes are CPU-bound; exports also stage media on disk.
+      "instance_type": { "vcpu": 2, "memory_mib": 4096, "disk_mb": 10000 }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "CUT_RENDER_WORKER", "class_name": "CutRenderWorker" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CutRenderWorker"] }]
+}

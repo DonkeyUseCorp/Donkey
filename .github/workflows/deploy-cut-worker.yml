@@ -1,0 +1,60 @@
+name: Deploy Cut Worker
+
+# Builds the Cut render worker bundle and deploys it to Cloudflare Containers
+# (Worker shell + container image) whenever the worker or the pipeline code it
+# reuses changes. Wrangler builds the image from site/src/cut/worker/Dockerfile
+# and pushes it to Cloudflare's registry as part of the deploy.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - site/src/cut/worker/**
+      - site/src/cut/server/exportPipeline.ts
+      - site/src/cut/server/urlDownload.ts
+      - site/src/cut/server/jobs.ts
+      - site/src/cut/server/cloud/r2.ts
+      - site/prisma/**
+      - .github/workflows/deploy-cut-worker.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cut-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Bundle worker
+        run: npm run worker:build
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: site
+          command: deploy -c src/cut/worker/wrangler.jsonc

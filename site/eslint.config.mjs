@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Cloudflare Worker shell for the Cut render worker: compiled by wrangler
+    // against workers types, excluded from the site's tsconfig.
+    "src/cut/worker/cf/**",
   ]),
 ]);
 
