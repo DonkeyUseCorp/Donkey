@@ -55,6 +55,9 @@ export const auth = betterAuth({
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID ?? "",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+      // Always show Google's account chooser: without this, a browser with one
+      // signed-in Google session silently reuses the last-used account.
+      prompt: "select_account",
     },
   },
   plugins: [
