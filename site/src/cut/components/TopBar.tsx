@@ -2,15 +2,27 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, ChevronLeft, Loader2, Mic, Monitor, Smartphone, Sparkles, Upload, Video } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, Cloud, Ellipsis, Loader2, Mic, Monitor, Smartphone, Sparkles, Upload, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { backTarget, useCutBase } from "@/cut/lib/nav";
+import { cloudBackend } from "@/cut/lib/backend/cloud";
+import { useCutMode } from "@/cut/lib/backend/hooks";
+import { localBackend } from "@/cut/lib/backend/local";
+import { useWebMode } from "@/cut/lib/flags";
+import { backTarget, projectHref, useCutBase } from "@/cut/lib/nav";
+import { copyProjectAcross } from "@/cut/lib/projectCopy";
 import { useEditor } from "@/cut/lib/store";
 import { ASPECT_LABEL, type Aspect } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -25,7 +37,8 @@ export function TopBar({
   from?: string | null;
   folder?: string | null;
 }) {
-  const back = backTarget(useCutBase(), from, folder);
+  const base = useCutBase();
+  const back = backTarget(base, from, folder);
   const hasClips = useEditor((s) => s.clips.length > 0);
   const aspect = useEditor((s) => s.aspect);
   const projectName = useEditor((s) => s.projectName);
@@ -33,6 +46,43 @@ export function TopBar({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [recordMode, setRecordMode] = useState<RecordMode | null>(null);
+
+  // "Move to Cloud" (cut-web-mode flag): copies this local project — doc and
+  // every media file — to the cloud, deletes the local original, and reopens
+  // the editor on the cloud copy.
+  const webMode = useWebMode();
+  const cutMode = useCutMode();
+  const canMoveToCloud = webMode && cutMode === "local";
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [moveProgress, setMoveProgress] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+
+  const moveToCloud = async () => {
+    const projectId = useEditor.getState().projectId;
+    if (!projectId) return;
+    setMoving(true);
+    setMoveError(null);
+    try {
+      // Let a pending autosave land so the copy reads the current cut.
+      for (let i = 0; i < 40 && useEditor.getState().saveState !== "saved"; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const newId = await copyProjectAcross(localBackend, cloudBackend, projectId, {
+        onProgress: (done, total) => setMoveProgress(`Moving media ${done}/${total}…`),
+      });
+      await localBackend
+        .fetch(`/api/cut/projects/${projectId}`, { method: "DELETE" })
+        .catch(() => {});
+      window.location.href = projectHref(base, newId, "projects", null, "cloud");
+    } catch (e) {
+      setMoveError(
+        e instanceof Error && e.message ? e.message : "Could not move the project."
+      );
+      setMoving(false);
+      setMoveProgress(null);
+    }
+  };
 
   const commitName = () => {
     setEditing(false);
@@ -174,7 +224,48 @@ export function TopBar({
         >
           <Upload data-icon="inline-start" /> Export
         </Button>
+        {canMoveToCloud && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Project options"
+                  title="Project options"
+                />
+              }
+            >
+              <Ellipsis />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setMoveOpen(true)}>
+                <Cloud /> Move to Cloud
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
+      {moveOpen && (
+        <Dialog open onOpenChange={(open) => !open && !moving && setMoveOpen(false)}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Move to Cloud</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Copies this project and its media to the cloud, then removes it
+              from this Mac. Exports rendered here stay behind.
+            </p>
+            {moveError && <p className="text-sm text-red-600">{moveError}</p>}
+            <DialogFooter className="mt-2">
+              <Button disabled={moving} className="w-full" onClick={() => void moveToCloud()}>
+                {moving && <Loader2 className="animate-spin" data-icon="inline-start" />}
+                {moving ? (moveProgress ?? "Moving…") : "Move to Cloud"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </header>
   );
 }

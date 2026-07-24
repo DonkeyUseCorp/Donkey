@@ -56,10 +56,11 @@ import { authClient } from "@/lib/auth-client";
 import { clearProjectThreads } from "@/cut/lib/chatThreads";
 import { useGenerate } from "@/cut/lib/generate";
 import { useGenScene } from "@/cut/lib/genScene";
-import { createProjectFromFile, isMediaFile, uploadProjectMediaTo } from "@/cut/lib/media";
+import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
+import { copyProjectAcross } from "@/cut/lib/projectCopy";
 import { homeHref, projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
-import type { ProjectDoc, ProjectFolder, ProjectSummary } from "@/cut/lib/types";
+import type { ProjectFolder, ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { buildDragGhost, FolderCrumb, FolderShelf, formatBytes, Marquee } from "./desktopFolders";
 
@@ -366,60 +367,18 @@ export function ProjectsHome() {
     }
   };
 
-  // Copy a project into the other residency: read the source doc, create the
-  // target project, move every media file's bytes across (in doc order — the
-  // fresh target dedupes only against names this copy already claimed), remap
-  // asset fileNames, then save the doc. A failure deletes the half-made copy.
+  // Copy a project into the other residency (projectCopy.ts does the doc +
+  // media transfer and cleans up a half-made copy itself).
   const duplicateAcross = async (source: Residency, p: ProjectSummary) => {
     const target: Residency = source === "cloud" ? "local" : "cloud";
-    const src = backendFor(source);
-    const dst = backendFor(target);
     setDupError(null);
     setBusy(true);
-    let created: string | null = null;
     try {
-      const docRes = await src.fetch(`/api/cut/projects/${p.id}`);
-      if (!docRes.ok) throw new Error("Could not read the project.");
-      const doc = (await docRes.json()) as ProjectDoc;
-      const copyName = `${doc.name || p.name} copy`;
-      const createRes = await dst.fetch("/api/cut/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: copyName }),
+      await copyProjectAcross(backendFor(source), backendFor(target), p.id, {
+        rename: (n) => `${n || p.name} copy`,
       });
-      const summary = (await createRes.json()) as ProjectSummary;
-      if (!createRes.ok || !summary.id) throw new Error("Could not create the copy.");
-      created = summary.id;
-      const assets = Array.isArray(doc.assets) ? doc.assets : [];
-      const names = new Map<string, string>();
-      for (const a of assets) {
-        if (names.has(a.fileName)) continue;
-        const bytes = await src.fetch(
-          `/api/cut/projects/${p.id}/media/${encodeURIComponent(a.fileName)}`
-        );
-        if (!bytes.ok) throw new Error(`Could not read “${a.name}”.`);
-        names.set(
-          a.fileName,
-          await uploadProjectMediaTo(dst, summary.id, await bytes.blob(), a.fileName)
-        );
-      }
-      const copied: ProjectDoc = {
-        ...doc,
-        name: copyName,
-        folderId: null,
-        assets: assets.map((a) => ({ ...a, fileName: names.get(a.fileName) ?? a.fileName })),
-      };
-      const putRes = await dst.fetch(`/api/cut/projects/${summary.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(copied),
-      });
-      if (!putRes.ok) throw new Error("Could not save the copy.");
       await refresh(target);
     } catch (e) {
-      if (created) {
-        void dst.fetch(`/api/cut/projects/${created}`, { method: "DELETE" }).catch(() => {});
-      }
       setDupError(
         e instanceof Error && e.message ? e.message : "Could not duplicate the project."
       );
@@ -648,14 +607,16 @@ export function ProjectsHome() {
           />
         </div>
       ))}
-      <button
-        type="button"
-        data-no-marquee
-        onClick={() => void newProjectHere(r)}
-        className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-      >
-        <Plus className="size-4" /> New project
-      </button>
+      {!(dual && r === "cloud") && (
+        <button
+          type="button"
+          data-no-marquee
+          onClick={() => void newProjectHere(r)}
+          className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        >
+          <Plus className="size-4" /> New project
+        </button>
+      )}
     </div>
   );
 
@@ -770,25 +731,11 @@ export function ProjectsHome() {
                   <FolderPlus data-icon="inline-start" /> New folder
                 </Button>
               ))}
-            {dual && openFolder === null ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<Button />}>
-                  <Plus data-icon="inline-start" /> New project
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => void newProjectHere("local")}>
-                    <Laptop /> {RESIDENCY_LABEL.local}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void newProjectHere("cloud")}>
-                    <Cloud /> {RESIDENCY_LABEL.cloud}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <Button onClick={() => void newProjectHere(dual ? (folderOwner ?? "local") : r0)}>
-                <Plus data-icon="inline-start" /> New project
-              </Button>
-            )}
+            {/* Local-first: with the engine present, creation is always local —
+                a project reaches the cloud by moving it from the editor. */}
+            <Button onClick={() => void newProjectHere(dual ? (folderOwner ?? "local") : r0)}>
+              <Plus data-icon="inline-start" /> New project
+            </Button>
             {anyProjects && (
               <div className="flex rounded-lg border border-border bg-card p-0.5">
                 <Button
