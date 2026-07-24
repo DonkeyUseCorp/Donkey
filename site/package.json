@@ -16,6 +16,7 @@
     "prisma:prod": "dotenv -e .env -- prisma db push",
     "engine:dev": "bun run src/cut/engine/main.ts",
     "engine:build": "bash scripts/build-cut-engine.sh",
+    "worker:build": "bun build --target=node --minify --external=pg-native src/cut/worker/main.ts --outfile dist/cut-worker/main.js",
     "eval:cut-chat": "bun run scripts/eval-cut-chat.ts",
     "test": "bun test src",
     "test:genvideo": "bun run scripts/genvideo-selftest.ts",
@@ -24,6 +25,8 @@
   "dependencies": {
     "@ai-sdk/react": "^4.0.15",
     "@anthropic-ai/claude-agent-sdk": "^0.3.201",
+    "@aws-sdk/client-s3": "^3.1094.0",
+    "@aws-sdk/s3-request-presigner": "^3.1094.0",
     "@base-ui/react": "^1.6.0",
     "@better-auth/api-key": "1.6.11",
     "@better-auth/core": "1.6.11",
@@ -64,6 +67,7 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@cloudflare/containers": "^0.3.7",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.20.0",

@@ -1,0 +1,120 @@
+// The hosted Cut API surface in one table, namespaced under /api/cut-cloud/*.
+// The client's cloud driver rewrites /api/cut/X -> /api/cut-cloud/X, so paths
+// mirror the engine table (http/routes.ts) with the cloud prefix, plus the
+// cloud-only presign/job routes. Auth happens in the Next catch-all
+// (withDonkeyAuth); every handler receives the session's userId and scopes
+// every query by it.
+import { type DonkeyAuthenticatedRequest, isDonkeySuperUser } from "@/lib/donkey-api-auth";
+import { matchRouteTable, type RouteEntry } from "../http/match";
+import { runGc } from "./gc";
+import { jobsCloud } from "./jobs";
+import { libraryCloud } from "./library";
+import { mediaCloud } from "./media";
+import { projectsCloud } from "./projects";
+import { transcribeCloud } from "./transcribe";
+import { usageApi } from "./usage";
+
+type CloudHandler = (
+  req: Request,
+  userId: string,
+  params: Record<string, string>
+) => Response | Promise<Response>;
+
+interface CloudRoute extends RouteEntry {
+  handler: CloudHandler;
+}
+
+const CUT_CLOUD_ROUTES: CloudRoute[] = [
+  { method: "GET", path: "/api/cut-cloud/projects", handler: (_r, u) => projectsCloud.list(u) },
+  { method: "POST", path: "/api/cut-cloud/projects", handler: (r, u) => projectsCloud.create(u, r) },
+  { method: "GET", path: "/api/cut-cloud/projects/folders", handler: (_r, u) => projectsCloud.folders(u) },
+  { method: "POST", path: "/api/cut-cloud/projects/folders", handler: (r, u) => projectsCloud.createFolder(u, r) },
+  { method: "PUT", path: "/api/cut-cloud/projects/folders/:id", handler: (r, u, p) => projectsCloud.renameFolder(u, p.id, r) },
+  { method: "DELETE", path: "/api/cut-cloud/projects/folders/:id", handler: (_r, u, p) => projectsCloud.deleteFolder(u, p.id) },
+  { method: "POST", path: "/api/cut-cloud/projects/:id/move", handler: (r, u, p) => projectsCloud.move(u, p.id, r) },
+  { method: "GET", path: "/api/cut-cloud/projects/:id", handler: (_r, u, p) => projectsCloud.get(u, p.id) },
+  { method: "PUT", path: "/api/cut-cloud/projects/:id", handler: (r, u, p) => projectsCloud.put(u, p.id, r) },
+  { method: "DELETE", path: "/api/cut-cloud/projects/:id", handler: (_r, u, p) => projectsCloud.remove(u, p.id) },
+  { method: "POST", path: "/api/cut-cloud/projects/:id/duplicate", handler: (_r, u, p) => projectsCloud.duplicate(u, p.id) },
+  { method: "GET", path: "/api/cut-cloud/projects/:id/exports", handler: (_r, u, p) => projectsCloud.listExports(u, p.id) },
+  { method: "GET", path: "/api/cut-cloud/projects/:id/exports/:file", handler: (_r, u, p) => projectsCloud.serveExport(u, p.id, p.file) },
+  { method: "DELETE", path: "/api/cut-cloud/projects/:id/exports/:file", handler: (_r, u, p) => projectsCloud.removeExport(u, p.id, p.file) },
+  { method: "GET", path: "/api/cut-cloud/projects/:id/media/:file", handler: (_r, u, p) => projectsCloud.serveMedia(u, p.id, p.file) },
+  { method: "DELETE", path: "/api/cut-cloud/projects/:id/media/:file", handler: (_r, u, p) => projectsCloud.removeMedia(u, p.id, p.file) },
+  { method: "GET", path: "/api/cut-cloud/projects/:id/preview", handler: (_r, u, p) => projectsCloud.servePreview(u, p.id) },
+  { method: "POST", path: "/api/cut-cloud/projects/:id/image", handler: (r, u, p) => mediaCloud.importImage(u, p.id, r) },
+  { method: "POST", path: "/api/cut-cloud/projects/:id/media/presign", handler: (r, u, p) => mediaCloud.presign(u, p.id, r) },
+  { method: "POST", path: "/api/cut-cloud/projects/:id/media/complete", handler: (r, u) => mediaCloud.complete(u, r) },
+  { method: "POST", path: "/api/cut-cloud/projects/:id/import-url", handler: (r, u, p) => jobsCloud.importUrl(u, p.id, r) },
+  { method: "POST", path: "/api/cut-cloud/media/presign-get", handler: (r, u) => mediaCloud.presignGetBatch(u, r) },
+
+  { method: "GET", path: "/api/cut-cloud/library", handler: (_r, u) => libraryCloud.list(u) },
+  { method: "POST", path: "/api/cut-cloud/library/presign", handler: (r, u) => libraryCloud.presign(u, r) },
+  { method: "POST", path: "/api/cut-cloud/library/complete", handler: (r, u) => libraryCloud.complete(u, r) },
+  { method: "POST", path: "/api/cut-cloud/library/use", handler: (r, u) => libraryCloud.use(u, r) },
+  { method: "POST", path: "/api/cut-cloud/library/save", handler: (r, u) => libraryCloud.save(u, r) },
+  { method: "POST", path: "/api/cut-cloud/library/move", handler: (r, u) => libraryCloud.move(u, r) },
+  { method: "POST", path: "/api/cut-cloud/library/templates", handler: (r, u) => libraryCloud.saveTemplate(u, r) },
+  { method: "POST", path: "/api/cut-cloud/library/templates/:id/use", handler: (r, u, p) => libraryCloud.useTemplate(u, p.id, r) },
+  { method: "POST", path: "/api/cut-cloud/library/templates/:id/add", handler: (r, u, p) => libraryCloud.addToTemplate(u, p.id, r) },
+  { method: "PUT", path: "/api/cut-cloud/library/templates/:id", handler: (r, u, p) => libraryCloud.renameTemplate(u, p.id, r) },
+  { method: "DELETE", path: "/api/cut-cloud/library/templates/:id", handler: (_r, u, p) => libraryCloud.removeTemplate(u, p.id) },
+  { method: "POST", path: "/api/cut-cloud/library/folders", handler: (r, u) => libraryCloud.createFolder(u, r) },
+  { method: "PUT", path: "/api/cut-cloud/library/folders/:id", handler: (r, u, p) => libraryCloud.renameFolder(u, p.id, r) },
+  { method: "DELETE", path: "/api/cut-cloud/library/folders/:id", handler: (_r, u, p) => libraryCloud.deleteFolder(u, p.id) },
+  { method: "GET", path: "/api/cut-cloud/library/media/:file", handler: (_r, u, p) => libraryCloud.serveMedia(u, p.file) },
+  { method: "DELETE", path: "/api/cut-cloud/library/:id", handler: (_r, u, p) => libraryCloud.remove(u, p.id) },
+
+  { method: "GET", path: "/api/cut-cloud/export-jobs", handler: (_r, u) => jobsCloud.exportFeed(u) },
+  { method: "POST", path: "/api/cut-cloud/export", handler: (r, u) => jobsCloud.exportCreate(u, r) },
+  { method: "POST", path: "/api/cut-cloud/export/presign", handler: (r, u) => jobsCloud.exportPresign(u, r) },
+  { method: "GET", path: "/api/cut-cloud/export/:jobId", handler: (_r, u, p) => jobsCloud.exportStatus(u, p.jobId) },
+  { method: "DELETE", path: "/api/cut-cloud/export/:jobId", handler: (_r, u, p) => jobsCloud.exportCancel(u, p.jobId) },
+  { method: "GET", path: "/api/cut-cloud/export/:jobId/file", handler: (_r, u, p) => jobsCloud.exportFile(u, p.jobId) },
+  { method: "GET", path: "/api/cut-cloud/jobs/:jobId", handler: (_r, u, p) => jobsCloud.status(u, p.jobId) },
+
+  { method: "POST", path: "/api/cut-cloud/transcribe", handler: (r, u) => transcribeCloud.transcribe(u, r) },
+  { method: "GET", path: "/api/cut-cloud/usage", handler: (_r, u) => usageApi.get(u) },
+
+  // GC also runs unauthenticated from the Vercel cron — see the catch-all
+  // route, which checks the x-vercel-cron header before auth. Any other
+  // non-superuser caller sees a plain 404.
+  {
+    method: "GET",
+    path: "/api/cut-cloud/gc",
+    handler: async (_r, u) =>
+      (await isDonkeySuperUser(u)) ? runGc() : new Response("Not found.", { status: 404 }),
+  },
+
+  // The engine's models probe reports local CLI availability; hosted Cut has
+  // only the Gemini path (chat runs from the page on the user's account).
+  {
+    method: "GET",
+    path: "/api/cut-cloud/ai/models",
+    handler: () =>
+      Response.json({
+        providers: {
+          gemini: { available: true, note: "runs on your Donkey account", installed: true },
+        },
+      }),
+  },
+];
+
+export async function cutCloudCatchAll(req: DonkeyAuthenticatedRequest): Promise<Response> {
+  const { pathname } = new URL(req.url);
+  const match = matchRouteTable(CUT_CLOUD_ROUTES, req.method, pathname);
+  if (!match) return new Response("Not found.", { status: 404 });
+  if ("methodNotAllowed" in match) {
+    return new Response("Method not allowed.", {
+      status: 405,
+      headers: { Allow: match.methodNotAllowed.join(", ") },
+    });
+  }
+  const res = await match.route.handler(req, req.donkey.userId, match.params);
+  // A HEAD reply carries the GET headers but no body.
+  if (match.head && res.body) {
+    void res.body.cancel();
+    return new Response(null, { status: res.status, headers: res.headers });
+  }
+  return res;
+}

@@ -1,0 +1,101 @@
+// Cut web mode: cloud-resident projects. Docs and metadata live here; media
+// bytes live in R2 under keys recorded on CutMediaObject. Rows carry a plain
+// userId (better-auth id) with no FK so the tables stay self-contained.
+
+model CutProject {
+  id         String   @id @default(cuid())
+  userId     String
+  name       String
+  doc        Json
+  folderId   String?
+  // Optimistic concurrency for autosave: PUT sends the version it loaded and
+  // conflicts 409 instead of clobbering a newer save from another device.
+  version    Int      @default(1)
+  previewKey String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+}
+
+model CutFolder {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  scope     String   @default("project") // project | library
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, scope])
+}
+
+// One R2 object. Quota and orphan GC read from here: `pending` rows were
+// presigned but never completed and are collectible after a grace period.
+model CutMediaObject {
+  id          String   @id @default(cuid())
+  userId      String
+  projectId   String?
+  r2Key       String   @unique
+  fileName    String
+  mime        String   @default("")
+  bytes       BigInt   @default(0)
+  kind        String   @default("media") // media | export | preview | library | overlay
+  uploadState String   @default("pending") // pending | complete
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, kind])
+  @@index([projectId, kind])
+}
+
+model CutLibraryAsset {
+  id            String   @id @default(cuid())
+  userId        String
+  mediaObjectId String
+  folderId      String?
+  meta          Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model CutTemplate {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  doc       Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model CutStorageUsage {
+  userId    String   @id
+  bytes     BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+// Work the render worker executes: exports, hover preview proxies, URL
+// imports. The client polls through the hosted API; only the worker claims
+// rows.
+model CutRenderJob {
+  id        String    @id @default(cuid())
+  userId    String
+  projectId String?
+  kind      String // export | preview | import_url
+  state     String    @default("queued") // queued | running | done | error | canceled
+  progress  Float     @default(0)
+  spec      Json
+  outputKey String?
+  outName   String?
+  result    Json?
+  error     String?
+  claimedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([state, createdAt])
+}
