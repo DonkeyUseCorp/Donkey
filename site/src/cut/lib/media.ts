@@ -903,6 +903,117 @@ async function makeThumbs(url: string, duration: number) {
   return { thumbs, thumbStep };
 }
 
+// Exact edge frames: a clip's first and last filmstrip tiles show the true
+// frames at its in/out points. Asset thumbs are fixed-interval midpoint
+// samples, so edges are captured on demand at the precise source time. Each
+// clip edge is a "slot" whose newest request supersedes queued ones (trim
+// drags stay cheap); one serial loop performs the seeks on a small pool of
+// shared per-URL video elements.
+const EDGE_CACHE_CAP = 300;
+const EDGE_POOL_CAP = 4;
+
+type EdgeRequest = {
+  url: string;
+  time: number;
+  key: string;
+  resolvers: ((src: string | null) => void)[];
+};
+
+const edgeCache = new Map<string, string>();
+const edgeQueue = new Map<string, EdgeRequest>();
+const edgePool = new Map<string, Promise<HTMLVideoElement>>();
+let edgePumping = false;
+
+function edgeKey(url: string, time: number) {
+  return `${url}#${time.toFixed(2)}`;
+}
+
+/** Synchronous cache read — the frame if a matching capture already landed. */
+export function peekEdgeFrame(url: string, time: number): string | null {
+  return edgeCache.get(edgeKey(url, time)) ?? null;
+}
+
+/** Capture the frame at `time`, latest-wins per `slot` (a clip edge). Resolves
+ * with the frame, or null when superseded by a newer request or on a failed
+ * read. */
+export function requestEdgeFrame(slot: string, url: string, time: number): Promise<string | null> {
+  const key = edgeKey(url, time);
+  const hit = edgeCache.get(key);
+  if (hit) return Promise.resolve(hit);
+  return new Promise((resolve) => {
+    const prev = edgeQueue.get(slot);
+    if (prev?.key === key) {
+      prev.resolvers.push(resolve);
+    } else {
+      prev?.resolvers.forEach((r) => r(null));
+      edgeQueue.set(slot, { url, time, key, resolvers: [resolve] });
+    }
+    void pumpEdgeFrames();
+  });
+}
+
+function edgeVideo(url: string): Promise<HTMLVideoElement> {
+  const hit = edgePool.get(url);
+  if (hit) {
+    // Re-insert to refresh recency; the pool evicts oldest-first.
+    edgePool.delete(url);
+    edgePool.set(url, hit);
+    return hit;
+  }
+  const loading = loadVideoMeta(url);
+  edgePool.set(url, loading);
+  while (edgePool.size > EDGE_POOL_CAP) {
+    const [oldUrl, old] = edgePool.entries().next().value!;
+    edgePool.delete(oldUrl);
+    old
+      .then((v) => {
+        v.removeAttribute("src");
+        v.load();
+      })
+      .catch(() => {});
+  }
+  return loading;
+}
+
+async function pumpEdgeFrames() {
+  if (edgePumping) return;
+  edgePumping = true;
+  try {
+    for (;;) {
+      const next = edgeQueue.entries().next();
+      if (next.done) break;
+      const [slot, req] = next.value;
+      edgeQueue.delete(slot);
+      let src = edgeCache.get(req.key) ?? null;
+      if (!src) {
+        try {
+          const v = await edgeVideo(req.url);
+          const max = Math.max(0, (Number.isFinite(v.duration) ? v.duration : req.time) - 0.05);
+          await seekTo(v, Math.max(0, Math.min(req.time, max)));
+          const aspect = v.videoWidth / Math.max(1, v.videoHeight);
+          const w = Math.max(64, Math.round(THUMB_H * aspect));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = THUMB_H;
+          const ctx = canvas.getContext("2d")!;
+          ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(v, 0, 0, w, THUMB_H);
+          src = canvas.toDataURL("image/jpeg", 0.92);
+          edgeCache.set(req.key, src);
+          while (edgeCache.size > EDGE_CACHE_CAP) {
+            edgeCache.delete(edgeCache.keys().next().value!);
+          }
+        } catch {
+          src = null;
+        }
+      }
+      req.resolvers.forEach((r) => r(src));
+    }
+  } finally {
+    edgePumping = false;
+  }
+}
+
 function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
   return new Promise((resolve) => {
     const done = () => {

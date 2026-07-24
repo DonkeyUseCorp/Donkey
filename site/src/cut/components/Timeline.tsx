@@ -34,7 +34,7 @@ import { originalSettings, type ExportDoc } from "@/cut/lib/exportClient";
 import { useExports } from "@/cut/lib/exportStore";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
-import { ensurePeaks, importImage, importStockMusic, importStockVideo, revealMedia } from "@/cut/lib/media";
+import { ensurePeaks, importImage, importStockMusic, importStockVideo, peekEdgeFrame, requestEdgeFrame, revealMedia } from "@/cut/lib/media";
 import { track0Clips, trackGapAt, clipLen, clipSpeed, footprints, getClipSpans, nextFreeStart, overlayLayers, projectDuration, rippleInsert, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
@@ -1646,10 +1646,17 @@ function ClipView({
   // Frames start where the box does: skip the source seconds the left dissolve
   // consumed so the filmstrip stays aligned under the inset edge.
   const filmIn = clip.in + leftXf * speed;
+  const filmOut = filmIn + (w / pps) * speed;
 
+  const startFrame = useEdgeFrame(asset, filmIn, `${clip.id}:in`);
+  const endFrame = useEdgeFrame(asset, filmOut, `${clip.id}:out`);
   const filmstrip = useMemo(
-    () => filmstripFrames(asset, filmIn, w, pps, speed, VIDEO_H - 4, 26),
-    [asset, filmIn, w, pps, speed]
+    () =>
+      filmstripFrames(asset, filmIn, w, pps, speed, VIDEO_H - 4, 26, {
+        start: startFrame,
+        end: endFrame,
+      }),
+    [asset, filmIn, w, pps, speed, startFrame, endFrame]
   );
 
   // The move gesture is the shared lane behavior (parting, snapping); its
@@ -1857,7 +1864,9 @@ function ClipMenu({
 
 /** Sample a clip's filmstrip tiles across its drawn width. Tiles keep the
  * asset's aspect until the tile cap would leave the tail of a long clip bare;
- * past that they widen so the capped count still spans the whole box. */
+ * past that they widen so the capped count still spans the whole box. The
+ * first and last tiles pin to the segment's exact boundary frames once
+ * captured; middle tiles keep the nearest pre-sampled thumb. */
 function filmstripFrames(
   asset: MediaAsset | undefined,
   filmIn: number,
@@ -1865,14 +1874,15 @@ function filmstripFrames(
   pps: number,
   speed: number,
   tileH: number,
-  minTileW: number
+  minTileW: number,
+  edges?: { start: string | null; end: string | null }
 ) {
   if (!asset?.thumbs?.length || !asset.thumbStep) return [];
   const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
   const natural = Math.max(minTileW, Math.round(tileH * aspect));
   const count = Math.max(1, Math.min(120, Math.ceil(w / natural)));
   const imgW = Math.max(natural, w / count);
-  return Array.from({ length: count }, (_, k) => {
+  const frames = Array.from({ length: count }, (_, k) => {
     const timeAt = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
     const idx = Math.min(
       asset.thumbs!.length - 1,
@@ -1880,6 +1890,32 @@ function filmstripFrames(
     );
     return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
   });
+  if (edges?.start) frames[0] = { ...frames[0], src: edges.start };
+  if (edges?.end && frames.length > 1) {
+    frames[frames.length - 1] = { ...frames[frames.length - 1], src: edges.end };
+  }
+  return frames;
+}
+
+/** The exact source frame at a clip edge. Returns null (the nearest sampled
+ * thumb shows instead) until the capture lands; a changed edge time falls back
+ * immediately so a trim drag never shows a stale exact frame. */
+function useEdgeFrame(asset: MediaAsset | undefined, time: number, slot: string) {
+  const url = asset?.type === "video" ? asset.url : null;
+  const id = url ? `${url}#${time.toFixed(2)}` : "";
+  const cached = url ? peekEdgeFrame(url, time) : null;
+  const [frame, setFrame] = useState<{ id: string; src: string } | null>(null);
+  useEffect(() => {
+    if (!url || cached) return;
+    let live = true;
+    void requestEdgeFrame(slot, url, time).then((src) => {
+      if (live && src) setFrame({ id, src });
+    });
+    return () => {
+      live = false;
+    };
+  }, [url, time, slot, id, cached]);
+  return cached ?? (frame?.id === id ? frame.src : null);
 }
 
 /** A clip box's thumbnail strip, washed with the clip's color grade: the same
@@ -2165,12 +2201,19 @@ function OverlayClipView({
   // Frames start where the box does: skip the source seconds the left
   // dissolve consumed so the filmstrip stays aligned under the inset edge.
   const filmIn = clip.in + leftXf * speed;
+  const filmOut = filmIn + (w / pps) * speed;
 
   // Same filmstrip as a track-0 clip so an overlay reads as a video, not a
   // featureless bar — sampled across the clip's trimmed span.
+  const startFrame = useEdgeFrame(asset, filmIn, `${clip.id}:in`);
+  const endFrame = useEdgeFrame(asset, filmOut, `${clip.id}:out`);
   const filmstrip = useMemo(
-    () => filmstripFrames(asset, filmIn, w, pps, speed, OVERLAY_H - 4, 24),
-    [asset, filmIn, speed, w, pps]
+    () =>
+      filmstripFrames(asset, filmIn, w, pps, speed, OVERLAY_H - 4, 24, {
+        start: startFrame,
+        end: endFrame,
+      }),
+    [asset, filmIn, speed, w, pps, startFrame, endFrame]
   );
 
   if (!asset) return null;
