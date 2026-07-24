@@ -189,7 +189,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
   const connecting = gate === "connecting";
 
   const cloudCta = (
-    <div className="mt-2 self-start text-left text-xs text-muted-foreground">
+    <div className="mt-8 self-start text-left text-xs text-muted-foreground">
       <p>
         <button
           className="font-medium text-foreground underline underline-offset-2 disabled:opacity-60"
